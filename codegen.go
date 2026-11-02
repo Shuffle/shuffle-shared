@@ -3952,7 +3952,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.41"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\nfunctions-framework==3.10.2\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.41"
 }
 
 // Removes JSON values from the input
@@ -4342,16 +4342,21 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 
 	if len(os.Getenv("IS_KUBERNETES")) > 0 && os.Getenv("IS_KUBERNETES") == "true" {
 		log.Printf("[INFO] In kubernetes pushing it to private registry")
-		localRegistry := os.Getenv("SHUFFLE_STREAM_PRIVATE_REGISTRY")
+		localRegistry := strings.TrimSuffix(strings.TrimSpace(os.Getenv("SHUFFLE_STREAM_PRIVATE_REGISTRY")), "/")
 		if localRegistry == "" {
-			log.Printf("[ERROR] No private registry defined")
-			return err
+			localRegistry = strings.TrimSuffix(strings.TrimSpace(os.Getenv("REGISTRY_URL")), "/")
+			if localRegistry == "docker.io" || localRegistry == "registry.hub.docker.com" || localRegistry == "index.docker.io" {
+				localRegistry = ""
+			}
+		}
+		if localRegistry == "" {
+			return errors.New("no private app registry configured for Kubernetes image distribution")
 		}
 
 		imgPath := strings.TrimPrefix(strings.ReplaceAll(imageName, " ", "-"), "/")
 		refStr := fmt.Sprintf("%s/%s", strings.TrimSuffix(localRegistry, "/"), imgPath)
 
-		insecure := os.Getenv("SHUFFLE_STREAM_PRIVATE_REGISTRY_INSECURE") == "true"
+		insecure := os.Getenv("SHUFFLE_STREAM_PRIVATE_REGISTRY_INSECURE") == "true" || os.Getenv("SHUFFLE_REGISTRY_INSECURE") == "true"
 		scheme := "https"
 		if insecure {
 			scheme = "http"

@@ -1,2 +1,8 @@
 *.swo
 *.swp
+
+.DS_STORE
+*.zip
+*.gz
+
+*generated_apps

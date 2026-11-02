@@ -28,28 +28,22 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/frikky/kin-openapi/openapi3"
-	"github.com/frikky/schemaless"
-
 	openai "github.com/sashabaranov/go-openai"
 	uuid "github.com/satori/go.uuid"
 	"google.golang.org/api/customsearch/v1"
 	option "google.golang.org/api/option"
+
+	"github.com/frikky/kin-openapi/openapi3"
+	"github.com/frikky/schemaless"
+
 	"github.com/bradfitz/slice"
 	oai "github.com/openai/openai-go/v3"
 	aioption "github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 )
 
-// var model = "gpt-4-turbo-preview"
-// var model = "gpt-4o-mini"
-// var model = "o4-mini"
 var standalone bool
 
-// var model = "gpt-5-mini"
-// var model = "gpt-5-mini"
-// var model = "gpt-5.4-nano"
-// var model = "gpt-5.2-codex"
 var model = "google/gemini-3.8-flash"
 
 var fallbackModel = ""
@@ -60,7 +54,7 @@ var agentRunLocation = os.Getenv("SHUFFLE_AGENT_RUN_LOCATION")
 var assistantModel = model
 
 var decisionParameterName = "shuffle_agent_decision_id"
-var aiMaxTokens = 4096 // Controllable with AI_MAX_TOKENS env
+var aiMaxTokens = 16000 // Controllable with AI_MAX_TOKENS env
 var aiReasoningEffort = ""
 
 // The overall Agent controller
@@ -105,9 +99,11 @@ func init() {
 		}
 	}
 
-	reasoningEffort := os.Getenv("AI_REASONING_EFFORT")
-	if reasoningEffort == "minimal" || reasoningEffort == "low" || reasoningEffort == "medium" || reasoningEffort == "high" {
+	reasoningEffort := strings.ToLower(strings.TrimSpace(os.Getenv("AI_REASONING_EFFORT")))
+	if reasoningEffort == "low" || reasoningEffort == "medium" || reasoningEffort == "high" {
 		aiReasoningEffort = reasoningEffort
+	} else if reasoningEffort == "minimal" || reasoningEffort == "off" || reasoningEffort == "none" {
+		aiReasoningEffort = "off"
 	}
 
 	// Forcing it to be local for ALL requests going forward
@@ -1595,21 +1591,50 @@ func FixJSONNewlines(input string) string {
 	return string(out)
 }
 
-func FixContentOutput(contentOutput string) string {
-	// Safely extract content from ```json or ``` blocks
-	if start := strings.Index(contentOutput, "```json"); start != -1 {
-		start += 7 // skip ```json
-		if end := strings.Index(contentOutput[start:], "```"); end != -1 {
-			contentOutput = contentOutput[start : start+end]
-		} else {
-			contentOutput = contentOutput[start:] // Unmatched, take the rest
+func isJSONDocument(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	startsLikeJSON := strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{")
+	return startsLikeJSON && json.Valid([]byte(trimmed))
+}
+
+func findFenceEnd(content string) int {
+	firstEnd := strings.Index(content, "```")
+	if firstEnd == -1 || isJSONDocument(content[:firstEnd]) {
+		return firstEnd
+	}
+
+	end := firstEnd
+	for {
+		if isJSONDocument(content[:end]) {
+			return end
 		}
-	} else if start := strings.Index(contentOutput, "```"); start != -1 {
-		start += 3 // skip ```
-		if end := strings.Index(contentOutput[start:], "```"); end != -1 {
-			contentOutput = contentOutput[start : start+end]
-		} else {
-			contentOutput = contentOutput[start:] // Unmatched, take the rest
+
+		nextEnd := strings.Index(content[end+3:], "```")
+		if nextEnd == -1 {
+			return firstEnd
+		}
+
+		end += 3 + nextEnd
+	}
+}
+
+func FixContentOutput(contentOutput string) string {
+	if !isJSONDocument(contentOutput) {
+		// Safely extract content from ```json or ``` blocks
+		if start := strings.Index(contentOutput, "```json"); start != -1 {
+			start += 7 // skip ```json
+			if end := findFenceEnd(contentOutput[start:]); end != -1 {
+				contentOutput = contentOutput[start : start+end]
+			} else {
+				contentOutput = contentOutput[start:] // Unmatched, take the rest
+			}
+		} else if start := strings.Index(contentOutput, "```"); start != -1 {
+			start += 3 // skip ```
+			if end := findFenceEnd(contentOutput[start:]); end != -1 {
+				contentOutput = contentOutput[start : start+end]
+			} else {
+				contentOutput = contentOutput[start:] // Unmatched, take the rest
+			}
 		}
 	}
 
@@ -1679,6 +1704,21 @@ func normalizeRawDecisionFields(fields []rawField) {
 	}
 }
 
+// isFinishCategory checks if the raw decision has category set to "finish".
+func isFinishCategory(rawMap map[string]json.RawMessage) bool {
+	catBytes, hasCat := rawMap["category"]
+	if !hasCat {
+		return false
+	}
+
+	var catStr string
+	if err := json.Unmarshal(catBytes, &catStr); err != nil {
+		return false
+	}
+
+	return strings.EqualFold(strings.TrimSpace(catStr), "finish")
+}
+
 // extractDecisionArray scans the text for the first '[' that successfully decodes into a valid array of decisions.
 func extractDecisionArray(rawText string) ([]AgentDecision, error) {
 	for byteIndex := 0; byteIndex < len(rawText); byteIndex++ {
@@ -1695,12 +1735,17 @@ func extractDecisionArray(rawText string) ([]AgentDecision, error) {
 			continue
 		}
 
-		// Check if the first item has an "action" key
-		if _, hasAction := decodedRawDecisions[0]["action"]; !hasAction {
-			continue
-		}
-
 		for mapIndex, rawMap := range decodedRawDecisions {
+			// If "action" is missing, null, or empty, but "category" is "finish", auto-populate action as "finish"
+			actionBytes, hasAction := rawMap["action"]
+			rawAction := strings.Trim(strings.TrimSpace(string(actionBytes)), "\"")
+			isActionMissing := !hasAction || rawAction == "null" || strings.TrimSpace(rawAction) == ""
+
+			if isActionMissing && isFinishCategory(rawMap) {
+				finishBytes, _ := json.Marshal("finish")
+				decodedRawDecisions[mapIndex]["action"] = finishBytes
+			}
+
 			if rawFields, hasFields := rawMap["fields"]; hasFields {
 				var fields []rawField
 				if unmarshalErr := json.Unmarshal(rawFields, &fields); unmarshalErr == nil {
@@ -1712,6 +1757,11 @@ func extractDecisionArray(rawText string) ([]AgentDecision, error) {
 					}
 				}
 			}
+		}
+
+		// Check if the first item has an "action" key
+		if _, hasAction := decodedRawDecisions[0]["action"]; !hasAction {
+			continue
 		}
 
 		marshaledJSONBytes, marshalErr := json.Marshal(decodedRawDecisions)
@@ -1757,6 +1807,16 @@ func extractDecisionJSONL(rawText string) ([]AgentDecision, error) {
 
 		if decodeErr != nil {
 			continue
+		}
+
+		// If "action" is missing, null, or empty, but "category" is "finish", auto-populate action as "finish"
+		actionBytes, hasAction := rawMap["action"]
+		rawAction := strings.Trim(strings.TrimSpace(string(actionBytes)), "\"")
+		isActionMissing := !hasAction || rawAction == "null" || strings.TrimSpace(rawAction) == ""
+
+		if isActionMissing && isFinishCategory(rawMap) {
+			finishBytes, _ := json.Marshal("finish")
+			rawMap["action"] = finishBytes
 		}
 
 		if _, hasAction := rawMap["action"]; !hasAction {
@@ -5606,6 +5666,7 @@ func GetFileSingul(ctx context.Context, fileId string) (*File, error) {
 func init() {
 	if os.Getenv("STANDALONE") == "true" {
 		standalone = true
+		project.CacheDb = true
 	}
 
 	if len(os.Getenv("AI_MODEL")) > 0 {
@@ -7287,18 +7348,35 @@ func RunAgentFinishVerifier(ctx context.Context, orgId string, executionId strin
 // abortAgentExecution is the single, canonical way to terminate an agent run early.
 // Callers must return immediately after this call.
 func abortAgentExecution(ctx context.Context, execution WorkflowExecution, startNode Action, abortLabel, reason string, suppressLog ...bool) (Action, error) {
-	// Overwrite agent from scratch
-	newExec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
-	if err == nil {
-		execution = *newExec
-	}
-
-	// Problem with base: It can be missing data
+	// Look for existing result in passed execution first
 	foundResult := ActionResult{}
 	for _, result := range execution.Results {
-		if result.Action.ID == startNode.ID {
+		if result.Action.ID == startNode.ID && len(result.Result) > 0 {
 			foundResult = result
 			break
+		}
+	}
+
+	if os.Getenv("STANDALONE") == "true" {
+		standalone = true
+		project.CacheDb = true
+	}
+
+	// Overwrite agent from scratch
+	if !standalone {
+		newExec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
+		if err == nil {
+			execution = *newExec
+		}
+	}
+
+	// Fallback to refreshed execution if not found yet
+	if len(foundResult.Result) == 0 {
+		for _, result := range execution.Results {
+			if result.Action.ID == startNode.ID {
+				foundResult = result
+				break
+			}
 		}
 	}
 
@@ -7309,9 +7387,9 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 	}
 
 	// Check if result contains AgentOutput mapping as string
-	agentOutput := AgentOutput{} 
+	agentOutput := AgentOutput{}
 	if len(foundResult.Result) > 0 {
-		err = json.Unmarshal([]byte(foundResult.Result), &agentOutput)
+		err := json.Unmarshal([]byte(foundResult.Result), &agentOutput)
 		if err != nil {
 			log.Printf("[ERROR][%s] abortAgentExecution: failed to parse AgentOutput from result. This is NOT critical. Details: %s", execution.ExecutionId, err)
 		}
@@ -7448,10 +7526,15 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		execution.Results = append(execution.Results, abortResult)
 	}
 
-	// Save to DB immediately so callers (like PrepareSingleAction) see the abort state
-	SetWorkflowExecution(ctx, execution, true)
+	actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
+	_ = SetCache(ctx, actionCacheId, marshalledOutput, 600)
 
-	go sendAgentActionSelfRequest("FAILURE", execution, abortResult)
+	if !standalone {
+		// Save to DB immediately so callers (like PrepareSingleAction) see the abort state
+		SetWorkflowExecution(ctx, execution, true)
+
+		go sendAgentActionSelfRequest("FAILURE", execution, abortResult)
+	}
 
 	return startNode, errors.New(reason)
 }
@@ -7493,26 +7576,34 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 	appRunsLimit := int64(0)
 	orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
 	if statsErr == nil && orgStats != nil {
-		totalAppExecutions = orgStats.MonthlyAppExecutions + orgStats.MonthlyChildAppExecutions
+		stats := GetCorrectedStats(orgStats)
+		totalAppExecutions = stats.MonthlyAppExecutions + stats.MonthlyChildAppExecutions
 	}
 	if fullOrg != nil {
 		appRunsLimit = fullOrg.SyncFeatures.AppExecutions.Limit
 	}
 
+	appRunsUsagePercentage := float64(totalAppExecutions) / float64(appRunsLimit) * 100
 	subjectLine := fmt.Sprintf("%d%% of your AI token limit", int64(aiPercentage))
 	Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your tenant %s", subjectLine, orgName)
 	AiRecommendation := "Tip: <a href=\"https://shuffler.io/admin?tab=app_auth\" style=\"color: #FF8444; text-decoration: none; font-weight: bold;\">Connect your own AI provider app</a> to use your own keys and bypass the AI token limit entirely."
+
+	if tokenLimit == 0 {
+		tokenLimit = 10000000
+	}
+
 	substitutions := map[string]interface{}{
-		"app_runs_usage":            totalAppExecutions,
-		"app_runs_limit":            appRunsLimit,
-		"subject_string":            subjectLine,
-		"ai_tokens_usage":           monthlyTokensUsed,
-		"ai_tokens_limit":           tokenLimit,
-		"org_name":                  orgName,
-		"org_id":                    billingOrgId,
-		"admin_email":               orgName,
-		"app_runs_usage_percentage": int64(aiPercentage),
-		"ai_recommendation":         AiRecommendation,
+		"app_runs_usage":             totalAppExecutions,
+		"app_runs_limit":             appRunsLimit,
+		"subject_string":             subjectLine,
+		"ai_tokens_usage":            monthlyTokensUsed,
+		"ai_tokens_limit":            tokenLimit,
+		"org_name":                   orgName,
+		"org_id":                     billingOrgId,
+		"admin_email":                orgName,
+		"app_runs_usage_percentage":  int64(appRunsUsagePercentage),
+		"ai_tokens_usage_percentage": int64(aiPercentage),
+		"ai_recommendation":          AiRecommendation,
 	}
 
 	err = sendMailSendgridV2(
@@ -7736,27 +7827,249 @@ func getTemplateContext(ctx context.Context, template string, execution Workflow
 	// FIXME: Handle dynamic templates here too, based on user input
 
 	switch template {
-	case "workflow-edit":
+	case "workflow-edit", "edit-workflow", "build-workflows", "workflow-builder":
 		return buildWorkflowEditContext(ctx, execution)
-	case "computer-use":
+	case "computer-use", "host-monitor-control":
 		return buildComputerUseContext(ctx, execution)
+	case "incident-response", "incident-handler":
+		return buildIncidentHandlerContext(ctx, execution)
+	case "vulnerability", "vulnerability-management", "vulnerability-agent":
+		return buildVulnerabilityManagementContext(ctx, execution)
 	default:
 		return "", "", []string{}, nil
 	}
 }
 
 // Control a computer (Computer-Use)
-// Toolset: Screenshot, mouse & kb. CLI. API. 
+// Toolset: Screenshot, mouse & kb. CLI. API.
+// getComputerUseActions returns the built-in osctrl / Computer-Use actions
+// supported across standalone, cloud, and onprem environments.
+func getComputerUseActions() []WorkflowAppAction {
+	return []WorkflowAppAction{
+		{
+			Name:        "execute_command",
+			Label:       "Execute Command",
+			Description: "Execute a shell/terminal command on the system in the active workspace directory",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "cmd",
+					Description: "Command to execute",
+					Required:    true,
+				},
+			},
+		},
+		{
+			Name:        "list_files",
+			Label:       "List Files",
+			Description: "List files and directories in the active workspace or a specified path",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "path",
+					Description: "Optional relative or absolute directory path (defaults to active workspace)",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "find_files",
+			Label:       "Find Files",
+			Description: "Recursively find files and directories in the workspace by name or glob pattern (e.g. *.go)",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "pattern",
+					Description: "Optional file name substring or glob pattern (e.g. *.go, bridge.go)",
+					Required:    false,
+				},
+				{
+					Name:        "path",
+					Description: "Optional directory path (or comma-separated paths) to search within (defaults to active workspace)",
+					Required:    false,
+				},
+				{
+					Name:        "max_depth",
+					Description: "Optional maximum directory recursion depth (defaults to 8)",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "read_file",
+			Label:       "Read File",
+			Description: "Read line-numbered text contents of a file in the workspace (optionally within a specific line range)",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "path",
+					Description: "Relative or absolute path to the file",
+					Required:    true,
+				},
+				{
+					Name:        "start_line",
+					Description: "Optional 1-indexed starting line number",
+					Required:    false,
+				},
+				{
+					Name:        "end_line",
+					Description: "Optional 1-indexed ending line number (inclusive)",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "edit_file",
+			Label:       "Edit File",
+			Description: "Modify a specific section of an existing file by replacing target_content with replacement_content",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "path",
+					Description: "Relative or absolute path to the file to modify",
+					Required:    true,
+				},
+				{
+					Name:        "target_content",
+					Description: "Exact existing text block in the file to replace",
+					Required:    true,
+				},
+				{
+					Name:        "replacement_content",
+					Description: "New text content to replace target_content with",
+					Required:    true,
+				},
+				{
+					Name:        "start_line",
+					Description: "Optional 1-indexed start line to scope the replacement",
+					Required:    false,
+				},
+				{
+					Name:        "end_line",
+					Description: "Optional 1-indexed end line to scope the replacement",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "write_file",
+			Label:       "Write File",
+			Description: "Create a new file or overwrite the entire content of a file in the workspace",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "path",
+					Description: "Relative or absolute path to the file",
+					Required:    true,
+				},
+				{
+					Name:        "content",
+					Description: "Full content to write to the file",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "create_file",
+			Label:       "Create File",
+			Description: "Create a new file in the workspace (automatically creates parent directories)",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "path",
+					Description: "Relative or absolute path to the new file",
+					Required:    true,
+				},
+				{
+					Name:        "content",
+					Description: "Optional initial content for the file",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "create_directory",
+			Label:       "Create Directory",
+			Description: "Create a new directory/folder in the workspace (creates parent directories as needed)",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "path",
+					Description: "Relative or absolute path to the new directory",
+					Required:    true,
+				},
+			},
+		},
+		{
+			Name:        "search_files",
+			Label:       "Search Files",
+			Description: "Search across all files in the workspace for matching text or regular expressions (returns file:line matches)",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "query",
+					Description: "Text or regex pattern to search for across files",
+					Required:    true,
+				},
+				{
+					Name:        "path",
+					Description: "Optional directory or file path (or comma-separated paths) to search in (defaults to active workspace)",
+					Required:    false,
+				},
+				{
+					Name:        "max_depth",
+					Description: "Optional maximum directory recursion depth (defaults to 6)",
+					Required:    false,
+				},
+				{
+					Name:        "file_pattern",
+					Description: "Optional file glob filter (e.g. *.go, *.js)",
+					Required:    false,
+				},
+				{
+					Name:        "is_regex",
+					Description: "Optional boolean ('true'/'false') to enable regex matching",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "list_processes",
+			Label:       "List Processes",
+			Description: "List currently running OS processes on the host",
+		},
+		{
+			Name:        "list_installed_software",
+			Label:       "List Installed Software",
+			Description: "List installed software and applications on the host",
+		},
+		{
+			Name:        "take_screenshot",
+			Label:       "Take Screenshot",
+			Description: "Capture display screenshot metadata and active window UI element tree",
+		},
+		{
+			Name:        "inspect_ui",
+			Label:       "Inspect UI",
+			Description: "Inspect the currently focused foreground window and UI element tree",
+		},
+		{
+			Name:        "remote_control",
+			Label:       "Remote Control",
+			Description: "Execute OS mouse and keyboard automation actions (mouse.move, mouse.click, mouse.drag, keyboard.type, keyboard.press, keyboard.hotkey, system.wait)",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "actions",
+					Description: `JSON array or batch of actions, e.g. [{"op":"mouse.move","params":{"x":500,"y":500}}] or [{"op":"mouse.click","params":{"x":500,"y":500,"button":"left"}}] or [{"op":"keyboard.type","params":{"text":"hello"}}]`,
+					Required:    true,
+				},
+			},
+		},
+	}
+}
+
 func buildComputerUseContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
 
 	// Question: Can this be done in a "specialised" fashion as well?
-	// AKA: not a generalised computer agent, but one built for a specific usecase 
+	// AKA: not a generalised computer agent, but one built for a specific usecase
 
 	systemRule := `# ROLE & CAPABILITIES
 You are an autonomous Computer-Using Agent interacting with a desktop/browser environment. You interact with the system by taking screenshots, parsing UI elements, and emitting action tool calls. Make assumptions for what they most likely want to perform, and continue until it is done. 
 
 # RULES & RESPONSIBILITIES
 - For terminal commands, always assume they do not exist by testing them first. If running bash scripts, always validate the output. STDOUT is captured.
+- Prefer direct osctrl / Computer-Use actions when available (` + "`execute_command`" + `, ` + "`list_files`" + `, ` + "`find_files`" + `, ` + "`read_file`" + `, ` + "`edit_file`" + `, ` + "`write_file`" + `, ` + "`create_file`" + `, ` + "`create_directory`" + `, ` + "`search_files`" + `, ` + "`list_processes`" + `, ` + "`list_installed_software`" + `, ` + "`take_screenshot`" + `, ` + "`inspect_ui`" + `, ` + "`remote_control`" + `).
 - Use the 'post_control_mouse_and_keyboard' function for keyboard & mouse control if it is available. You can chain together escaped JSON commands in the the "actions" array using the operations detailed below. 
 - If an action produces no state change in the new screenshot, do NOT repeat the exact same action. Try an alternative input method (e.g., press Enter instead of clicking 'Search', or scroll to reveal hidden UI elements).
 - When an action takes more than 30 seconds, it will return an execution_id and authorization key to be used for polling results. When polling, always add 30 second or more delay. 
@@ -7799,8 +8112,19 @@ When choosing one or more hostnames, NEVER guess which host. When available, ALW
 `
 
 	templateContext := ""
-	requiredApps := []string{
+	orgId := strings.TrimSpace(execution.ExecutionOrg)
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(execution.Workflow.OrgId)
+	}
+
+	requiredApps := resolveAllowedApps(ctx, execution, orgId, []string{
 		"app:48a954b9440b3913b8a2620e57b94a75:shuffle_host_monitors",
+		"app:osctrl",
+	}, "shuffle-security_monitors", "host-monitor-control")
+
+	permissionsPolicy := buildAgentPermissionsPolicy(ctx, orgId, "host-monitor-control")
+	if len(permissionsPolicy) > 0 {
+		systemRule += permissionsPolicy
 	}
 
 	return systemRule, templateContext, requiredApps, nil
@@ -7808,11 +8132,6 @@ When choosing one or more hostnames, NEVER guess which host. When available, ALW
 
 func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
 	targetWorkflowId := execution.ExecutionArgument
-
-
-	if len(targetWorkflowId) > 0 {
-		savePresenceParticipant(ctx, targetWorkflowId, streamAgentUserID, "Agent")
-	}
 
 	user := User{
 		ActiveOrg: OrgMini{Id: execution.ExecutionOrg},
@@ -7871,9 +8190,9 @@ INCORRECT (do NOT do this): { "key": "body", "value": { "operations": "Update th
 
 Supported Step-by-Step Operations
 
-A workflow has two types of nodes: Actions and Triggers. If you need a trigger, use either Webhook or Schedule. There is no rigid rule that triggers must always exist — only use a trigger if the workflow solution genuinely needs it.
+A workflow has two types of nodes: Actions and Triggers. If you need a trigger, use Webhook, Schedule, User Input, or Subflow. There is no rigid rule that triggers must always exist — only use a trigger if the workflow solution genuinely needs it.
 
-Format: Webhook Trigger
+Format: Webhook Trigger (Incoming HTTP requests)
 {
 "op": "add_node",
 "node_type": "trigger",
@@ -7886,7 +8205,7 @@ Format: Webhook Trigger
 }
 }
 
-Format: Schedule Trigger
+Format: Schedule Trigger (Time / cron interval triggers)
 {
 "op": "add_node",
 "node_type": "trigger",
@@ -7896,6 +8215,53 @@ Format: Schedule Trigger
   "label": "<unique_node_name>",
   "parameters": [
     { "name": "cron", "value": "*/15 * * * *" }
+  ],
+  "x": 100,
+  "y": 100
+}
+}
+
+Format: User Input Trigger (Human-in-the-loop approval / decision checkpoint that pauses execution awaiting manual user approval)
+{
+"op": "add_node",
+"node_type": "trigger",
+"temp_id": "<your_temp_id>",
+"data": {
+  "app_name": "User Input",
+  "label": "<unique_node_name>",
+  "parameters": [
+    { "name": "alertinfo", "value": "## Approve Action?\n\nDetails: $exec" },
+    { "name": "type", "value": "email" },
+    { "name": "email", "value": "admin@example.com" },
+    { "name": "options", "value": "boolean" },
+    { "name": "subflow", "value": "" },
+    { "name": "subflow_failure", "value": "" }
+  ],
+  "x": 100,
+  "y": 100
+}
+}
+Note on User Input parameters:
+- "alertinfo": The prompt/markdown shown to the human.
+- "type": Delivery method: "email", "sms", "subflow", or combinations like "subflow,email".
+- "email": Target email for email notifications.
+- "sms": Target phone number for SMS notifications.
+- "subflow": Optional workflow UUID to trigger for approval handling.
+- "subflow_failure": Optional workflow UUID to trigger if the human clicks Decline.
+- "options": Response type (typically "boolean").
+
+Format: Subflow Trigger (Triggered when this workflow is called as a subflow from another workflow)
+{
+"op": "add_node",
+"node_type": "trigger",
+"temp_id": "<your_temp_id>",
+"data": {
+  "app_name": "Shuffle Workflow",
+  "label": "<unique_node_name>",
+  "parameters": [
+    { "name": "workflow", value: "<the workflow_id>"},
+    { "name": "argument", "value": "$exec" },
+    { "name": "check_result", "value": "true" }
   ],
   "x": 100,
   "y": 100
@@ -8027,9 +8393,552 @@ CRITICAL RULES FOR THE AGENT
 %s
 <End of Available Apps>`, workflowIdLine, string(appsJson))
 
-	requiredApps := []string{
+	requiredApps := resolveAllowedApps(ctx, execution, user.ActiveOrg.Id, []string{
 		"app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps",
 		"app:de4ef2287bd41b9d5563e39989643ee6:shuffle_workflows_builder",
+	}, "shuffle-security_workflows", "build-workflows")
+
+	permissionsPolicy := buildAgentPermissionsPolicy(ctx, user.ActiveOrg.Id, "build-workflows")
+	if len(permissionsPolicy) > 0 {
+		systemRule += permissionsPolicy
+	}
+
+	return systemRule, templateContext, requiredApps, nil
+}
+
+// resolveAllowedApps returns the union of:
+// 1. Base default apps for the template
+// 2. Apps explicitly passed in for this specific area (workflow actions/parameters)
+// 3. Apps configured on the datastore category automation for this area (e.g. shuffle-security_incidents)
+// 4. User-assigned tools configured in the Permissions tab (datastore shuffle-security_agent_tools / config)
+func resolveAllowedApps(ctx context.Context, execution WorkflowExecution, orgId string, baseApps []string, specificCategory string, skill ...string) []string {
+	targetSkill := "incident-handler"
+	if len(skill) > 0 && len(skill[0]) > 0 {
+		targetSkill = strings.ToLower(strings.TrimSpace(skill[0]))
+	}
+
+	requiredApps := []string{}
+
+	addApp := func(appName string) {
+		trimmed := strings.TrimSpace(appName)
+		if len(trimmed) == 0 || trimmed == "nothing" || trimmed == "api" || trimmed == "openai" || trimmed == "undefined" {
+			return
+		}
+
+		formatted := trimmed
+		if !strings.HasPrefix(formatted, "app:") {
+			formatted = fmt.Sprintf("app:%s", formatted)
+		}
+
+		clean := strings.TrimPrefix(formatted, "app:")
+		parts := strings.Split(clean, ":")
+
+		for _, existing := range requiredApps {
+			existingClean := strings.TrimPrefix(existing, "app:")
+			if strings.EqualFold(existingClean, clean) {
+				return
+			}
+			existingParts := strings.Split(existingClean, ":")
+			for _, part := range parts {
+				if len(part) == 0 {
+					continue
+				}
+				for _, existingPart := range existingParts {
+					if len(existingPart) > 0 && strings.EqualFold(part, existingPart) {
+						return
+					}
+				}
+			}
+		}
+
+		requiredApps = append(requiredApps, formatted)
+	}
+
+	// 1. Base default apps
+	for _, app := range baseApps {
+		addApp(app)
+	}
+
+	// 2. Apps explicitly passed in for this specific area (workflow actions/parameters)
+	for _, action := range execution.Workflow.Actions {
+		for _, param := range action.Parameters {
+			if (param.Name == "action" || param.Name == "apps" || param.Name == "app_name" || param.Name == "tool_name") && len(param.Value) > 0 {
+				for _, appItem := range strings.Split(param.Value, ",") {
+					addApp(appItem)
+				}
+			}
+		}
+	}
+
+	// 3. Category automation options configured on this category (e.g. shuffle-security_incidents)
+	if len(orgId) > 0 && len(specificCategory) > 0 {
+		catConfig, err := GetDatastoreCategoryConfig(ctx, orgId, specificCategory)
+		if err == nil && catConfig != nil {
+			for _, auto := range catConfig.Automations {
+				for _, opt := range auto.Options {
+					optTarget := strings.ToLower(strings.TrimSpace(opt.Template))
+					optSkill := strings.ToLower(strings.TrimSpace(opt.Skill))
+					matchesSkill := optTarget == targetSkill || optSkill == targetSkill
+					if targetSkill == "incident-handler" && (optTarget == "incident-response" || optSkill == "incident-response" || optTarget == "default") {
+						matchesSkill = true
+					}
+					if matchesSkill || (len(targetSkill) == 0 && strings.Contains(strings.ToLower(auto.Name), "ai")) {
+						for _, app := range opt.Apps {
+							addApp(app)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 4. User-assigned tools from the Permissions tab in datastore (shuffle-security_agent_tools / config)
+	if len(orgId) > 0 {
+		toolsData := ""
+		cacheId := fmt.Sprintf("%s_config", orgId)
+		cacheData, err := GetDatastoreKey(ctx, cacheId, "shuffle-security_agent_tools")
+		if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+			toolsData = cacheData.Value
+		} else {
+			cacheData, err = GetDatastoreKey(ctx, "config", "shuffle-security_agent_tools")
+			if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+				toolsData = cacheData.Value
+			}
+		}
+
+		if len(toolsData) > 0 {
+			var unquoted string
+			if err := json.Unmarshal([]byte(toolsData), &unquoted); err == nil && len(unquoted) > 0 {
+				toolsData = unquoted
+			}
+
+			type toolRef struct {
+				Name string `json:"name"`
+				Id   string `json:"id"`
+			}
+			type agentToolsEntry struct {
+				Agent      string    `json:"agent"`
+				ActionType string    `json:"actionType"`
+				Tools      []toolRef `json:"tools"`
+			}
+
+			var entries []agentToolsEntry
+			if err := json.Unmarshal([]byte(toolsData), &entries); err == nil && len(entries) > 0 {
+				for _, entry := range entries {
+					entryAgent := strings.ToLower(strings.TrimSpace(entry.Agent))
+					if len(entryAgent) > 0 && entryAgent != targetSkill {
+						if targetSkill == "incident-handler" && (entryAgent == "default" || entryAgent == "incident-response") {
+							// matches incident-handler
+						} else {
+							continue
+						}
+					}
+					for _, t := range entry.Tools {
+						if len(t.Id) == 32 || len(t.Id) == 36 {
+							if len(t.Name) > 0 {
+								cleanName := strings.ToLower(strings.ReplaceAll(t.Name, " ", "_"))
+								addApp(fmt.Sprintf("%s:%s", t.Id, cleanName))
+							} else {
+								addApp(t.Id)
+							}
+						} else if len(t.Id) > 0 {
+							addApp(t.Id)
+						} else if len(t.Name) > 0 {
+							addApp(t.Name)
+						}
+					}
+				}
+			} else {
+				var flatTools []toolRef
+				if err := json.Unmarshal([]byte(toolsData), &flatTools); err == nil && len(flatTools) > 0 {
+					for _, t := range flatTools {
+						if len(t.Id) == 32 || len(t.Id) == 36 {
+							if len(t.Name) > 0 {
+								cleanName := strings.ToLower(strings.ReplaceAll(t.Name, " ", "_"))
+								addApp(fmt.Sprintf("%s:%s", t.Id, cleanName))
+							} else {
+								addApp(t.Id)
+							}
+						} else if len(t.Id) > 0 {
+							addApp(t.Id)
+						} else if len(t.Name) > 0 {
+							addApp(t.Name)
+						}
+					}
+				} else {
+					var strTools []string
+					if err := json.Unmarshal([]byte(toolsData), &strTools); err == nil && len(strTools) > 0 {
+						for _, s := range strTools {
+							addApp(s)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return requiredApps
+}
+
+// fetchDatastoreAgentPermissions loads permission categories for a specific skill from shuffle-security_configuration.
+// Keys searched:
+// 1. {orgId}_agent_permissions_{skill}
+// 2. agent_permissions_{skill}
+// 3. Fallback (if skill == "incident-handler" or "incident-response" or "default"):
+//    {orgId}_agent_permissions / agent_permissions
+func fetchDatastoreAgentPermissions(ctx context.Context, orgId string, skill string) ([]string, []string, error) {
+	if len(skill) == 0 {
+		skill = "incident-handler"
+	}
+	skill = strings.ToLower(strings.TrimSpace(skill))
+
+	keysToTry := []string{
+		fmt.Sprintf("%s_agent_permissions_%s", orgId, skill),
+		fmt.Sprintf("agent_permissions_%s", skill),
+	}
+
+	if skill == "incident-handler" || skill == "incident-response" || skill == "default" {
+		keysToTry = append(keysToTry,
+			fmt.Sprintf("%s_agent_permissions", orgId),
+			"agent_permissions",
+		)
+	}
+
+	var permData string
+	for _, k := range keysToTry {
+		cacheData, getErr := GetDatastoreKey(ctx, k, "shuffle-security_configuration")
+		if getErr == nil && cacheData != nil && len(cacheData.Value) > 0 {
+			permData = cacheData.Value
+			break
+		}
+	}
+
+	if len(permData) == 0 {
+		return nil, nil, nil
+	}
+
+	var unquoted string
+	if err := json.Unmarshal([]byte(permData), &unquoted); err == nil && len(unquoted) > 0 {
+		permData = unquoted
+	}
+
+	type agentPermItem struct {
+		Id          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Risk        string `json:"risk"`
+		Enabled     bool   `json:"enabled"`
+		Category    string `json:"category"`
+		Disabled    bool   `json:"disabled"`
+	}
+
+	type agentPermCategoryItem struct {
+		Id          string          `json:"id"`
+		Label       string          `json:"label"`
+		Disabled    bool            `json:"disabled"`
+		Permissions []agentPermItem `json:"permissions"`
+	}
+
+	var categories []agentPermCategoryItem
+	if err := json.Unmarshal([]byte(permData), &categories); err != nil || len(categories) == 0 {
+		return nil, nil, err
+	}
+
+	var allowed []string
+	var prohibited []string
+
+	for _, cat := range categories {
+		for _, p := range cat.Permissions {
+			label := p.Name
+			if len(label) == 0 {
+				label = p.Id
+			}
+			desc := strings.TrimSpace(p.Description)
+			entry := label
+			if len(desc) > 0 {
+				entry = fmt.Sprintf("%s (%s)", label, desc)
+			}
+
+			// In useAgentPermissions:
+			// cat.Disabled means entire category is administratively disabled.
+			// p.Disabled means permission is administratively disabled.
+			// !p.Enabled means the user toggled it off.
+			if cat.Disabled || p.Disabled || !p.Enabled {
+				prohibited = append(prohibited, entry)
+			} else {
+				allowed = append(allowed, entry)
+			}
+		}
+	}
+
+	return allowed, prohibited, nil
+}
+
+// buildAgentPermissionsPolicy returns a markdown policy block formatted for injection into the agent's system prompt.
+func buildAgentPermissionsPolicy(ctx context.Context, orgId string, skill string) string {
+	allowed, prohibited, err := fetchDatastoreAgentPermissions(ctx, orgId, skill)
+	if err != nil || (len(allowed) == 0 && len(prohibited) == 0) {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n\n# AGENT PERMISSION GOVERNANCE (DYNAMIC SECURITY POLICIES)\n")
+	b.WriteString(fmt.Sprintf("The security team has configured dynamic operational permission boundaries for this agent skill ('%s'):\n", skill))
+
+	if len(allowed) > 0 {
+		b.WriteString("\nEXPLICITLY PERMITTED ACTIONS:\n")
+		for _, a := range allowed {
+			b.WriteString(fmt.Sprintf("- %s\n", a))
+		}
+	}
+
+	if len(prohibited) > 0 {
+		b.WriteString("\nCRITICAL PROHIBITED ACTIONS (DISABLED BY SECURITY POLICY):\n")
+		b.WriteString("The following capabilities are DISABLED by administrative policy. You are STRICTLY PROHIBITED from executing, proposing for autonomous action, scheduling, or initiating any of the following:\n")
+		for _, p := range prohibited {
+			b.WriteString(fmt.Sprintf("- %s: DISABLED BY POLICY. Do NOT perform or propose this action.\n", p))
+		}
+		b.WriteString("If a user or incident triage path requests a prohibited action, explicitly inform them that this capability is currently disabled by policy in your agent permissions.\n")
+	}
+
+	return b.String()
+}
+
+func buildIncidentHandlerContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
+	systemRule := `# ROLE & MISSION: INCIDENT HANDLER
+You are the Incident Handler, an expert security co-pilot and incident investigation partner within Shuffle.
+Your mission is to TRIAGE, INVESTIGATE, CONTAIN, and RESPOND HOLISTICALLY to security alerts and incidents, working alongside human incident responders and SOC analysts.
+
+# CRITICAL OPERATING PRINCIPLES
+1. DUAL OPERATING POSTURE (AUTONOMOUS RESOLVER VS ANALYST COPILOT):
+   - Simple / Benign / Routine Alerts (False Positives, Authorized Scanners, Duplicates): Act as an AUTONOMOUS RESOLVER. Verify technical evidence, document findings, set status to "resolved", and close cleanly with zero open tasks.
+   - Complex Incidents & Confirmed Threats (Malware, C2 Beaconing, Ransomware, Lateral Movement): Act as an ANALYST COPILOT. Do NOT attempt to close the incident autonomously. Your mission is to prepare the case and accelerate the human analyst:
+     * Extract and correlate observables and forensic telemetry.
+     * Generate structured response tasks across categories (investigation, containment, documentation) so the analyst has an immediate operational roadmap.
+     * Queue priority containment actions for human confirmation (approval_required: true).
+     * Set status to "in_progress" or "escalated".
+
+2. ACTION BIAS WITH RISK GOVERNANCE:
+   - Gather facts, enrich observables, analyze attack sequences, correlate alerts, and execute routine triage autonomously.
+   - For routine low-risk actions (closing false positives, adding documentation, checking threat intel, querying SIEM/EDR, proposing detection tuning): act decisively.
+   - For disruptive, destructive, or high-impact actions (isolating production endpoints, revoking executive accounts, pushing firewall blocks): set "approval_required": true and seek analyst confirmation.
+
+# HOLISTIC INCIDENT RESPONSE MATRIX (NIST / SANS ALIGNED)
+When evaluating an incident, execute the appropriate response path:
+
+1. AUTO-RESOLVE / JUST CLOSE (Benign, False Positive, Duplicate, or Test ONLY):
+   - Trigger: The alert is definitively verified as a vendor false positive, authorized administrative activity, routine cron/scanner noise, or a duplicate of an existing ticket.
+   - CRITICAL GUARDRAIL: NEVER set "status" to "resolved" if the alert is an active compromise, true positive threat (e.g. C2 beaconing, malware, credential theft), or if any open tasks remain. Completing initial triage does NOT resolve the incident.
+   - Action:
+     * Set "status" to "resolved" (or "closed").
+     * Add a clear audit entry to the activity array: {"ai_handled": true, "id": "status-{timestamp}", "type": "status", "user": "@AIAgent", "timestamp": {timestamp}, "content": "Resolved: [Specific evidence and rationale explaining why this is benign/FP/duplicate]"}.
+     * Do NOT create open tasks. Keep the record concise and clean.
+
+2. ESCALATE (High/Critical Threats, Active Compromise, or High Ambiguity):
+   - Trigger: Confirmed active malware/ransomware, credential theft, lateral movement, data exfiltration, critical asset compromise, or high-risk ambiguity requiring senior human judgment.
+   - Action:
+     * Update "severity" to "high" or "critical".
+     * Set "status" to "escalated".
+     * Add an urgent escalation entry to activity: {"ai_handled": true, "id": "status-{timestamp}", "type": "status", "user": "@AIAgent", "timestamp": {timestamp}, "content": "Escalated: High-priority threat detected. [Executive threat summary, affected assets/identities, blast radius, and immediate human actions needed]"}.
+     * Propose immediate containment steps for analyst authorization.
+
+3. CONTAINMENT & RESPONSE (Blocking, Isolating, Revoking):
+   - Tiered containment guidance:
+     * IMMEDIATE / LOW-RISK: Block malicious external IPs, domains, or file hashes at perimeter firewall/DNS/gateway; search fleet for IOC matches.
+     * MEDIUM-RISK: Invalidate active user tokens/sessions, force password reset upon next login.
+     * HIGH-RISK / CONFIRMATION REQUIRED: Isolate endpoint from network via EDR (CrowdStrike, SentinelOne, Defender), disable Active Directory/Okta user account. Set "approval_required": true.
+   - Always state: rationale, blast radius, and recovery/rollback procedure.
+
+4. FIX SPAMMY DETECTIONS (Detection Engineering & Tuning):
+   - Trigger: Alert is generated by a noisy, brittle, or misconfigured detection rule firing repeatedly on benign business operations (e.g. software deployment, health check, backup script).
+   - Action:
+     * Identify the root detection rule name and query logic.
+     * Propose specific tuning recommendations: exact exclusion filters, threshold adjustments, or suppression logic.
+     * Record the tuning proposal in incident activity or create a task: {"assignee": "AI Agent", "title": "Tune detection rule: [Rule Name] to exclude [Pattern]", "category": "triage", "action": "tune", "source": "detection_rule", "completed": false, "createdBy": "ai-agent@shuffler.io"}.
+
+5. TOOL USAGE & REQUESTING TOOLS:
+   - Leverage all available tools in context (shuffle_incidents, EDR, SIEM, threat intel).
+   - If an essential investigation or containment tool (e.g. VirusTotal, CrowdStrike, Okta, Splunk, Shodan, Jira) is missing or unauthenticated:
+     * Explicitly state what tool is required, why it is needed, and the specific query/action you intend to run.
+     * Ask the analyst to connect or authorize the tool, or emit a clear request to the user.
+
+6. INVESTIGATION, TASKS & DOCUMENTATION:
+   - For ongoing investigations or active threats, set "status" to "in_progress" (or "escalated" for high/critical threats). NEVER set "status" to "resolved" while open containment or investigation tasks exist.
+   - For progress notes and triage summaries, add activity with type "comment", NOT type "status": {"ai_handled": true, "id": "comment-{timestamp}", "type": "comment", "user": "@AIAgent", "timestamp": {timestamp}, "content": "Triage findings: [Summary of verified telemetry, indicators, and immediate actions]"}.
+   - Generate structured tasks in JSON format: {"tasks": [{"assignee": "AI Agent", "title": "...", "category": "triage/investigation/containment/recovery/communication/documentation", "action": "isolate/block/revoke/query/tune/document/etc.", "source": "sentinelone/crowdstrike/okta/splunk/virustotal/manual/etc.", "completed": false, "createdBy": "ai-agent@shuffler.io"}]}.
+   - Document comprehensive incident notes:
+     * Executive Summary: What happened and current status
+     * Scope & Affected Assets: Hostnames, identities, IP addresses
+     * MITRE ATT&CK Mapping: Tactics and techniques observed
+     * Evidence & IOCs: Hashes, external IPs, malicious URLs, process chains
+     * Actions Taken & Next Steps
+   - Leave generated tasks open (completed: false) for the analyst and incident response team to coordinate and track. Do NOT prematurely mark tasks completed or close the incident.
+
+# DATA FORMAT & MODIFICATIONS
+- Update the internal datastore with category 'shuffle-security_incidents' and the incident key.
+- ONLY send the modified fields in JSON format. Do NOT overwrite unrelated fields.`
+
+	orgId := strings.TrimSpace(execution.ExecutionOrg)
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(execution.Workflow.OrgId)
+	}
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(execution.OrgId)
+	}
+
+	templateContext := ""
+	incidentId := strings.TrimSpace(execution.ExecutionArgument)
+
+	if len(incidentId) == 0 && len(execution.Workflow.Actions) > 0 {
+		for _, param := range execution.Workflow.Actions[0].Parameters {
+			if param.Name == "incident_id" && len(param.Value) > 0 {
+				incidentId = strings.TrimSpace(param.Value)
+				break
+			}
+		}
+	}
+
+	if len(incidentId) > 0 {
+		incidentData := ""
+		cacheId := fmt.Sprintf("%s_%s", orgId, incidentId)
+		cacheData, err := GetDatastoreKey(ctx, cacheId, "shuffle-security_incidents")
+		if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+			incidentData = cacheData.Value
+		} else {
+			cacheData, err = GetDatastoreKey(ctx, incidentId, "shuffle-security_incidents")
+			if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+				incidentData = cacheData.Value
+			}
+		}
+
+		if len(incidentData) > 0 {
+			var prettyJson bytes.Buffer
+			if err := json.Indent(&prettyJson, []byte(incidentData), "", "  "); err == nil {
+				incidentData = prettyJson.String()
+			}
+
+			templateContext = fmt.Sprintf("TARGET INCIDENT (ID / Key: %s):\n```json\n%s\n```\n\nMANDATORY INVESTIGATION SCOPE:\n- Laser-focus exclusively on this incident (ID: %s).\n- All questions, triage, containment, observables, and recommendations must apply directly to this incident.\n- You do NOT need to ask what incident the user is referring to or query the datastore for basic details—its full state is provided above.", incidentId, incidentData, incidentId)
+		}
+	}
+
+	requiredApps := resolveAllowedApps(ctx, execution, orgId, []string{
+		"app:shuffle_incidents",
+	}, "shuffle-security_incidents", "incident-handler")
+
+	permissionsPolicy := buildAgentPermissionsPolicy(ctx, orgId, "incident-handler")
+	if len(permissionsPolicy) > 0 {
+		systemRule += permissionsPolicy
+	}
+
+	return systemRule, templateContext, requiredApps, nil
+}
+
+func buildVulnerabilityManagementContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
+	systemRule := `# ROLE & MISSION: VULNERABILITY MANAGEMENT SPECIALIST
+You are the Vulnerability Management Specialist, a supportive, empathetic, and pragmatic security advisor within Shuffle.
+Your mission is to HELP USERS SOLVE VULNERABILITIES with minimal friction, maximum clarity, and zero unnecessary anxiety.
+
+CRITICAL OPERATING PRINCIPLE:
+Vulnerability reports can be overwhelming, confusing, and full of high CVSS scores that lack real-world context.
+Your goal is first of all to be SUPPORTIVE, APPROACHABLE, and ACTIONABLE to the person asking:
+1. Demystify the vulnerability in plain, human language—explain what it actually means, how an attacker could exploit it, and whether it represents a real threat in the user's specific setup.
+2. Prioritize what truly matters based on real-world exploitability (CISA KEV, EPSS score, public exploit availability, exposure to the internet) rather than raw theoretical CVSS score.
+3. Provide concrete, step-by-step remediation plans with exact commands, package updates, configuration changes, or compensating controls.
+4. Encourage and partner with the user, respecting operational realities like service uptime, maintenance windows, and potential breaking changes.
+
+# SUPPORTIVE PROBLEM-SOLVING METHODOLOGY
+1. CLARIFY & DEMYSTIFY:
+   - Explain the vulnerability (CVE, CWE) in plain English without excessive academic jargon.
+   - Clarify the attack prerequisite: Does it require local access, authenticated privileges, or is it unauthenticated remote code execution (RCE)?
+   - Clearly state what an attacker could achieve if exploited (information disclosure, denial of service, privilege escalation, remote execution).
+
+2. REAL-WORLD RISK PRIORITIZATION:
+   - Evaluate exploitability beyond CVSS:
+     * CISA KEV: Is this known to be actively exploited in the wild?
+     * EPSS: Is there a high probability of exploitation?
+     * Exploit Availability: Are there public weaponized PoCs (Metasploit, GitHub exploits)?
+     * Exposure Context: Is the vulnerable asset internet-facing, or isolated in an internal, non-routable subnet?
+     * Asset Criticality: Does the affected system store sensitive PII, credentials, or crown-jewel data?
+   - Classify urgency pragmatically:
+     * Immediate Patching (Active exploit in wild + internet facing)
+     * Next Maintenance Window (High severity but internal/mitigated)
+     * Scheduled / Backlog (Low exploitability, defense-in-depth compensating controls exist)
+     * Potential False Positive or Non-Applicable (Vulnerable code path not used or package not loaded)
+
+3. ACTIONABLE REMEDIATION GUIDANCE:
+   - Give exact, copy-pasteable remediation commands whenever available:
+     * OS Packages: apt update && apt-get install --only-upgrade <package>, dnf upgrade <package>, apk add --upgrade <package>
+     * Language Ecosystems: npm audit fix, pip install <pkg>==<safe_version>, cargo update, mvn versions:use-latest-releases, go get -u <module>
+     * Docker/Containers: Base image update recommendations, multi-stage build pruning
+   - Provide configuration mitigations or temporary workarounds if patching would break production or requires an outage window.
+   - Suggest compensating controls (e.g. WAF rules, network ACLs, disabling unused modules/ports).
+
+4. VERIFICATION & FOLLOW-THROUGH:
+   - Explain how the user can verify that the vulnerability is resolved (checking package version, querying asset inventory, checking open ports).
+   - Offer to help inspect other assets for the same vulnerability or draft a remediation ticket/task.
+
+# TONE & STYLE
+- Supportive, encouraging, practical, and solution-oriented.
+- Never scold, panic, or overwhelm the user.
+- Focus on practical solutions and clear tradeoffs.`
+
+	templateContext := ""
+	vulnerabilityId := strings.TrimSpace(execution.ExecutionArgument)
+
+	if len(vulnerabilityId) == 0 && len(execution.Workflow.Actions) > 0 {
+		for _, param := range execution.Workflow.Actions[0].Parameters {
+			if param.Name == "vulnerability_id" && len(param.Value) > 0 {
+				vulnerabilityId = strings.TrimSpace(param.Value)
+				break
+			}
+		}
+	}
+
+	orgId := strings.TrimSpace(execution.ExecutionOrg)
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(execution.Workflow.OrgId)
+	}
+
+	if len(vulnerabilityId) > 0 {
+		vulnData := ""
+		cacheId := fmt.Sprintf("%s_%s", orgId, vulnerabilityId)
+		cacheData, err := GetDatastoreKey(ctx, cacheId, "shuffle-security_vulns")
+		if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+			vulnData = cacheData.Value
+		} else {
+			cacheData, err = GetDatastoreKey(ctx, cacheId, "shuffle-security_vulnerabilities")
+			if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+				vulnData = cacheData.Value
+			} else {
+				cacheData, err = GetDatastoreKey(ctx, vulnerabilityId, "shuffle-security_vulns")
+				if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+					vulnData = cacheData.Value
+				} else {
+					cacheData, err = GetDatastoreKey(ctx, vulnerabilityId, "shuffle-security_vulnerabilities")
+					if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+						vulnData = cacheData.Value
+					}
+				}
+			}
+		}
+
+		if len(vulnData) > 0 {
+			var prettyJson bytes.Buffer
+			if err := json.Indent(&prettyJson, []byte(vulnData), "", "  "); err == nil {
+				vulnData = prettyJson.String()
+			}
+
+			templateContext = fmt.Sprintf("TARGET VULNERABILITY (ID / Key: %s):\n```json\n%s\n```\n\nMANDATORY INVESTIGATION SCOPE:\n- Laser-focus exclusively on this vulnerability (ID: %s) and its affected assets/packages.\n- All analysis, remediation guidance, risk evaluation, and verification steps must apply directly to this vulnerability.\n- You do NOT need to ask what vulnerability the user is referring to or query the datastore for basic details—its full state is provided above.", vulnerabilityId, vulnData, vulnerabilityId)
+		}
+	}
+
+	requiredApps := resolveAllowedApps(ctx, execution, orgId, []string{
+		"app:shuffle_vulnerabilities",
+	}, "shuffle-security_vulns", "vulnerability")
+
+	permissionsPolicy := buildAgentPermissionsPolicy(ctx, orgId, "vulnerability")
+	if len(permissionsPolicy) > 0 {
+		systemRule += permissionsPolicy
 	}
 
 	return systemRule, templateContext, requiredApps, nil
@@ -8051,7 +8960,7 @@ func filterSystemPromptByTemplate(template string, systemMessage string) string 
 	var removals []string
 
 	switch template {
-	case "workflow-edit":
+	case "workflow-edit", "edit-workflow":
 		removals = getWorkflowEditPromptRemovals()
 	}
 
@@ -8077,10 +8986,33 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	var err error
 	aiStarttime := time.Now().UnixMilli()
 
-	// Only fetch from DB if the passed execution has no results somehow
-	if len(execution.Results) == 0 {
-		if replacedExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && replacedExecution != nil && len(replacedExecution.Results) > 0 {
-			execution = *replacedExecution
+	if os.Getenv("STANDALONE") == "true" {
+		standalone = true
+		project.CacheDb = true
+	}
+
+	// Ensure we merge all prior node results from DB so earlier nodes (e.g. Shuffle Tools) are never clobbered or lost
+	if !standalone {
+		if freshExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && freshExecution != nil && len(freshExecution.Results) > 0 {
+			if len(execution.Results) == 0 {
+				execution.Results = freshExecution.Results
+			} else {
+				for _, dbRes := range freshExecution.Results {
+					if dbRes.Action.ID == startNode.ID {
+						continue
+					}
+					found := false
+					for _, curRes := range execution.Results {
+						if curRes.Action.ID == dbRes.Action.ID {
+							found = true
+							break
+						}
+					}
+					if !found {
+						execution.Results = append(execution.Results, dbRes)
+					}
+				}
+			}
 		}
 	}
 
@@ -8136,6 +9068,37 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	}
 
 	// Validate On-Prem Configuration immediately
+	if project.Environment == "onprem" {
+		cloudSyncConfigured := false
+		if len(execution.Workflow.OrgId) > 0 {
+			if validationOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId); orgErr == nil {
+				if len(validationOrg.CreatorOrg) > 0 {
+					validationOrg, orgErr = GetOrg(ctx, validationOrg.CreatorOrg)
+				}
+				if orgErr == nil && len(validationOrg.SyncConfig.Apikey) > 0 && validationOrg.CloudSyncActive && validationOrg.SyncConfig.AiCloudSync {
+					cloudSyncConfigured = true
+				}
+			}
+		}
+
+		hasLocalAi := false
+		if len(execution.Workflow.OrgId) > 0 {
+			if auths, err := GetAllWorkflowAppAuth(ctx, execution.Workflow.OrgId); err == nil {
+				for _, auth := range auths {
+					if strings.ToLower(auth.App.Name) == "openai" && (auth.Defined || auth.Validation.Valid || len(auth.Id) > 0) {
+						hasLocalAi = true
+						break
+					}
+				}
+			}
+		}
+
+		if !cloudSyncConfigured && !hasLocalAi {
+			onpremAiConfigErr := "To use the AI Agent on-premise, configure your LLM credentials by connecting the OpenAI app in Shuffle App Auth (supports OpenAI and any compatible provider/proxy), or enable Cloud Sync with \"Shuffle Cloud AI\" to run requests through Shuffle Cloud."
+			log.Printf("[ERROR] AI Configuration Error: %s", onpremAiConfigErr)
+			return abortAgentExecution(ctx, execution, startNode, "missing_onprem_ai_config", onpremAiConfigErr)
+		}
+	}
 
 	systemMessage := "" // Handled further down now
 	userMessage := ""
@@ -8155,15 +9118,13 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	enableQuestions := false
 	executionMode := ""
 
-	// Self-request starts here!
-	backendUrl := "https://shuffler.io"
-	if len(os.Getenv("BASE_URL")) > 0 {
-		backendUrl = os.Getenv("BASE_URL")
-	}
+	aiUrlOverride := ""
+	aiApiKeyOverride := ""
+	aiModelOverride := ""
+	aiReasoningOverride := ""
 
-	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
+	// Self-request starts here!
+	backendUrl := getBackendBaseUrl()
 
 	// This is a part of making sure variables work properly, no matter where
 	// in Shuffle we are
@@ -8191,7 +9152,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	llmStatusCode := 0
 	parsedAgentInput := ""
-	if hasConditions || len(parsingBody) > 0 {
+	if !standalone && (hasConditions || len(parsingBody) > 0) {
 		marshalledBody, err := json.Marshal(parsingBody)
 		if err == nil && len(marshalledBody) > 0 {
 			repeaterNode := Action{}
@@ -8314,7 +9275,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			log.Printf("[ERROR] Failed to marshal parsing body for shuffle tools translation: %v", err)
 		}
 	}
-	
+
 	templateSystemRule := ""
 	templateContext := ""
 	requiredApps := []string{}
@@ -8335,7 +9296,29 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			mergedIntoExisting := false
 			for paramIndex, param := range startNode.Parameters {
 				if param.Name == "action" {
-					startNode.Parameters[paramIndex].Value += "," + requiredAppsValue
+					existingParts := strings.Split(param.Value, ",")
+					toAdd := []string{}
+					for _, req := range requiredApps {
+						alreadyHas := false
+						reqClean := strings.TrimPrefix(req, "app:")
+						for _, exist := range existingParts {
+							existClean := strings.TrimPrefix(strings.TrimSpace(exist), "app:")
+							if strings.EqualFold(existClean, reqClean) {
+								alreadyHas = true
+								break
+							}
+						}
+						if !alreadyHas {
+							toAdd = append(toAdd, req)
+						}
+					}
+					if len(toAdd) > 0 {
+						if len(startNode.Parameters[paramIndex].Value) > 0 {
+							startNode.Parameters[paramIndex].Value += "," + strings.Join(toAdd, ",")
+						} else {
+							startNode.Parameters[paramIndex].Value = strings.Join(toAdd, ",")
+						}
+					}
 					mergedIntoExisting = true
 					break
 				}
@@ -8369,6 +9352,25 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 		if param.Name == "reasoning" {
 			foundReasoning = strings.ToLower(strings.TrimSpace(param.Value))
+		}
+
+		if param.Name == "shuffle_ai_url_override" {
+			aiUrlOverride = strings.TrimSpace(param.Value)
+		}
+
+		if param.Name == "shuffle_ai_apikey_override" || param.Name == "shuffle_ai_api_key_override" {
+			aiApiKeyOverride = strings.TrimSpace(param.Value)
+		}
+
+		if param.Name == "shuffle_ai_model_override" {
+			aiModelOverride = strings.TrimSpace(param.Value)
+		}
+
+		if param.Name == "shuffle_ai_reasoning_effort_override" {
+			aiReasoningOverride = strings.ToLower(strings.TrimSpace(param.Value))
+			if len(aiReasoningOverride) > 0 {
+				foundReasoning = aiReasoningOverride
+			}
 		}
 
 		if param.Name == "image" {
@@ -8405,11 +9407,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			executionMode = strings.ToLower(strings.TrimSpace(param.Value))
 		}
 
-		if param.Name == "action" {
+		if (param.Name == "action" || param.Name == "app_name" || param.Name == "tool_name") && len(param.Value) > 0 && param.Value != "openai" && param.Value != "AI Agent" && param.Value != "Shuffle Agent" {
 			param.Value = strings.ReplaceAll(param.Value, "app:undefined:api,", "")
 			param.Value = strings.ReplaceAll(param.Value, "app:undefined:api", "")
 
-			allowedActionString = param.Value
 			for _, actionStr := range strings.Split(param.Value, ",") {
 				actionStr = strings.ToLower(strings.TrimSpace(actionStr))
 
@@ -8417,37 +9418,287 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				//	log.Printf("[DEBUG] STRING: %s", actionStr)
 				//}
 
-				if actionStr == "" || actionStr == "nothing" || actionStr == "shuffle ai" || actionStr == "api" {
+				if actionStr == "" || actionStr == "nothing" || actionStr == "shuffle ai" || actionStr == "api" || actionStr == "openai" || actionStr == "ai agent" || actionStr == "shuffle agent" {
 					if debug {
 						log.Printf("[DEBUG][%s] Skipping action '%s' as it is not a valid action.", execution.ExecutionId, actionStr)
 					}
 					continue
 				}
 
-				if !strings.HasPrefix(actionStr, "app:") {
-					if debug {
-						log.Printf("[DEBUG][%s] Skipping action '%s' as it is not a valid action.", execution.ExecutionId, actionStr)
-					}
-
+				trimmedActionStr := strings.TrimSpace(strings.TrimPrefix(actionStr, "app:"))
+				if trimmedActionStr == "" || trimmedActionStr == "openai" {
 					continue
 				}
 
-				trimmedActionStr := strings.TrimPrefix(actionStr, "app:")
-				sortedAppActions := getPrioritisedAppActions(ctx, trimmedActionStr, 15)
+				var sortedAppActions []WorkflowAppAction
+				if trimmedActionStr == "osctrl" || trimmedActionStr == "subflow:osctrl" || trimmedActionStr == "computer-use" || trimmedActionStr == "computer_use" {
+					sortedAppActions = getComputerUseActions()
+					if false {
+						_ = []WorkflowAppAction{
+						{
+							Name:        "execute_command",
+							Label:       "Execute Command",
+							Description: "Execute a shell/terminal command on the local system in the active workspace directory",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "cmd",
+									Description: "Command to execute",
+									Required:    true,
+								},
+							},
+						},
+						{
+							Name:        "list_files",
+							Label:       "List Files",
+							Description: "List files and directories in the active workspace or a specified path",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "path",
+									Description: "Optional relative or absolute directory path (defaults to active workspace)",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "find_files",
+							Label:       "Find Files",
+							Description: "Recursively find files and directories in the workspace by name or glob pattern (e.g. *.go)",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "pattern",
+									Description: "Optional file name substring or glob pattern (e.g. *.go, bridge.go)",
+									Required:    false,
+								},
+								{
+									Name:        "path",
+									Description: "Optional directory path (or comma-separated paths) to search within (defaults to active workspace)",
+					Required:    false,
+				},
+				{
+					Name:        "max_depth",
+					Description: "Optional maximum directory recursion depth (defaults to 8)",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "read_file",
+							Label:       "Read File",
+							Description: "Read line-numbered text contents of a file in the workspace (optionally within a specific line range)",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "path",
+									Description: "Relative or absolute path to the file",
+									Required:    true,
+								},
+								{
+									Name:        "start_line",
+									Description: "Optional 1-indexed starting line number",
+									Required:    false,
+								},
+								{
+									Name:        "end_line",
+									Description: "Optional 1-indexed ending line number (inclusive)",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "edit_file",
+							Label:       "Edit File",
+							Description: "Modify a specific section of an existing file by replacing target_content with replacement_content",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "path",
+									Description: "Relative or absolute path to the file to modify",
+									Required:    true,
+								},
+								{
+									Name:        "target_content",
+									Description: "Exact existing text block in the file to replace",
+									Required:    true,
+								},
+								{
+									Name:        "replacement_content",
+									Description: "New text content to replace target_content with",
+									Required:    true,
+								},
+								{
+									Name:        "start_line",
+									Description: "Optional 1-indexed start line to scope the replacement",
+									Required:    false,
+								},
+								{
+									Name:        "end_line",
+									Description: "Optional 1-indexed end line to scope the replacement",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "write_file",
+							Label:       "Write File",
+							Description: "Create a new file or overwrite the entire content of a file in the workspace",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "path",
+									Description: "Relative or absolute path to the file",
+									Required:    true,
+								},
+								{
+									Name:        "content",
+									Description: "Full content to write to the file",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "create_file",
+							Label:       "Create File",
+							Description: "Create a new file in the workspace (automatically creates parent directories)",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "path",
+									Description: "Relative or absolute path to the new file",
+									Required:    true,
+								},
+								{
+									Name:        "content",
+									Description: "Optional initial content for the file",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "create_directory",
+							Label:       "Create Directory",
+							Description: "Create a new directory/folder in the workspace (creates parent directories as needed)",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "path",
+									Description: "Relative or absolute path to the new directory",
+									Required:    true,
+								},
+							},
+						},
+						{
+							Name:        "search_files",
+							Label:       "Search Files",
+							Description: "Search across all files in the workspace for matching text or regular expressions (returns file:line matches)",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "query",
+									Description: "Text or regex pattern to search for across files",
+									Required:    true,
+								},
+								{
+									Name:        "path",
+									Description: "Optional directory or file path (or comma-separated paths) to search in (defaults to active workspace)",
+					Required:    false,
+				},
+				{
+					Name:        "max_depth",
+					Description: "Optional maximum directory recursion depth (defaults to 6)",
+									Required:    false,
+								},
+								{
+									Name:        "file_pattern",
+									Description: "Optional file glob filter (e.g. *.go, *.js)",
+									Required:    false,
+								},
+								{
+									Name:        "is_regex",
+									Description: "Optional boolean ('true'/'false') to enable regex matching",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "list_processes",
+							Label:       "List Processes",
+							Description: "List currently running OS processes on the host",
+						},
+						{
+							Name:        "list_installed_software",
+							Label:       "List Installed Software",
+							Description: "List installed software and applications on the host",
+						},
+						{
+							Name:        "take_screenshot",
+							Label:       "Take Screenshot",
+							Description: "Capture display screenshot metadata and active window UI element tree",
+						},
+						{
+							Name:        "inspect_ui",
+							Label:       "Inspect UI",
+							Description: "Inspect the currently focused foreground window and UI element tree",
+						},
+						{
+							Name:        "remote_control",
+							Label:       "Remote Control",
+							Description: "Execute OS mouse and keyboard automation actions (mouse.move, mouse.click, mouse.drag, keyboard.type, keyboard.press, keyboard.hotkey, system.wait)",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "actions",
+									Description: `JSON array or batch of actions, e.g. [{"op":"mouse.move","params":{"x":500,"y":500}}] or [{"op":"mouse.click","params":{"x":500,"y":500,"button":"left"}}] or [{"op":"keyboard.type","params":{"text":"hello"}}]`,
+									Required:    true,
+								},
+							},
+						},
+					}
+					}
+					trimmedActionStr = "osctrl"
+				} else {
+					sortedAppActions = getPrioritisedAppActions(ctx, trimmedActionStr, 15)
+					if strings.Contains(trimmedActionStr, "shuffle_host_monitors") {
+						existingNames := make(map[string]bool, len(sortedAppActions))
+						for _, act := range sortedAppActions {
+							existingNames[act.Name] = true
+						}
+						for _, cuAct := range getComputerUseActions() {
+							if !existingNames[cuAct.Name] {
+								sortedAppActions = append(sortedAppActions, cuAct)
+							}
+						}
+					}
+				}
 
 				// Sort alphabetically so the action list is byte-for-byte identical across every LLM loop, keeping the prompt cache prefix stable.
 				sort.Slice(sortedAppActions, func(i, j int) bool {
 					return sortedAppActions[i].Name < sortedAppActions[j].Name
 				})
 
-				if len(sortedAppActions) > 0 {
-					// Cuts off the potential md5:appname prefix
-					if len(trimmedActionStr) > 33 && string(trimmedActionStr[32]) == ":" {
-						trimmedActionStr = trimmedActionStr[33:]
-					}
+				// Cuts off the potential md5:appname or uuid:appname prefix
+				baseToolName := trimmedActionStr
+				if len(baseToolName) > 33 && string(baseToolName[32]) == ":" {
+					baseToolName = baseToolName[33:]
+				} else if len(baseToolName) > 37 && string(baseToolName[36]) == ":" {
+					baseToolName = baseToolName[37:]
+				}
 
-					decidedApps = append(decidedApps, trimmedActionStr)
-					specificAppMetadata += fmt.Sprintf("\n\n**Available actions and fields for Tool '%s'**:\n", trimmedActionStr)
+				if !ArrayContains(decidedApps, baseToolName) {
+					decidedApps = append(decidedApps, baseToolName)
+				}
+
+				allowedEntry := actionStr
+				if !strings.Contains(trimmedActionStr, ":") {
+					if len(sortedAppActions) > 0 && len(sortedAppActions[0].AppID) > 0 {
+						allowedEntry = fmt.Sprintf("app:%s:%s", sortedAppActions[0].AppID, baseToolName)
+					} else {
+						allowedEntry = fmt.Sprintf("app:%s", baseToolName)
+					}
+				}
+
+				if len(allowedActionString) > 0 {
+					if !strings.Contains(allowedActionString, allowedEntry) && !strings.Contains(allowedActionString, baseToolName) {
+						allowedActionString += "," + allowedEntry
+					}
+				} else {
+					allowedActionString = allowedEntry
+				}
+
+				if len(sortedAppActions) > 0 {
+					specificAppMetadata += fmt.Sprintf("\n\n**Available actions and fields for Tool '%s'**:\n", baseToolName)
 
 					previousDesc := ""
 					for counter, sortedAppAction := range sortedAppActions {
@@ -8582,6 +9833,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 
 			oldActionResult = result
+
+			if strings.Contains(result.Result, "Result too large to handle") {
+				if fullVal, fileErr := getExecutionFileValue(ctx, execution, result); fileErr == nil && len(fullVal) > 0 {
+					result.Result = cleanAgentResultString(fullVal)
+				}
+			} else {
+				result.Result = cleanAgentResultString(result.Result)
+			}
 
 			// Unmarshal the result and show decisions to make better decisions
 			mappedResult := AgentOutput{}
@@ -8761,11 +10020,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 				// Finding and fixing images in the previous decisions
 				// This monstrosity is a mess right now, but that's ok
-				if mappedDecision.Action == "post_take_screenshot" && len(mappedDecision.RunDetails.RawResponse) > 0 { 
+				if mappedDecision.Action == "post_take_screenshot" && len(mappedDecision.RunDetails.RawResponse) > 0 {
 
 					// 1. HTTP response -> .Result
 					// 2. SingleResult -> stats == 200 => body
-					httpResp := HTTPOutput{} 
+					httpResp := HTTPOutput{}
 					err = json.Unmarshal([]byte(mappedDecision.RunDetails.RawResponse), &httpResp)
 
 					// httpResp -> .Body -> SingleResult -> .Result -> RCEResult -> .Output -> ScreenshotWrapper[] -> .ImageBase64
@@ -8773,24 +10032,24 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					//if foundResult, ok := httpResp.Body.(SingleResult); ok {
 					if httpRespMap, ok := httpResp.Body.(map[string]interface{}); ok {
 						// Marshal -> Back to SingleResult
-						parsedBody, err := json.Marshal(httpRespMap)	
-						if err != nil { 
+						parsedBody, err := json.Marshal(httpRespMap)
+						if err != nil {
 							log.Printf("[ERROR] Bad httpRespMap marshal")
-						} 
+						}
 
-						// Map it to SingleResult 
+						// Map it to SingleResult
 						foundResult := SingleResult{}
 						err = json.Unmarshal([]byte(parsedBody), &foundResult)
-						if len(foundResult.Result) == 0 { 
-							log.Printf("[ERROR] No found result") 
+						if len(foundResult.Result) == 0 {
+							log.Printf("[ERROR] No found result")
 						} else {
-							// Map it to 
-							rceOutput := RCEResult{} 
+							// Map it to
+							rceOutput := RCEResult{}
 							err = json.Unmarshal([]byte(foundResult.Result), &rceOutput)
 							if len(rceOutput.Output) == 0 {
-								log.Printf("[ERROR] No rce output") 
+								log.Printf("[ERROR] No rce output")
 							} else {
-								screenOutput := []ScreenshotWrapper{} 
+								screenOutput := []ScreenshotWrapper{}
 								err = json.Unmarshal([]byte(rceOutput.Output), &screenOutput)
 								for screenIndex, screen := range screenOutput {
 									if len(screen.ImageBase64) > 0 {
@@ -8799,9 +10058,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 									}
 								}
 
-								// Rebuild, as we have found the images correctly 
+								// Rebuild, as we have found the images correctly
 								if len(historyImagesIncluded) == 0 {
-									log.Printf("[ERROR] No history images found") 
+									log.Printf("[ERROR] No history images found")
 								} else {
 									// Rebuild the output with the images removed
 									screenOutputBytes, err := json.Marshal(screenOutput)
@@ -8810,7 +10069,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 									} else {
 										rceOutput.Output = string(screenOutputBytes)
 										marshalledRceOutput, err := json.Marshal(rceOutput)
-										if err != nil { 
+										if err != nil {
 											log.Printf("[ERROR][%s] Failed to marshal RCE output without images for decision at index %d: %s", execution.ExecutionId, mappedDecision.I, err)
 										} else {
 											foundResult.Result = string(marshalledRceOutput)
@@ -8822,7 +10081,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 												httpResp.Body = string(foundResultBytes)
 
 												marshalledHttpResp, err := json.Marshal(httpResp)
-												if err != nil { 
+												if err != nil {
 													log.Printf("[ERROR][%s] Failed to marshal Found Result Bytes without images for decision at index %d: %s", execution.ExecutionId, mappedDecision.I, err)
 												} else {
 													mappedDecision.RunDetails.RawResponse = string(marshalledHttpResp)
@@ -8837,7 +10096,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 						log.Printf("[ERROR] Screenshot result body is not a string for decision at index %d. Type: %s", mappedDecision.I, reflect.TypeOf(httpResp.Body))
 					}
 
-					//log.Printf("\n\n\n END OF BASE64 PARSE. IMAGES: %d\n\n", len(historyImagesIncluded)) 
+					//log.Printf("\n\n\n END OF BASE64 PARSE. IMAGES: %d\n\n", len(historyImagesIncluded))
 					//os.Exit(3)
 				}
 
@@ -8930,7 +10189,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	// This makes it so we can start from this index.
 	lastFinishedIndex += 1
 
-	if len(execution.Workflow.OrgId) > 0 {
+	if !standalone && len(execution.Workflow.OrgId) > 0 {
 		org, err := GetOrg(ctx, execution.Workflow.OrgId)
 		if err == nil && len(org.Id) > 0 {
 			metadata += fmt.Sprintf("Organization name: %s\n", org.Name)
@@ -8970,6 +10229,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
 			}
 		}
+	} else if len(decidedApps) > 0 {
+		metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
 	}
 
 	// Not necessary as it's directly injected instead
@@ -9055,12 +10316,13 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 	- Do NOT ask the same question again when an answer already exists in prior context.
 
 5. **Action Selection & Risk Assessment:**
-   - Select the tool that performs the *next logical step*.
+   - Select the tool(s) that perform the *next logical step(s)*.
    - **Destructive Guard:**
      - If action is DESTRUCTIVE (stop/delete/remove) -> Set "approval_required": true on the action/tool. 
 
-6. **Validation & Continuation:**
-   - Decisions can be dependant. Make sure to validate the output of one decision before proceeding to the next. If you need to run multiple steps, run them and validate each time.
+6. **Validation & Continuation (Parallel vs. Sequential):**
+   - Decisions can be dependent. Always validate the output of one step before proceeding to dependent steps in the next turn. Do NOT chain unvalidated dependent actions in a single response.
+   - When multiple actions are **independent** and do NOT depend on each other's output (e.g., querying multiple sources, inspecting multiple files/hosts, or running independent checks), output them together in the JSON array with the **same index "i"** so they execute concurrently in parallel and are awaited together before the next validation turn.
 
 %s
 
@@ -9073,7 +10335,7 @@ data_filter:
 
 [
   {
-    "i": 0, // For paralell actions, re-use the same index for related actions 
+    "i": 0, // For parallel actions in the same turn, re-use the same index across all decisions in this array.
     "action": "exact_name", // Name of the function/action WITHOUT parameters. Use "finish" if done/answering, "ask" if asking. JUST add the name.
     "category": "singul", // Use "singul" for actions. Use "finish" if done. Use "standalone" ONLY if asking
     "tool": "tool_name", // Name of the tool. Use "core" for finish/ask
@@ -9090,29 +10352,38 @@ data_filter:
   }
 ]`, enableQuestionsString)
 
-
 	systemMessage = filterSystemPromptByTemplate(template, systemMessage)
 
 	// templateSystemRule, templateContext and requiredApps were already resolved
 	// earlier (before the "action" parameter merge), no need to fetch them again here.
 
 	agentReasoningEffort := "low"
-	newReasoningEffort := os.Getenv("AI_AGENT_REASONING_EFFORT")
+	if aiReasoningEffort == "low" || aiReasoningEffort == "medium" || aiReasoningEffort == "high" {
+		agentReasoningEffort = aiReasoningEffort
+	} else if aiReasoningEffort == "minimal" || aiReasoningEffort == "off" || aiReasoningEffort == "none" {
+		agentReasoningEffort = ""
+	}
+
+	newReasoningEffort := strings.ToLower(strings.TrimSpace(os.Getenv("AI_AGENT_REASONING_EFFORT")))
 	if len(newReasoningEffort) > 0 {
-		if newReasoningEffort == "minimal" || newReasoningEffort == "low" || newReasoningEffort == "medium" || newReasoningEffort == "high" {
+		if newReasoningEffort == "low" || newReasoningEffort == "medium" || newReasoningEffort == "high" {
 			agentReasoningEffort = newReasoningEffort
+		} else if newReasoningEffort == "minimal" || newReasoningEffort == "off" || newReasoningEffort == "none" {
+			agentReasoningEffort = ""
 		}
 	}
 
-	if foundReasoning == "minimal" || foundReasoning == "low" || foundReasoning == "medium" || foundReasoning == "high" {
+	if foundReasoning == "low" || foundReasoning == "medium" || foundReasoning == "high" {
 		agentReasoningEffort = foundReasoning
+	} else if foundReasoning == "minimal" || foundReasoning == "off" || foundReasoning == "none" {
+		agentReasoningEffort = ""
 	}
 
 	added := false
-	for _, requiredApp := range requiredApps { 
+	for _, requiredApp := range requiredApps {
 		if !strings.Contains(allowedActionString, requiredApp) {
 			added = true
-			allowedActionString += "," + requiredApp 
+			allowedActionString += "," + requiredApp
 		}
 	}
 
@@ -9160,6 +10431,9 @@ data_filter:
 
 	// Set model based on environment
 	aiModel := model
+	if len(aiModelOverride) > 0 {
+		aiModel = aiModelOverride
+	}
 	primaryMessages := []openai.ChatCompletionMessage{
 		{
 			Role:    openai.ChatMessageRoleSystem,
@@ -9169,6 +10443,9 @@ data_filter:
 
 	// Inject template-specific rules as a secondary system message
 	if len(templateSystemRule) > 0 {
+		// Ensure foratting rules in this is ignored
+		templateSystemRule += `\n\n## IMPORTANT: Use the original JSON LIST OUTPUT FORMAT NO MATTER WHAT: [{"tool": "tool_name", ...}]`
+
 		primaryMessages = append(primaryMessages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
 			Content: templateSystemRule,
@@ -9224,13 +10501,10 @@ data_filter:
 
 	if project.Environment == "cloud" {
 		//completionRequest.Store = true
-		completionRequest.MaxCompletionTokens = 5000
+		completionRequest.MaxCompletionTokens = 16384
 	} else {
 		// For on-prem
 		completionRequest.MaxCompletionTokens = aiMaxTokens
-		if aiReasoningEffort != "" {
-			completionRequest.ReasoningEffort = aiReasoningEffort
-		}
 	}
 
 	if len(marshalledDecisions) > 4 {
@@ -9240,9 +10514,9 @@ data_filter:
 			Content: historyString,
 		}
 
-		if len(historyImagesIncluded) > 0 { 
-			// Letting vendor control Reasoning in cases with images 
-			completionRequest.ReasoningEffort = "" 
+		if len(historyImagesIncluded) > 0 {
+			// Letting vendor control Reasoning in cases with images
+			completionRequest.ReasoningEffort = ""
 
 			historyObject = openai.ChatCompletionMessage{
 				Role: openai.ChatMessageRoleUser,
@@ -9256,8 +10530,8 @@ data_filter:
 
 			// Reduce it down to the 2 last images
 			keepAmount := 2
-			if len(historyImagesIncluded) > keepAmount { 
-				historyImagesIncluded = historyImagesIncluded[len(historyImagesIncluded)-1-keepAmount:len(historyImagesIncluded)-1]
+			if len(historyImagesIncluded) > keepAmount {
+				historyImagesIncluded = historyImagesIncluded[len(historyImagesIncluded)-1-keepAmount : len(historyImagesIncluded)-1]
 			}
 
 			for _, imageIncluded := range historyImagesIncluded {
@@ -9270,7 +10544,7 @@ data_filter:
 				})
 			}
 		}
-		
+
 		completionRequest.Messages = append(completionRequest.Messages, historyObject)
 	}
 
@@ -9389,7 +10663,7 @@ data_filter:
 
 	billingOrgId := execution.Workflow.OrgId
 	var billingOrg *Org
-	if len(execution.Workflow.OrgId) > 0 {
+	if !standalone && len(execution.Workflow.OrgId) > 0 {
 		currentOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId)
 		billingOrg = currentOrg
 
@@ -9414,37 +10688,43 @@ data_filter:
 		}
 
 		orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
-		monthlyTokensUsed := int64(0)
+		monthlyAppRuns := int64(0)
+		monthlyLLMTokens := int64(0)
 		if statsErr == nil && orgStats != nil {
-			//monthlyTokensUsed = orgStats.MonthlyAgentTokens
-			monthlyTokensUsed = orgStats.MonthlyLLMTokens
+			convertedStats := GetCorrectedStats(orgStats)
+			monthlyAppRuns = convertedStats.MonthlyAppExecutions + convertedStats.MonthlyChildAppExecutions
+			monthlyLLMTokens = convertedStats.MonthlyLLMTokens + convertedStats.MonthlyChildOrgLLMTokens
 		}
 
-		tokenLimit := int64(0)
-		if project.Environment == "cloud" {
-			tokenLimit = int64(10_000_000)
-		}
-		if billingOrg != nil && billingOrg.SyncFeatures.AgentTokens.Active && billingOrg.SyncFeatures.AgentTokens.Limit > 0 {
-			tokenLimit = billingOrg.SyncFeatures.AgentTokens.Limit
-		}
-
-		if tokenLimit > 0 {
-			estimatedCurrentTokens := EstimatePromptTokens(completionRequest.Messages)
-			totalTokensAfterRequest := monthlyTokensUsed + estimatedCurrentTokens
-			//usagePercentage := (monthlyTokensUsed * 100) / tokenLimit
-
-			//log.Printf("[DEBUG][%s] AI_AGENT_TOKEN_USAGE: billing_org=%s exec_org=%s monthly_used=%d limit=%d usage_percent=%d%%", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, tokenLimit, usagePercentage)
-
-			if totalTokensAfterRequest > tokenLimit {
-				throttleKey := fmt.Sprintf("token_limit_log_%s", billingOrgId)
-				_, cacheErr := GetCache(ctx, throttleKey)
-				alreadyThrottled := cacheErr == nil
-				if !alreadyThrottled {
-					log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: billing_org=%s exec_org=%s monthly_used=%d estimated_current=%d total_would_be=%d limit=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, estimatedCurrentTokens, totalTokensAfterRequest, tokenLimit)
-					_ = SetCache(ctx, throttleKey, []byte("1"), 2*60)
-					go sendAITokenLimitAlert(ctx, execution, billingOrg, tokenLimit, monthlyTokensUsed)
+		if billingOrg != nil {
+			appRunLimit := int64(billingOrg.SyncFeatures.AppExecutions.Limit)
+			if project.Environment == "cloud" {
+				useTokenOverride := false
+				if expiryMonthStr := os.Getenv("AI_CREDIT_END_MONTH"); len(expiryMonthStr) > 0 {
+					if expiryMonth, convErr := strconv.Atoi(expiryMonthStr); convErr == nil && expiryMonth >= 1 && expiryMonth <= 12 {
+						now := time.Now()
+						expiryDate := time.Date(now.Year(), time.Month(expiryMonth), 1, 0, 0, 0, 0, now.Location())
+						if now.Before(expiryDate) {
+							useTokenOverride = true
+						}
+					}
 				}
-				return abortAgentExecution(ctx, execution, startNode, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit), alreadyThrottled)
+
+				if useTokenOverride {
+					geminiTokenLimit := int64(100_000_000)
+					if os.Getenv("AI_CREDITS") > "" {
+						credVal, convErr := strconv.ParseInt(os.Getenv("AI_CREDITS"), 10, 64)
+						if convErr == nil {
+							geminiTokenLimit = credVal
+						}
+					}
+
+					if monthlyLLMTokens >= geminiTokenLimit {
+						return abortAgentExecution(ctx, execution, startNode, "app_limit_exceeded", fmt.Sprintf("AI LLM token limit reached: %d >= %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyLLMTokens, geminiTokenLimit))
+					}
+				} else if monthlyAppRuns >= appRunLimit {
+					return abortAgentExecution(ctx, execution, startNode, "app_limit_exceeded", fmt.Sprintf("AI App limit reached: %d >= %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyAppRuns, appRunLimit))
+				}
 			}
 		}
 	}
@@ -9461,10 +10741,21 @@ data_filter:
 		recorder := httptest.NewRecorder()
 
 		callInfo := AiCallInfo{
-			Caller: "aiAgentRunner",
-			OrgID:  execution.Workflow.OrgId,
+			Caller:      "aiAgentRunner",
+			OrgID:       execution.Workflow.OrgId,
+			ExecutionId: execution.ExecutionId,
 
 			Resp: recorder,
+
+			Url:             aiUrlOverride,
+			ApiKey:          aiApiKeyOverride,
+			Model:           aiModelOverride,
+			ReasoningEffort: foundReasoning,
+		}
+
+		// Check for authenticationId
+		if len(startNode.AuthenticationId) > 0 {
+			callInfo.AuthenticationId = startNode.AuthenticationId
 		}
 
 		output, err := RunAiQuery(
@@ -9477,6 +10768,9 @@ data_filter:
 
 		if err != nil {
 			log.Printf("[ERROR][%s] AI Agent: Failed running AI query for action %s: %s", execution.ExecutionId, startNode.ID, err)
+			if strings.Contains(err.Error(), "429") {
+				return abortAgentExecution(ctx, execution, startNode, "llm_rate_limit", err.Error())
+			}
 			return abortAgentExecution(ctx, execution, startNode, "run_ai_query_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 		}
 
@@ -9811,13 +11105,9 @@ data_filter:
 					abortMessage := fmt.Sprintf("LLM error (HTTP %d %s): %s", outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
 
 					if outputMap.Status == 429 {
-						rateLimitKey := "openai_rate_limit_log"
-						if _, cacheErr := GetCache(ctx, rateLimitKey); cacheErr != nil {
-							log.Printf("[ERROR][%s] AI_OPENAI_RATE_LIMIT: org=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, newOutput.Error.Message)
-							_ = SetCache(ctx, rateLimitKey, []byte("1"), 30)
-						}
 						abortReason = "llm_rate_limit"
-						abortMessage = "Agent execution failed due to rate limits. Please try again or contact support at support@shuffler.io"
+						abortMessage = newOutput.Error.Message
+						log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=429 error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, newOutput.Error.Type, newOutput.Error.Message)
 					} else {
 						log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
 					}
@@ -9850,32 +11140,25 @@ data_filter:
 					inputTokens := int(openaiOutput.Usage.PromptTokens)
 					outputTokens := int(openaiOutput.Usage.CompletionTokens)
 					totalTokens := int(openaiOutput.Usage.TotalTokens)
+					currentOrgId := execution.Workflow.OrgId
+					if len(currentOrgId) == 0 {
+						currentOrgId = billingOrgId
+					}
 
-					subOrgId := execution.Workflow.OrgId
-					go func() {
-						time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
-						if inputTokens > 0 {
-							IncrementCache(ctx, billingOrgId, "agent_input_tokens", inputTokens)
-						}
-						if outputTokens > 0 {
-							IncrementCache(ctx, billingOrgId, "agent_output_tokens", outputTokens)
-						}
-						if cachedTokens > 0 {
-							IncrementCache(ctx, billingOrgId, "agent_cached_tokens", cachedTokens)
-						}
+					// go func() {
+					// 	time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
 
-						if billingOrgId != subOrgId {
-							if inputTokens > 0 {
-								IncrementCache(ctx, subOrgId, "agent_input_tokens", inputTokens)
-							}
-							if outputTokens > 0 {
-								IncrementCache(ctx, subOrgId, "agent_output_tokens", outputTokens)
-							}
-							if cachedTokens > 0 {
-								IncrementCache(ctx, subOrgId, "agent_cached_tokens", cachedTokens)
-							}
-						}
-					}()
+					// 	IncrementCache(ctx, currentOrgId, "agent_tokens", totalTokens)
+					// 	if inputTokens > 0 {
+					// 		IncrementCache(ctx, currentOrgId, "agent_input_tokens", inputTokens)
+					// 	}
+					// 	if outputTokens > 0 {
+					// 		IncrementCache(ctx, billingOrgId, "agent_output_tokens", outputTokens)
+					// 	}
+					// 	if cachedTokens > 0 {
+					// 		IncrementCache(ctx, billingOrgId, "agent_cached_tokens", cachedTokens)
+					// 	}
+					// }()
 
 					if cachedTokens > 0 && debug {
 						log.Printf("[DEBUG][%s] PROMPT CACHING HIT! Saved %d tokens on this request.", execution.ExecutionId, cachedTokens)
@@ -9952,6 +11235,15 @@ data_filter:
 			allowedActions = strings.Split(allowedActionString, ",")
 		}
 
+		if !createNextActions {
+			for idx := range mappedDecisions {
+				if mappedDecisions[idx].I != lastFinishedIndex {
+					log.Printf("[WARNING][%s] Setting initial decision index %d to %d", execution.ExecutionId, mappedDecisions[idx].I, lastFinishedIndex)
+					mappedDecisions[idx].I = lastFinishedIndex
+				}
+			}
+		}
+
 		agentOutput.Status = "RUNNING"
 		agentOutput.Error = errorMessage
 		agentOutput.Decisions = mappedDecisions
@@ -9962,8 +11254,20 @@ data_filter:
 		agentOutput.StartedAt = time.Now().UnixMilli()
 		agentOutput.CompletedAt = 0
 
-		if len(openaiOutput.Model) > 0 { 
+		if len(openaiOutput.Model) > 0 {
 			completionRequest.Model = openaiOutput.Model
+		}
+
+		if len(openaiOutput.Choices) == 0 && len(bodyString) > 0 {
+			openaiOutput.Choices = []openai.ChatCompletionChoice{
+				{
+					Index: 0,
+					Message: openai.ChatCompletionMessage{
+						Role:    "assistant",
+						Content: string(bodyString),
+					},
+				},
+			}
 		}
 
 		agentOutput.LLMRequests = []openai.ChatCompletionRequest{
@@ -10001,10 +11305,12 @@ data_filter:
 			}
 
 			// Validate if user actively aborted the workflow while LLM query was in flight
-			if tmpExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && tmpExecution != nil {
-				if tmpExecution.Status == "ABORTED" {
-					log.Printf("[INFO][%s] Workflow was aborted by user while LLM query was in flight. Stopping agent.", execution.ExecutionId)
-					return startNode, errors.New("Agent Workflow run was aborted") 
+			if !standalone {
+				if tmpExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && tmpExecution != nil {
+					if tmpExecution.Status == "ABORTED" {
+						log.Printf("[INFO][%s] Workflow was aborted by user while LLM query was in flight. Stopping agent.", execution.ExecutionId)
+						return startNode, errors.New("Agent Workflow run was aborted")
+					}
 				}
 			}
 
@@ -10017,13 +11323,10 @@ data_filter:
 				}
 			}
 
-			additions := 0
 			for _, mappedDecision := range mappedDecisions {
-				if mappedDecision.I < lastFinishedIndex {
-					log.Printf("[WARNING][%s] Setting decision index %d to last finished index %d + additions %d", execution.ExecutionId, mappedDecision.I, lastFinishedIndex, additions)
-
-					mappedDecision.I = lastFinishedIndex + additions
-					additions += 1
+				if mappedDecision.I != lastFinishedIndex {
+					log.Printf("[WARNING][%s] Setting decision index %d to last finished index %d", execution.ExecutionId, mappedDecision.I, lastFinishedIndex)
+					mappedDecision.I = lastFinishedIndex
 				}
 
 				if len(mappedDecision.RunDetails.Id) == 0 {
@@ -10049,7 +11352,7 @@ data_filter:
 				}
 
 				if !found {
-					if len(openaiOutput.Model) > 0 { 
+					if len(openaiOutput.Model) > 0 {
 						completionRequest.Model = openaiOutput.Model
 					}
 
@@ -10065,6 +11368,7 @@ data_filter:
 				execution.Status = "EXECUTING"
 				agentOutput.Status = "RUNNING"
 
+				foundAgentIndex := -1
 				for resultIndex, result := range execution.Results {
 					if result.Action.ID != startNode.ID {
 						continue
@@ -10087,9 +11391,31 @@ data_filter:
 					if err != nil {
 						log.Printf("[ERROR] AI Agent: Failed setting cache for action result %s: %s", actionCacheId, err)
 					}
+					foundAgentIndex = resultIndex
+					break
 				}
 
-				SetWorkflowExecution(ctx, execution, true)
+				if foundAgentIndex < 0 {
+					agentOutputMarshalled, err := json.Marshal(agentOutput)
+					initialResult := string(agentOutputMarshalled)
+					if err != nil {
+						initialResult = "{}"
+					}
+					agentResult := ActionResult{
+						Action:      startNode,
+						ExecutionId: execution.ExecutionId,
+						Result:      initialResult,
+						Status:      "WAITING",
+						StartedAt:   time.Now().UnixMilli(),
+					}
+					execution.Results = append(execution.Results, agentResult)
+					actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
+					_ = SetCache(ctx, actionCacheId, []byte(initialResult), 600)
+				}
+
+				if !standalone {
+					SetWorkflowExecution(ctx, execution, true)
+				}
 			}
 		}
 
@@ -10171,7 +11497,7 @@ data_filter:
 			agentOutput.Decisions[decisionIndex] = decision
 
 			// Handles approvals
-			if decision.ApprovalRequired && decision.Action != "ask" && decision.Action != "question" && (decision.Category == "singul" || decision.Category == "standalone") && (decision.RunDetails.Status == "" || decision.RunDetails.Status == "RUNNING") {
+			if !standalone && decision.ApprovalRequired && decision.Action != "ask" && decision.Action != "question" && (decision.Category == "singul" || decision.Category == "standalone") && (decision.RunDetails.Status == "" || decision.RunDetails.Status == "RUNNING") {
 				log.Printf("[DEBUG] Decision %d requires approval. SHOULD mark as waiting for approval (not implemented)...", decision.I)
 
 				if agentOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
@@ -10200,6 +11526,7 @@ data_filter:
 				decision.RunDetails.Status = "WAITING"
 
 				agentOutput.Decisions[decisionIndex] = decision
+				agentOutput.Status = "WAITING"
 				continue
 			}
 
@@ -10244,7 +11571,7 @@ data_filter:
 					}
 				}
 
-				if agentOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
+				if !standalone && agentOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
 
 					//http://localhost:3002/forms/9d327719-5ee3-43d9-a775-7b13d5add416?authorization=5fc12b1d-e418-47e0-9789-f6f82f8826df&reference_execution=9d327719-5ee3-43d9-a775-7b13d5add416&source_node=2cf6fc9b-f470-40b3-aa52-56ad2e1a952b&decision_id=UVrjdHiQ&backend_url=http://localhost:5002
 					mappedDecision := agentOutput.Decisions[decisionIndex]
@@ -10284,7 +11611,9 @@ data_filter:
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 
-				go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
+				if !standalone {
+					go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
+				}
 
 			} else {
 				// 	if decision.Category == "standalone" || decision.Action == "add_tool" {
@@ -10307,7 +11636,7 @@ data_filter:
 					marshalledDecision, err := json.Marshal(decision)
 					if err != nil {
 						log.Printf("[ERROR] AI Agent: Failed marshalling decision in AI Agent decision handler: %s", err)
-					} else {
+					} else if !standalone {
 						actionResult := ActionResult{
 							ExecutionId:   execution.ExecutionId,
 							Authorization: execution.Authorization,
@@ -10362,11 +11691,6 @@ data_filter:
 			decisionActionRan = true
 		}
 
-		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
-			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent run.", execution.ExecutionId)
-			return abortAgentExecution(ctx, execution, startNode, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions, but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. \n\nFailed Decision (debug): \n%s", decisionString))
-		}
-
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
 		if err != nil {
 			log.Printf("[ERROR] AI Agent: Failed marshalling agent output in AI Agent response: %s", err)
@@ -10398,16 +11722,30 @@ data_filter:
 			foundResultIndex = len(execution.Results) - 1
 		}
 
+		if !decisionActionRan && agentOutput.Status != "WAITING" && !strings.Contains(decisionString, conditionText) {
+			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent run.", execution.ExecutionId)
+			return abortAgentExecution(ctx, execution, startNode, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions, but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. \n\nFailed Decision (debug): \n%s", decisionString))
+		}
+
 		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status != "ABORTED" && execution.Status != "FAILURE" {
-			execution.Status = "FINISHED"
-			execution.CompletedAt = agentOutput.CompletedAt
+			isStandalone := execution.ExecutionId == execution.WorkflowId || execution.ExecutionId == execution.Workflow.ID
+			if isStandalone {
+				execution.Status = "FINISHED"
+				if agentOutput.CompletedAt > 100000000000 {
+					execution.CompletedAt = agentOutput.CompletedAt / 1000
+				} else {
+					execution.CompletedAt = agentOutput.CompletedAt
+				}
+			}
 			execution.Results[foundResultIndex].Status = "SUCCESS"
 			execution.Results[foundResultIndex].CompletedAt = agentOutput.CompletedAt
-			SetWorkflowExecution(ctx, execution, true)
+			if !standalone {
+				SetWorkflowExecution(ctx, execution, true)
 
-			log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for agent action %s", execution.ExecutionId, startNode.ID)
-			go sendAgentActionSelfRequest("SUCCESS", execution, execution.Results[foundResultIndex])
-		} else {
+				log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for agent action %s", execution.ExecutionId, startNode.ID)
+				go sendAgentActionSelfRequest("SUCCESS", execution, execution.Results[foundResultIndex])
+			}
+		} else if !standalone {
 			SetWorkflowExecution(ctx, execution, true)
 		}
 
@@ -10420,41 +11758,41 @@ data_filter:
 	if memorizationEngine == "shuffle_db" {
 
 		/*
-		// This is NOT what Memory is used for...
-		requestKey := fmt.Sprintf("chat_%s_%s", execution.ExecutionId, startNode.ID)
+			// This is NOT what Memory is used for...
+			requestKey := fmt.Sprintf("chat_%s_%s", execution.ExecutionId, startNode.ID)
 
-		for messageIndex, _ := range completionRequest.Messages {
-			if len(completionRequest.Messages[messageIndex].Name) == 0 {
-				completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().UnixMilli())
-			}
-		}
-
-		// Stores the key in shuffle datastore
-		marshalledCompletionRequest, err := json.MarshalIndent(completionRequest, "", "  ")
-
-		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed marshalling openai completion request: %s", execution.ExecutionId, err)
-		} else {
-			cacheData := CacheKeyData{
-				Key:      requestKey,
-				Value:    string(marshalledCompletionRequest),
-				Category: "agent_requests",
-
-				WorkflowId:    execution.Workflow.ID,
-				ExecutionId:   execution.ExecutionId,
-				Authorization: execution.Authorization,
-				OrgId:         execution.ExecutionOrg,
+			for messageIndex, _ := range completionRequest.Messages {
+				if len(completionRequest.Messages[messageIndex].Name) == 0 {
+					completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().UnixMilli())
+				}
 			}
 
-			err := SetDatastoreKey(ctx, cacheData)
+			// Stores the key in shuffle datastore
+			marshalledCompletionRequest, err := json.MarshalIndent(completionRequest, "", "  ")
+
 			if err != nil {
-				log.Printf("[ERROR][%s] AI Agent: Failed updating AI requests: %s", execution.ExecutionId, err)
+				log.Printf("[ERROR][%s] AI Agent: Failed marshalling openai completion request: %s", execution.ExecutionId, err)
+			} else {
+				cacheData := CacheKeyData{
+					Key:      requestKey,
+					Value:    string(marshalledCompletionRequest),
+					Category: "agent_requests",
+
+					WorkflowId:    execution.Workflow.ID,
+					ExecutionId:   execution.ExecutionId,
+					Authorization: execution.Authorization,
+					OrgId:         execution.ExecutionOrg,
+				}
+
+				err := SetDatastoreKey(ctx, cacheData)
+				if err != nil {
+					log.Printf("[ERROR][%s] AI Agent: Failed updating AI requests: %s", execution.ExecutionId, err)
+				}
 			}
-		}
 		*/
 	}
 
-	if createNextActions || agentOutput.Status == "FINISHED" {
+	if standalone || createNextActions || agentOutput.Status == "FINISHED" {
 		return startNode, nil
 	}
 
@@ -10596,10 +11934,21 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	if categoryAction.ActionName == "remove" || categoryAction.ActionName == "disable" || categoryAction.ActionName == "stop" {
 
 		if workflowErr == nil && workflow.OrgId == user.ActiveOrg.Id {
+			for _, trigger := range workflow.Triggers {
+				if trigger.TriggerType == "WEBHOOK" && len(trigger.ID) > 0 {
+					_ = DeleteKey(ctx, "hooks", trigger.ID)
+				}
+			}
+
 			// Delete the workflow
 			err = DeleteKey(ctx, "workflow", workflowId, user.ActiveOrg.Id)
 			if err != nil {
 				log.Printf("[ERROR] Failed deleting workflow with ID %s in GenerateSingulWorkflows: %s", workflowId, err)
+			}
+
+			disableErr := HandleSingulWorkflowDisablement(ctx, workflowId, user.ActiveOrg.Id, categoryAction)
+			if disableErr != nil {
+				log.Printf("[WARNING] Failed to clean up datastore automations for workflow %s: %s", workflowId, disableErr)
 			}
 
 			/*
@@ -10624,12 +11973,32 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	previousTriggers := []Trigger{}
+	if workflowErr == nil && workflow != nil {
+		previousTriggers = workflow.Triggers
+	}
+
 	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get default workflow in GenerateSingulWorkflows: %s", err)
 		resp.WriteHeader(http.StatusInternalServerError)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get default workflow for this category. Please contact support@shuffler.io"}`))
 		return
+	}
+
+	for _, oldTrigger := range previousTriggers {
+		if oldTrigger.TriggerType == "WEBHOOK" && len(oldTrigger.ID) > 0 {
+			stillExists := false
+			for _, newTrigger := range newWorkflow.Triggers {
+				if newTrigger.ID == oldTrigger.ID {
+					stillExists = true
+					break
+				}
+			}
+			if !stillExists {
+				_ = DeleteKey(ctx, "hooks", oldTrigger.ID)
+			}
+		}
 	}
 
 	workflow = &newWorkflow
@@ -10844,6 +12213,8 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	_ = SetWorkflowRevision(ctx, *workflow)
+
 	/*
 		if debug {
 			allWorkflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
@@ -10869,6 +12240,10 @@ curl https://shuffler.io/api/v1/chat/completions -sN -H "Authorization: Bearer "
 }'
 */
 func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
+	if os.Getenv("STANDALONE") == "true" {
+		standalone = true
+		project.CacheDb = true
+	}
 
 	currentModel := model
 	if ctx == nil {
@@ -10883,7 +12258,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	cnt := 0
 	maxCharacters := 100000
-
+	
 	apiKey := os.Getenv("AI_API_KEY")
 	aiRequestUrl := os.Getenv("AI_API_URL")
 	aiApiVersion := os.Getenv("AI_API_VERSION")
@@ -10905,44 +12280,138 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	defaultCreds := false
-	if project.Environment == "cloud" {
-		foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
-		if len(foundApikey) > 0 {
-			defaultCreds = true
-			apiKey = foundApikey
-		}
+	if len(apiKey) > 0 {
+		defaultCreds = true
+	}
 
-		if len(foundRequestUrl) > 0 {
-			aiRequestUrl = foundRequestUrl
-		}
+	isStandalone := standalone || os.Getenv("STANDALONE") == "true" || os.Getenv("SHUFFLE_STANDALONE") == "true" || strings.HasPrefix(info.Caller, "orborus")
 
-		if len(currentModel) == 0 || !strings.HasPrefix(currentModel, "google/") {
-			currentModel = foundModel
+	hasExplicitCallInfo := false
+	if isStandalone && len(info.Url) > 0 && len(info.ApiKey) > 0 {
+		hasExplicitCallInfo = true
+		apiKey = info.ApiKey
+		aiRequestUrl = info.Url
+		if len(info.Model) > 0 {
+			currentModel = info.Model
 		}
 	}
 
-	//if debug { 
-	//	log.Printf("[DEBUG] ORGID (1): %#v, apikey: %#v, requestUrl: %#v, model: %#v", info.OrgID, apiKey, aiRequestUrl, currentModel)
-	//}
+	if !hasExplicitCallInfo {
+		if project.Environment == "cloud" {
+			foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
+			if len(foundApikey) > 0 {
+				defaultCreds = true
+				apiKey = foundApikey
+			}
 
-	if len(info.OrgID) > 0 {
-		// Look up custom auth to use instead
-		foundApikey, foundrequestUrl, foundModel := GetOrgAiCredentials(ctx, info)
-		if len(foundApikey) > 0 {
-			defaultCreds = false
-			apiKey = foundApikey
+			if len(foundRequestUrl) > 0 {
+				aiRequestUrl = foundRequestUrl
+			}
+
+			if len(currentModel) == 0 || !strings.HasPrefix(currentModel, "google/") {
+				currentModel = foundModel
+			}
 		}
 
-		if len(foundrequestUrl) > 0 {
-			aiRequestUrl = foundrequestUrl
-		}
+		//if debug {
+		//	log.Printf("[DEBUG] ORGID (1): %#v, apikey: %#v, requestUrl: %#v, model: %#v", info.OrgID, apiKey, aiRequestUrl, currentModel)
+		//}
 
-		if len(foundModel) > 0 {
-			currentModel = foundModel
+		if standalone || os.Getenv("STANDALONE") == "true" {
+			customKey := os.Getenv("AI_API_KEY")
+			customUrl := os.Getenv("AI_API_URL")
+
+			token := os.Getenv("SHUFFLE_SESSION_TOKEN")
+			if len(token) == 0 {
+				token = os.Getenv("SHUFFLE_AUTHORIZATION")
+			}
+
+			if len(customKey) > 0 && len(customUrl) > 0 {
+				// Either both or none: both custom key and URL provided together
+				apiKey = customKey
+				aiRequestUrl = customUrl
+				if strings.Contains(customUrl, "shuffler.io") || strings.Contains(customUrl, "shuffle") {
+					token = customKey
+					_ = os.Setenv("SHUFFLE_SESSION_TOKEN", customKey)
+					_ = os.Setenv("SHUFFLE_AUTHORIZATION", customKey)
+					cleanBase := strings.TrimRight(strings.TrimSuffix(customUrl, "/api/v1"), "/")
+					_ = os.Setenv("SHUFFLE_BASE_URL", cleanBase)
+					_ = os.Setenv("BASE_URL", cleanBase)
+				}
+			} else if len(customKey) > 0 {
+				apiKey = customKey
+				if len(customUrl) > 0 {
+					aiRequestUrl = customUrl
+				} else if strings.HasPrefix(strings.TrimSpace(customKey), "shfl_") {
+					if project.Environment == "cloud" {
+						foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
+						if len(foundApikey) > 0 {
+							defaultCreds = true
+							apiKey = foundApikey
+							aiRequestUrl = foundRequestUrl
+							if len(foundModel) > 0 {
+								currentModel = foundModel
+							}
+						}
+					} else {
+						baseUrl := os.Getenv("SHUFFLE_BASE_URL")
+						if len(baseUrl) == 0 {
+							baseUrl = getBackendBaseUrl()
+						}
+						if len(baseUrl) == 0 || strings.Contains(strings.ToLower(baseUrl), "shuffle.security") {
+							baseUrl = "https://uk.shuffler.io"
+						}
+						aiRequestUrl = fmt.Sprintf("%s/api/v1", strings.TrimSuffix(baseUrl, "/"))
+					}
+				} else {
+					retUrl, _ := ValidateURLandModel("", currentModel)
+					if len(retUrl) > 0 {
+						aiRequestUrl = retUrl
+					} else if strings.HasPrefix(strings.ToLower(currentModel), "gemini") {
+						aiRequestUrl = "https://generativelanguage.googleapis.com/v1beta/openai"
+					} else {
+						aiRequestUrl = "https://api.openai.com/v1"
+					}
+				}
+			} else if len(token) > 0 {
+				// Session token with Shuffle backend URL paired together
+				apiKey = token
+
+				baseUrl := os.Getenv("SHUFFLE_BASE_URL")
+				if len(baseUrl) == 0 {
+					baseUrl = getBackendBaseUrl()
+				}
+				if len(baseUrl) == 0 || strings.Contains(strings.ToLower(baseUrl), "shuffle.security") {
+					baseUrl = "https://uk.shuffler.io"
+				}
+				aiRequestUrl = fmt.Sprintf("%s/api/v1", strings.TrimSuffix(baseUrl, "/"))
+			} else {
+				// Neither matched pair is complete: do not allow half-configured credentials
+				apiKey = ""
+				aiRequestUrl = ""
+			}
+		} else if len(info.OrgID) > 0 {
+			// Look up custom auth to use instead
+			foundApikey, foundrequestUrl, foundModel := GetOrgAiCredentials(ctx, info)
+			if len(foundApikey) > 0 {
+				defaultCreds = false
+				apiKey = foundApikey
+
+				// Overwriting internal LLM URL is strictly permitted ONLY when paired with a custom API key
+				if len(foundrequestUrl) > 0 {
+					aiRequestUrl = foundrequestUrl
+				}
+			} else if len(foundrequestUrl) > 0 {
+				log.Printf("[WARNING] Org %s attempted to override AI URL without providing an API key. Ignoring custom URL to prevent credential leakage.", info.OrgID)
+			}
+
+			if len(foundModel) > 0 {
+				currentModel = foundModel
+			}
 		}
 	}
 
-	//if debug { 
+	//if debug {
 	//	log.Printf("[DEBUG] ORGID (2): %#v, apikey: %#v, requestUrl: %#v, model: %#v", info.OrgID, apiKey, aiRequestUrl, currentModel)
 	//}
 
@@ -10985,13 +12454,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		ReasoningEffort: "low",
 	}
 
-	if len(os.Getenv("SHUFFLE_REASONING_EFFORT")) > 0 {
-		//availableOptions := []string{"", "minimal", "low", "medium", "high"}
-		//if ArrayContains(availableOptions, strings.ToLower(os.Getenv("SHUFFLE_REASONING_EFFORT"))) {
-		chatCompletion.ReasoningEffort = strings.ToLower(os.Getenv("SHUFFLE_REASONING_EFFORT"))
-		//} else {
-		//	log.Printf("[WARNING] Invalid REASONING_EFFORT option '%s'. Available options: %v. Defaulting to 'minimal' for non-configured requests.", os.Getenv("SHUFFLE_REASONING_EFFORT"), availableOptions)
-		//}
+	if isStandalone && len(info.ReasoningEffort) > 0 {
+		chatCompletion.ReasoningEffort = strings.ToLower(strings.TrimSpace(info.ReasoningEffort))
+	} else if len(os.Getenv("SHUFFLE_REASONING_EFFORT")) > 0 {
+		chatCompletion.ReasoningEffort = strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_REASONING_EFFORT")))
 	}
 
 	// FIXME: Too specific. Should be self-corrective.. :)
@@ -11047,6 +12513,11 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 	}
 
+	normalizedReasoning := strings.ToLower(strings.TrimSpace(chatCompletion.ReasoningEffort))
+	if normalizedReasoning == "minimal" || normalizedReasoning == "off" || normalizedReasoning == "none" {
+		chatCompletion.ReasoningEffort = ""
+	}
+
 	// Gotta cut it back down, as it can get into 50+ etc
 	if len(chatCompletion.Messages) > 10 {
 		// Ensures we keep the system messages
@@ -11070,14 +12541,45 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	maxRetries := 3
 	contentOutput := ""
 
-	// Overwrites it all
-	retUrl, retModel := ValidateURLandModel(aiRequestUrl, currentModel)
-	if len(retUrl) > 0 {
-		aiRequestUrl = retUrl
+	// Overwrites it all if not explicitly specified by caller
+	if !hasExplicitCallInfo {
+		retUrl, retModel := ValidateURLandModel(aiRequestUrl, currentModel)
+		if len(retUrl) > 0 {
+			aiRequestUrl = retUrl
+		}
+
+		if len(retModel) > 0 {
+			currentModel = retModel
+		}
 	}
 
-	if len(retModel) > 0 {
-		currentModel = retModel
+	isShuffleModel := strings.EqualFold(strings.TrimSpace(currentModel), "shuffle-ai") || strings.EqualFold(strings.TrimSpace(currentModel), "shuffle-cloud")
+	if isShuffleModel {
+		currentModel = "gemini-3.8-flash"
+	}
+
+	// Hard guard: never send a Shuffle token (shfl_...) or Shuffle AI model to OpenAI's endpoint
+	if (strings.HasPrefix(strings.TrimSpace(apiKey), "shfl_") || isShuffleModel) && (len(aiRequestUrl) == 0 || strings.Contains(strings.ToLower(aiRequestUrl), "api.openai.com")) {
+		if project.Environment == "cloud" {
+			foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
+			if len(foundApikey) > 0 {
+				defaultCreds = true
+				apiKey = foundApikey
+				aiRequestUrl = foundRequestUrl
+				if len(foundModel) > 0 {
+					currentModel = foundModel
+				}
+			}
+		} else {
+			baseUrl := os.Getenv("SHUFFLE_BASE_URL")
+			if len(baseUrl) == 0 {
+				baseUrl = getBackendBaseUrl()
+			}
+			if len(baseUrl) == 0 || strings.Contains(strings.ToLower(baseUrl), "shuffle.security") {
+				baseUrl = "https://uk.shuffler.io"
+			}
+			aiRequestUrl = fmt.Sprintf("%s/api/v1", strings.TrimSuffix(baseUrl, "/"))
+		}
 	}
 
 	if len(apiKey) == 0 {
@@ -11104,6 +12606,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	// Fixes some model & url errors
+	config.EmptyMessagesLimit = 100000
 	openaiClient := openai.NewClientWithConfig(config)
 
 	sysMsg := ""
@@ -11124,12 +12627,12 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	estOtherTokens := int(math.Ceil(float64(len(otherMsg)) / 3.5))
 	totalEst := estSysTokens + estUserTokens + estOtherTokens
 
-	reasoning := "medium"
+	reasoning := "off"
 	if len(chatCompletion.ReasoningEffort) > 0 {
 		reasoning = chatCompletion.ReasoningEffort
 	}
 
-	log.Printf("[INFO] AI_QUERY: caller=%s org_id=%s reasoning=%s system_tokens=%d user_tokens=%d other_tokens=%d total_tokens=%d model=%s url=%s", callerName, org, reasoning, estSysTokens, estUserTokens, estOtherTokens, totalEst, currentModel, aiRequestUrl)
+	log.Printf("[INFO][%s] AI_QUERY: caller=%s org_id=%s reasoning=%s system_tokens=%d user_tokens=%d other_tokens=%d total_tokens=%d model=%s url=%s", info.ExecutionId, callerName, org, reasoning, estSysTokens, estUserTokens, estOtherTokens, totalEst, currentModel, aiRequestUrl)
 
 	originalStreamEnabled := chatCompletion.Stream
 
@@ -11160,11 +12663,24 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	// In case of non-streaming Resp input
 	totalTokens := 0
+	inputTokens := 0
+	outputTokens := 0
+	cachedTokens := 0
 	var lastError error
 	choicesMap := make(map[int]*openai.ChatCompletionChoice)
 	var fullResp openai.ChatCompletionResponse
+	var reasoningOutput string
 	for {
 		if cnt >= maxRetries {
+			if lastError != nil && strings.Contains(lastError.Error(), "429") {
+				if project.Environment != "cloud" || defaultCreds {
+					rateLimitKey := "openai_rate_limit_log"
+					if _, cacheErr := GetCache(ctx, rateLimitKey); cacheErr != nil {
+						log.Printf("[ERROR][%s] AI_OPENAI_RATE_LIMIT: org=%s error_message=%s", info.ExecutionId, info.OrgID, lastError.Error())
+						_ = SetCache(ctx, rateLimitKey, []byte("1"), 30)
+					}
+				}
+			}
 
 			if info.Resp != nil && lastError != nil {
 
@@ -11173,6 +12689,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 					Reason:  lastError.Error(),
 				}
 
+				if !originalStreamEnabled {
+					info.Resp.Header().Set("Content-Type", "application/json")
+				}
 				info.Resp.WriteHeader(400)
 				marshalledResult, err := json.Marshal(result)
 				if err != nil {
@@ -11182,7 +12701,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				}
 
 				flusher.Flush()
-				return "", nil
+				return "", lastError
 			}
 
 			log.Printf("[ERROR] Failed to in runActionAI after 5 tries for openapi info: %s", lastError)
@@ -11226,20 +12745,25 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				return "", errors.New(fmt.Sprintf("Request from org %s with model '%s' exceeds the maximum number of tokens. %s", org, currentModel, err))
 			}
 
-			lastError = err
+			// Some AI Providers might return multi-line error bodies. Flatten them so the whole error stays in ONE log entry instead of being split per line.
+			lastError = errors.New(strings.Join(strings.Fields(err.Error()), " "))
 
-			log.Printf("[ERROR] Failed to create AI chat completion for URL '%s'. Retrying in 1 second (4): %s", aiRequestUrl, err)
-			time.Sleep(sleepTimer * time.Second)
+			log.Printf("[ERROR][%s] Failed to create AI chat completion for URL '%s'. Attempt %d/%d: %s", info.ExecutionId, aiRequestUrl, cnt, maxRetries, lastError)
+			if cnt < maxRetries {
+				// Back off a bit more on each attempt (5s, 10s) to ride out 429 capacity errors
+				time.Sleep(sleepTimer * time.Duration(cnt) * time.Second)
+			}
 			continue
 		}
 
 		// 2. Iterate over the stream
 		iterations := 0
+		var streamErr error
 		for {
 			iterations += 1
 
-			if iterations > 1000 {
-				log.Printf("[ERROR] Fatal - Too many iterations agent LLM stream. Breaking out of loop.")
+			if iterations > 10000 {
+				log.Printf("[ERROR][%s] Fatal - Too many iterations agent LLM stream (%d). Breaking out of loop.", info.ExecutionId, iterations)
 				if info.Resp != nil && originalStreamEnabled {
 					info.Resp.Write([]byte("data: [ERROR] Fatal - Too many iterations agent LLM stream. Breaking out of loop.\n\n"))
 					flusher.Flush()
@@ -11251,7 +12775,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 			// 3. Check for End of File (EOF) to know when the stream is finished
 			if errors.Is(err, io.EOF) {
-				//log.Printf("[INFO] Stream finished after %d iterations", iterations)
+				// for debugging too
+				log.Printf("[INFO][%s] AI_QUERY_STREAM_DONE: chunks=%d content_len=%d total_tokens=%d", info.ExecutionId, iterations, len(contentOutput), totalTokens)
 				if info.Resp != nil && originalStreamEnabled {
 
 					info.Resp.Write([]byte("data: [DONE]\n\n"))
@@ -11267,7 +12792,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 					flusher.Flush()
 				}
 
-				log.Printf("[ERROR] Stream problem: %#v", err)
+				log.Printf("[ERROR][%s] Stream problem: %#v", info.ExecutionId, err)
+				// Track stream error so we can retry instead of returning partial output
+				streamErr = err
 				break
 			}
 
@@ -11295,6 +12822,18 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 				if response.Usage.TotalTokens > 0 {
 					totalTokens += response.Usage.TotalTokens
+				}
+
+				if response.Usage.PromptTokens > 0 {
+					inputTokens += response.Usage.PromptTokens
+				}
+
+				if response.Usage.CompletionTokens > 0 {
+					outputTokens += response.Usage.CompletionTokens
+				}
+
+				if response.Usage.PromptTokensDetails != nil && response.Usage.PromptTokensDetails.CachedTokens > 0 {
+					cachedTokens += response.Usage.PromptTokensDetails.CachedTokens
 				}
 			}
 
@@ -11345,8 +12884,39 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 					contentOutput += chunk
 				}
-			} else {
-				contentOutput += string(rawResp)
+
+				// Capture reasoning tokens from stream delta if present
+				var rawDelta struct {
+					Choices []struct {
+						Delta struct {
+							ReasoningContent string `json:"reasoning_content"`
+							Reasoning        string `json:"reasoning"`
+						} `json:"delta"`
+					} `json:"choices"`
+				}
+				if json.Unmarshal(rawResp, &rawDelta) == nil && len(rawDelta.Choices) > 0 {
+					rChunk := rawDelta.Choices[0].Delta.ReasoningContent
+					if rChunk == "" {
+						rChunk = rawDelta.Choices[0].Delta.Reasoning
+					}
+					if rChunk != "" {
+						reasoningOutput += rChunk
+					}
+				}
+			} else if err != nil {
+				// If stream unmarshaling failed, check if rawResp was actually a full non-streaming ChatCompletionResponse
+				var nonStreamResp openai.ChatCompletionResponse
+				if jsonErr := json.Unmarshal(rawResp, &nonStreamResp); jsonErr == nil && len(nonStreamResp.Choices) > 0 {
+					fullResp = nonStreamResp
+					contentOutput = nonStreamResp.Choices[0].Message.Content
+					break
+				}
+
+				// Only capture if non-empty, plain text (not JSON), and content is currently empty
+				trimmed := strings.TrimSpace(string(rawResp))
+				if len(trimmed) > 0 && !strings.HasPrefix(trimmed, "{") && len(contentOutput) == 0 {
+					contentOutput = trimmed
+				}
 			}
 
 			if info.Resp != nil && originalStreamEnabled {
@@ -11357,16 +12927,93 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			}
 		}
 
+		stream.Close()
+
+		if reasoningOutput != "" && !strings.Contains(contentOutput, "<thought>") {
+			contentOutput = "<thought>\n" + reasoningOutput + "\n</thought>\n\n" + contentOutput
+		}
+
+		// If the stream was interrupted (not a clean EOF), retry instead of returning partial output
+		if streamErr != nil && len(contentOutput) == 0 {
+			cnt += 1
+			lastError = fmt.Errorf("stream interrupted prematurely: %w", streamErr)
+			log.Printf("[WARNING][%s] AI_QUERY: LLM stream disconnected mid-response (attempt %d/%d), retrying: %v", info.ExecutionId, cnt, maxRetries, streamErr)
+
+			// Reset state for the retry
+			contentOutput = ""
+			reasoningOutput = ""
+			choicesMap = make(map[int]*openai.ChatCompletionChoice)
+			fullResp = openai.ChatCompletionResponse{}
+			time.Sleep(sleepTimer * time.Second)
+			continue
+		}
+
+		// Detect false EOF: stream ended "cleanly" but final chunk (finish_reason + usage) never arrived.
+		finishReasonAfterStream := ""
+		if firstChoice, exists := choicesMap[0]; exists && firstChoice != nil {
+			finishReasonAfterStream = strings.ToLower(string(firstChoice.FinishReason))
+		} else if len(fullResp.Choices) > 0 {
+			finishReasonAfterStream = strings.ToLower(string(fullResp.Choices[0].FinishReason))
+		}
+
+		if finishReasonAfterStream == "" && totalTokens == 0 && len(contentOutput) > 0 {
+			cnt += 1
+			lastError = fmt.Errorf("stream ended without finish_reason or usage tokens (false EOF, likely Vertex AI mid-stream drop)")
+			reasoningOutput = ""
+			log.Printf("[WARNING][%s] AI_QUERY: Stream false EOF detected (finish_reason empty, total_tokens=0, content_len=%d). Vertex AI likely dropped mid-stream. Retrying (attempt %d/%d)", info.ExecutionId, len(contentOutput), cnt, maxRetries)
+			contentOutput = ""
+			choicesMap = make(map[int]*openai.ChatCompletionChoice)
+			fullResp = openai.ChatCompletionResponse{}
+			totalTokens = 0
+
+
+			time.Sleep(sleepTimer * time.Second)
+			continue
+		}
+
 		// 4. Assemble the ordered choices slice
-		fullResp.Choices = make([]openai.ChatCompletionChoice, len(choicesMap))
-		for idx, choice := range choicesMap {
-			fullResp.Choices[idx] = *choice
+		if len(choicesMap) > 0 {
+			fullResp.Choices = make([]openai.ChatCompletionChoice, len(choicesMap))
+			for idx, choice := range choicesMap {
+				if idx >= 0 && idx < len(fullResp.Choices) {
+					if choice != nil {
+						fullResp.Choices[idx] = *choice
+					}
+				}
+			}
+		}
+
+		finishReason := ""
+		if len(fullResp.Choices) > 0 {
+			// Normalize finish_reason: Gemini uses "MAX_TOKENS"/"SAFETY"/"RECITATION", OpenAI uses "length"/"content_filter"
+			finishReason = strings.ToLower(string(fullResp.Choices[0].FinishReason))
+			log.Printf("[INFO][%s] AI_QUERY: finish_reason=%q model=%s received_len=%d", info.ExecutionId, finishReason, currentModel, len(contentOutput))
+
+			if finishReason == "length" || finishReason == "max_tokens" {
+				log.Printf("[ERROR][%s] AI_QUERY: LLM output was truncated due to token limit (finish_reason=%s, model=%s, max_completion_tokens=%d, received_len=%d)", info.ExecutionId, finishReason, currentModel, chatCompletion.MaxCompletionTokens, len(contentOutput))
+				return "", fmt.Errorf("LLM output was truncated: max completion tokens reached (finish_reason=%s)", finishReason)
+			}
+
+			if finishReason == "content_filter" || finishReason == "safety" || finishReason == "recitation" {
+				log.Printf("[ERROR][%s] AI_QUERY: LLM output was blocked by safety/filter (finish_reason=%s, model=%s)", info.ExecutionId, finishReason, currentModel)
+				return "", fmt.Errorf("LLM output was blocked by safety filter (finish_reason=%s)", finishReason)
+			}
+		}
+
+		// Detect false EOF: stream ended "cleanly" but final chunk (finish_reason + usage) never arrived.
+		if finishReason == "" && totalTokens == 0 && len(contentOutput) > 0 {
+			cnt += 1
+			lastError = fmt.Errorf("stream ended without finish_reason or usage tokens (false EOF, likely mid-stream drop)")
+			log.Printf("[WARNING][%s] AI_QUERY: Stream false EOF detected (finish_reason empty, total_tokens=0, content_len=%d). Vertex AI likely dropped mid-stream. Retrying (attempt %d/%d)", info.ExecutionId, len(contentOutput), cnt, maxRetries)
+			time.Sleep(sleepTimer * time.Second)
+			continue
 		}
 
 		break
 	}
 
 	if info.Resp != nil && !originalStreamEnabled {
+		info.Resp.Header().Set("Content-Type", "application/json")
 		// Marshal and send fullResp
 		marshalledData, err := json.Marshal(fullResp)
 		if err != nil {
@@ -11379,6 +13026,11 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	if totalTokens > 0 && len(info.OrgID) > 0 {
 		// Count LLM tokens no matter what
+
+		if project.Environment == "onprem" && strings.Contains(aiRequestUrl, "shuffler.io") {
+			defaultCreds = true
+		}
+
 		if defaultCreds {
 			IncrementCache(ctx, info.OrgID, "llm_tokens", totalTokens)
 		}
@@ -11386,6 +13038,17 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		// Count agent tokens IF it's agent performing the task
 		if info.Caller == "aiAgentRunner" {
 			IncrementCache(ctx, info.OrgID, "agent_tokens", totalTokens)
+			if inputTokens > 0 {
+				IncrementCache(ctx, info.OrgID, "agent_input_tokens", inputTokens)
+			}
+
+			if outputTokens > 0 {
+				IncrementCache(ctx, info.OrgID, "agent_output_tokens", outputTokens)
+			}
+
+			if cachedTokens > 0 {
+				IncrementCache(ctx, info.OrgID, "agent_cached_tokens", cachedTokens)
+			}
 		}
 	}
 
@@ -11398,16 +13061,23 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		marshalledData, err := json.Marshal(chatCompletion)
 		if err != nil {
 			log.Printf("[ERROR] Failed to marshal chat completion: %s", err)
-			return contentOutput, err
-		}
-
-		err = SetCache(ctx, cachedChat, marshalledData, 30)
-		if err != nil {
-			log.Printf("[ERROR] Failed to set cache for chat completion: %s", err)
-			return contentOutput, err
+		} else {
+			err = SetCache(ctx, cachedChat, marshalledData, 30)
+			if err != nil {
+				log.Printf("[ERROR] Failed to set cache for chat completion: %s", err)
+			}
 		}
 	}
 
+	// Diagnostic: log output so we can detect truncation in prod.
+		isTruncated := len(contentOutput) > 0 && !strings.HasSuffix(strings.TrimSpace(contentOutput), "]")
+		preview := contentOutput
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		
+		log.Printf("[INFO][%s] AI_QUERY_RESULT: model=%s output_len=%d truncated_json=%v preview=%q", info.ExecutionId, currentModel, len(contentOutput), isTruncated, preview)
+	
 	return contentOutput, nil
 }
 
@@ -15316,6 +16986,104 @@ func balanceJSONLikeString(s string) string {
 }
 */
 
+func isOnpremAppExecutionLimitReached(ctx context.Context, orgId string) (bool, string) {
+	if len(orgId) == 0 {
+		return false, ""
+	}
+
+	parentOrg, err := GetOrg(ctx, orgId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org %s for onprem app execution limit check: %s", orgId, err)
+		return false, ""
+	}
+
+	if len(parentOrg.CreatorOrg) > 0 {
+		if creatorOrg, creatorErr := GetOrg(ctx, parentOrg.CreatorOrg); creatorErr == nil {
+			parentOrg = creatorOrg
+		}
+	}
+
+	onpremLimit := parentOrg.SyncFeatures.OnpremAppExecutions.Limit
+	annualGroupingActive := parentOrg.SyncFeatures.AnnualAppRunsGrouping.Active
+	annualLimit := parentOrg.SyncFeatures.OnpremAppExecutions.Limit * 12
+
+	if onpremLimit < 25000 {
+		onpremLimit = 25000
+	}
+
+	orgStats, err := GetOrgStatistics(ctx, parentOrg.Id)
+	if err != nil || orgStats == nil {
+		log.Printf("[WARNING] Failed getting org statistics for org %s for onprem app execution limit check: %s", parentOrg.Id, err)
+		return false, ""
+	}
+
+	orgStats = GetCorrectedStats(orgStats)
+
+	now := time.Now()
+
+	if annualGroupingActive {
+		if annualLimit > 0 {
+			twelveMonthsAgo := now.AddDate(-1, 0, 0)
+
+			annualAppRuns := int64(0)
+			for _, stat := range orgStats.OnpremStats {
+				if stat.Date.After(twelveMonthsAgo) {
+					annualAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+				}
+			}
+
+			if annualAppRuns > annualLimit {
+				return true, fmt.Sprintf("Annual app execution limit reached (%d/%d) for the last 12 months. Upgrade your plan or contact support@shuffler.io to increase your limit.", annualAppRuns, annualLimit)
+			}
+		}
+	} else if onpremLimit > 0 {
+		monthlyAppRuns := int64(0)
+		for _, stat := range orgStats.OnpremStats {
+			if stat.Date.Month() == now.Month() && stat.Date.Year() == now.Year() {
+				monthlyAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+			}
+		}
+
+		if monthlyAppRuns > onpremLimit {
+			return true, fmt.Sprintf("On-premise app execution limit reached (%d/%d) for this month. Upgrade your plan or contact support@shuffler.io to increase your limit.", monthlyAppRuns, onpremLimit)
+		}
+	}
+
+	return false, ""
+}
+
+// trackingResponseWriter wraps http.ResponseWriter to track if headers or body bytes have been written,
+// preventing duplicate header or body writes (such as duplicate JSON error responses).
+type trackingResponseWriter struct {
+	http.ResponseWriter
+	wroteHeader  bool
+	statusCode   int
+	bytesWritten int
+}
+
+func (w *trackingResponseWriter) WriteHeader(statusCode int) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		w.statusCode = statusCode
+		w.ResponseWriter.WriteHeader(statusCode)
+	}
+}
+
+func (w *trackingResponseWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	n, err := w.ResponseWriter.Write(b)
+	w.bytesWritten += n
+	return n, err
+}
+
+func (w *trackingResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // Wrapper for RunAiQuery() using Shuffle Credentials
 func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -15324,6 +17092,15 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
+	err := ValidateRequestOverload(resp, request, 10)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s in AI query forwarding", GetRequestIp(request))
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(`{"success": false, "reason": "Too many requests"}`))
+		return
+	}
+
+	isOnpremSyncRequest := false
 	user, usererr := HandleApiAuthentication(resp, request)
 	if usererr != nil || user.Id == "" || user.ActiveOrg.Id == "" {
 		syncKey, err := HandleCloudSyncAuthentication(resp, request)
@@ -15333,10 +17110,20 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		isOnpremSyncRequest = true
 		user.ActiveOrg.Id = syncKey.OrgId
 		user.Username = ""
 		user.Id = ""
 		user.Role = ""
+	}
+
+	if isOnpremSyncRequest {
+		if blocked, reason := isOnpremAppExecutionLimitReached(ctx, user.ActiveOrg.Id); blocked {
+			log.Printf("[WARNING] Rejecting Shuffle Cloud AI request for org %s: %s", user.ActiveOrg.Id, reason)
+			resp.WriteHeader(429)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": %q}`, reason)))
+			return
+		}
 	}
 
 	if user.Role == "org-reader" {
@@ -15363,10 +17150,11 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	wrappedResp := &trackingResponseWriter{ResponseWriter: resp}
 	callInfo := AiCallInfo{
 		Caller: "RequestForwarding",
 		OrgID:  user.ActiveOrg.Id,
-		Resp:   resp,
+		Resp:   wrappedResp,
 	}
 
 	// Look for the "authentication_id" query and add to AiCallInfo
@@ -15378,8 +17166,11 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	contentOutput, err := RunAiQuery(ctx, callInfo, "", "", chatCompletion)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in chat completion forwarding: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to run AI query. This is most likely due to an invalid API key or model name. Please check your AI credentials on the https://shuffler.io/agents page."}`))
+		if !wrappedResp.wroteHeader && wrappedResp.bytesWritten == 0 {
+			wrappedResp.Header().Set("Content-Type", "application/json")
+			wrappedResp.WriteHeader(500)
+			wrappedResp.Write([]byte(`{"success": false, "reason": "Failed to run AI query. This is most likely due to an invalid API key or model name. Please check your AI credentials on the https://shuffler.io/agents page."}`))
+		}
 		return
 	}
 
@@ -15453,13 +17244,19 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 			continue
 		}
 
+		curApiKey := ""
+		curUrl := ""
+		curModel := ""
+
 		for _, field := range auth.Fields {
 			// Check if the auth has a valid API key
 			if field.Key == "apikey" {
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
 				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 				if err == nil {
-					apiKey = string(decrypted)
+					curApiKey = string(decrypted)
+				} else {
+					curApiKey = field.Value
 				}
 			}
 
@@ -15467,7 +17264,9 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
 				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 				if err == nil {
-					aiRequestUrl = string(decrypted)
+					curUrl = string(decrypted)
+				} else {
+					curUrl = field.Value
 				}
 			}
 
@@ -15475,39 +17274,82 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
 				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 				if err == nil {
-					foundModel = string(decrypted)
+					curModel = string(decrypted)
+				} else {
+					curModel = field.Value
 				}
 			}
 		}
 
+		// Never allow a Shuffle token (shfl_...) to be used as an OpenAI API key
+		if strings.HasPrefix(strings.TrimSpace(curApiKey), "shfl_") && (len(curUrl) == 0 || strings.Contains(strings.ToLower(curUrl), "api.openai.com")) {
+			log.Printf("[WARNING] Ignoring OpenAI app auth for org %s because api_key is a Shuffle token (shfl_...)", orgId)
+			continue
+		}
+
+		// Custom URL must only be used when paired with an API key
+		if len(curUrl) > 0 && len(curApiKey) == 0 {
+			curUrl = ""
+		}
+
+		if len(curApiKey) > 0 {
+			apiKey = curApiKey
+			aiRequestUrl = curUrl
+			foundModel = curModel
+		}
+
 		// openai auth.Active is the primary one at all times
+		// you won't ever get here if it's not active = true
 		if auth.Validation.Valid && len(apiKey) > 0 && len(aiRequestUrl) > 0 {
 			break
 		}
 	}
 
-	// Handles failover IF we can't find other auth
-	if project.Environment != "cloud" && (apiKey == "" || aiRequestUrl == "") {
-		log.Printf("[INFO] No custom LLM-credentials found for org %s. Falling back to default shuffler.io AI endpoint IF cloud sync is enabled.", orgId)
+	// Handles failover IF we can't find other auth.
+	// Only applies to on-prem deployments - cloud never needs to fail over to itself.
+	if project.Environment == "onprem" && (apiKey == "" || aiRequestUrl == "") {
 
-		// type SyncConfig struct {
-		baseUrl := "https://shuffler.io"
+		if debug {
+			log.Printf("[DEBUG] No custom LLM-credentials found for org %s. Falling back to Cloud Sync AI endpoint IF cloud sync is enabled.", orgId)
+		}
+
 		org, err := GetOrg(ctx, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed to get org by ID %s: %s", orgId, err)
 			return apiKey, aiRequestUrl, foundModel
 		}
+		if len(org.CreatorOrg) > 0 {
+			org, err = GetOrg(ctx, org.CreatorOrg)
+			if err == nil && len(org.SyncConfig.Apikey) > 0 {
+				apiKey = org.SyncConfig.Apikey
+			}
+		}
 
 		// Checks if cloud sync is set up
-		if len(org.SyncConfig.Apikey) > 0 {
+		if len(org.SyncConfig.Apikey) > 0 && org.SyncConfig.AiCloudSync {
 			apiKey = org.SyncConfig.Apikey
 		} else {
 			return "", "", ""
 		}
 
-		// In case it's stored from cloudsync
-		if strings.Contains(org.SyncConfig.URL, "shuffler.io") && strings.HasPrefix(org.SyncConfig.URL, "https://") {
-			baseUrl = org.SyncConfig.URL
+		baseUrl := "https://uk.shuffler.io"
+		if len(org.SyncConfig.URL) > 0 && (strings.HasPrefix(org.SyncConfig.URL, "https://") || strings.HasPrefix(org.SyncConfig.URL, "http://")) {
+			baseUrl = strings.TrimSuffix(org.SyncConfig.URL, "/")
+		}
+
+		regionUrlCacheKey := fmt.Sprintf("org_cloudsync_region_url_%s", orgId)
+		if cached, cacheErr := GetCache(ctx, regionUrlCacheKey); cacheErr == nil {
+			cachedUrl := ""
+			switch typed := cached.(type) {
+			case []byte:
+				cachedUrl = string(typed)
+			case string:
+				cachedUrl = typed
+			}
+
+			if len(cachedUrl) > 0 && (strings.HasPrefix(cachedUrl, "https://") || strings.HasPrefix(cachedUrl, "http://")) {
+				baseUrl = strings.TrimSuffix(cachedUrl, "/")
+			}
 		}
 
 		aiRequestUrl = fmt.Sprintf("%s/api/v1", baseUrl)
@@ -15518,20 +17360,26 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 		return "", "", ""
 	}
 
+	// Defense-in-depth: custom URL must never be returned without an accompanying API key
+	if len(aiRequestUrl) > 0 && len(apiKey) == 0 {
+		aiRequestUrl = ""
+	}
+
 	return apiKey, aiRequestUrl, foundModel
 }
 
 // Simple validator for whether things are correct or not
 // Such as: default endpoint for openai etc
 func ValidateURLandModel(aiRequestUrl string, currentModel string) (string, string) {
-	if !strings.Contains(aiRequestUrl, "googleapis.com") && strings.Contains(currentModel, "gemini") {
+	if !strings.Contains(aiRequestUrl, "googleapis.com") && !strings.Contains(aiRequestUrl, "shuffler.io") && strings.Contains(currentModel, "gemini") {
 		currentModel = ""
 	}
 
 	// Just handling misconfigs of the most common ones
 	if strings.Contains(aiRequestUrl, "shuffler.io") {
-		//aiRequestUrl = "https://shuffler.io/api/v1"
-		currentModel = ""
+		if !strings.HasSuffix(aiRequestUrl, "/api/v1") {
+			aiRequestUrl = strings.TrimSuffix(aiRequestUrl, "/") + "/api/v1"
+		}
 	} else if strings.Contains(aiRequestUrl, "api.openai.com") {
 		aiRequestUrl = "https://api.openai.com/v1"
 

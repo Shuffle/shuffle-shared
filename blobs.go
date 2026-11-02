@@ -22,8 +22,8 @@ import (
 func IsShuffleApp(app WorkflowApp) bool {
 	parsedAppname := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
 
-	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors", "shuffle_apps", "shuffle_workflows_builder", "shuffle_incidents", "shuffle_vulnerabilities"}
-	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75", "7db43ccd25261967b095cfbd467a75cc", "de4ef2287bd41b9d5563e39989643ee6", "48793430d21468f9e371ace402efcd8e"} 
+	skipAuthAppnames := []string{"openai", "shuffle_openapi", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors", "shuffle_apps", "shuffle_workflows_builder", "shuffle_incidents", "shuffle_vulnerabilities"}
+	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "fc92c1d806df0c96f0c152a7b43b2878", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75", "7db43ccd25261967b095cfbd467a75cc", "de4ef2287bd41b9d5563e39989643ee6", "48793430d21468f9e371ace402efcd8e", "a92601b227d534edb614986f5beedf52", "39bba3e99693fc1d39620e778c477e8c"} 
 
 	isShuffleApp := false
 	if project.Environment == "cloud" && len(app.ID) > 0 {
@@ -175,9 +175,11 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 			Options: []DatastoreAutomationOption{
 				DatastoreAutomationOption{
 					Key:      "action",
-					Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.    Change the incident \"severity\" to info/low/medium/high/critical where relevant. When done, ALWAYS make sure the \"status\" is inProgress or Resolved if it is not already. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.\n\nWhen done sending the previous update, start tackling the tasks one by one. When starting them, self-assign @AIAgent to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.\n\nDo not stop until you are finished with the tasks relevant for you to handle.",
-					Apps: []string{"48793430d21468f9e371ace402efcd8e"},
+					Value:    "Triage, investigate, and respond holistically to this incident.\n\nOPERATING POSTURE:\n- Simple, benign, or routine alerts (false positives, authorized scanners, duplicate noise): Act as an AUTONOMOUS RESOLVER. Verify technical evidence, document findings in activity, set status to \"resolved\", and close cleanly with zero open tasks.\n- Complex alerts and confirmed threats (malware, C2 beaconing, ransomware, lateral movement): Act as an ANALYST COPILOT. Do NOT attempt to close the incident autonomously. Your mission is to prepare the case and accelerate the human analyst by correlating telemetry, generating structured response tasks across categories, recommending containment actions with approval_required: true, and setting status to \"in_progress\" or \"escalated\".\n\nRESPONSE PATHWAYS:\n\n1. AUTO-RESOLVE / CLOSE (Benign, False Positive, Duplicate, or Test ONLY):\n- ONLY if this alert is definitively verified as a false positive, benign administrative activity, authorized test/scan, routine noise, or a duplicate of an existing incident.\n- CRITICAL RULE: NEVER set \"status\" to \"resolved\" if there is an active threat, C2 beaconing, malware, or if ANY open tasks remain. Completing initial triage does NOT resolve the incident.\n- If resolving: Set \"status\" to \"resolved\", add activity entry: {\"ai_handled\": true, \"id\": \"status-{timenow-unix}\", \"type\": \"status\", \"user\": \"@AIAgent\", \"timestamp\": {timenow-unix}, \"content\": \"Resolved: [Specific evidence and rationale explaining why this is benign/FP/duplicate]\"}. Do NOT generate open tasks.\n\n2. ESCALATE: If this is a high/critical severity threat, active compromise, ransomware, credential theft, lateral movement, or high ambiguity requiring human judgment:\n- Update \"severity\" to \"high\" or \"critical\".\n- Set \"status\" to \"escalated\".\n- Add an activity entry: {\"ai_handled\": true, \"id\": \"status-{timenow-unix}\", \"type\": \"status\", \"user\": \"@AIAgent\", \"timestamp\": {timenow-unix}, \"content\": \"Escalated: High-priority threat detected. [Executive threat summary, affected assets/users, and recommended human actions]\"}.\n\n3. CONTAINMENT (BLOCK / ISOLATE / REVOKE):\n- For compromised endpoints: propose or execute host isolation via available EDR tools.\n- For malicious external IPs, domains, or hashes: propose or execute perimeter firewall/DNS blocks.\n- For compromised accounts: propose or execute session revocation or account lock.\n- For disruptive actions, set approval_required: true and request analyst confirmation.\n\n4. FIX SPAMMY DETECTIONS:\n- If this alert is from a noisy or misconfigured detection rule firing repeatedly on benign operations, propose specific rule tuning/exclusions in the activity log or create a task: {\"assignee\": \"AI Agent\", \"title\": \"Tune detection rule: [Rule Name] to exclude [Pattern]\", \"category\": \"triage\", \"action\": \"tune\", \"source\": \"detection_rule\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}.\n\n5. TOOL REQUESTS:\n- Utilize available tools (shuffle-datastore, shuffle_incidents, etc.). If an essential tool (EDR, SIEM, Threat Intel, Firewall) is missing or unauthenticated, explicitly state what tool is required, why, and the specific query/action needed.\n\n6. INVESTIGATION & DOCUMENTATION:\n- If ongoing investigation, containment, or remediation is needed, set \"status\" to \"in_progress\" (or \"escalated\"). NEVER set \"status\" to \"resolved\" while open tasks exist.\n- For triage progress or investigation notes, use type \"comment\", NOT type \"status\": {\"ai_handled\": true, \"id\": \"comment-{timenow-unix}\", \"type\": \"comment\", \"user\": \"@AIAgent\", \"timestamp\": {timenow-unix}, \"content\": \"Triage findings: [Summary of verified facts, indicators, and next steps]\"}.\n- Generate structured tasks in JSON format: {\"tasks\": [{\"assignee\": \"AI Agent\", \"title\": \"Title of task\", \"category\": \"triage/investigation/containment/recovery/communication/documentation\", \"action\": \"isolate/block/revoke/query/tune/document/etc.\", \"source\": \"sentinelone/crowdstrike/okta/splunk/virustotal/manual/etc.\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]}.\n- Document findings, timeline, and MITRE ATT&CK techniques in activity and comments. Leave generated tasks open (completed: false) for the analyst and incident response team to coordinate and track. Do NOT prematurely mark tasks completed or close the incident.\n\nUpdate the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. ONLY send the modified fields in JSON format. Do NOT overwrite unrelated fields.",
+					Apps:     []string{"48793430d21468f9e371ace402efcd8e"},
 					Disabled: false,
+					Template: "incident-handler",
+					Skill:    "incident-response",
 				},
 			},
 			Type:     "singul",
@@ -244,6 +246,14 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 						if !found {
 							automation.Options = append(automation.Options, agentOption)
+							changed = true
+						}
+					}
+
+					for optIdx, curOpt := range automation.Options {
+						if len(curOpt.Template) == 0 && len(curOpt.Skill) == 0 {
+							automation.Options[optIdx].Template = "incident-handler"
+							automation.Options[optIdx].Skill = "incident-response"
 							changed = true
 						}
 					}
@@ -384,95 +394,259 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 			}
 		}
 	} else if actionType == "vulnerability_correlation" {
-		categoryCheck := "shuffle-security_packages"
-		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
+		categoryChecks := []string{"shuffle-security_packages", "shuffle-security_software"}
+		for _, categoryCheck := range categoryChecks {
+			categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
+			if err != nil {
+				if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
+					categoryConfig = &DatastoreCategoryUpdate{
+						OrgId:       user.ActiveOrg.Id,
+						Category:    categoryCheck,
+						Automations: []DatastoreAutomation{},
+						Settings:    DatastoreCategorySettings{},
+					}
+				} else {
+					return err
+				}
+			}
+
+			datastoreCategoryConfigEdited := false
+
+			foundRunWorkflow := DatastoreAutomation{
+				Name:        "Run workflow",
+				Description: "Runs one or more workflows with the updated value as runtime argument",
+				Options: []DatastoreAutomationOption{
+					DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					},
+				},
+				Icon:    "",
+				Enabled: true,
+			}
+
+			automationFound := false
+			if len(categoryConfig.Automations) > 0 {
+				for automationIndex, automation := range categoryConfig.Automations {
+					if strings.ToLower(automation.Name) != "run workflow" {
+						continue
+					}
+
+					automationFound = true
+
+					workflowIdFound := false
+					for optionIndex, option := range automation.Options {
+						if option.Key != "workflow_id" {
+							continue
+						}
+
+						if debug {
+							log.Printf("[DEBUG] VALUE: %#v", option.Value)
+						}
+
+						workflowIdFound = true
+
+						if !strings.Contains(option.Value, workflow.ID) {
+							categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+						}
+
+						break
+					}
+
+					if !workflowIdFound {
+						log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+						automationOption := DatastoreAutomationOption{
+							Key:   "workflow_id",
+							Value: workflow.ID,
+						}
+
+						categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
+					}
+
+					datastoreCategoryConfigEdited = true
+					categoryConfig.Automations[automationIndex].Enabled = true
+					break
+				}
+			}
+
+			if !automationFound {
+				categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
+				datastoreCategoryConfigEdited = true
+			}
+
+			if datastoreCategoryConfigEdited {
+				err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+				if err != nil {
+					log.Printf("[ERROR] Failed to update category config for automation enablement (vuln comparison): %s", err)
+				}
+			}
+		}
+
+		// Auto-enable "Run AI Agent", Enrich, and Security Rules for shuffle-security_vulns
+		vulnCategoryCheck := "shuffle-security_vulns"
+		vulnCategoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, vulnCategoryCheck)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
-				categoryConfig = &DatastoreCategoryUpdate{
+				vulnCategoryConfig = &DatastoreCategoryUpdate{
 					OrgId:       user.ActiveOrg.Id,
-					Category:    categoryCheck,
+					Category:    vulnCategoryCheck,
 					Automations: []DatastoreAutomation{},
 					Settings:    DatastoreCategorySettings{},
 				}
 			} else {
-				return err
+				log.Printf("[ERROR] Failed to get category config for org %s (%s) in category %#v: %s", user.ActiveOrg.Name, user.ActiveOrg.Id, vulnCategoryCheck, err)
 			}
 		}
 
-		datastoreCategoryConfigEdited := false
+		if vulnCategoryConfig != nil {
+			vulnConfigEdited := false
 
-		foundRunWorkflow := DatastoreAutomation{
-			Name:        "Run workflow",
-			Description: "Runs one or more workflows with the updated value as runtime argument",
-			Options: []DatastoreAutomationOption{
-				DatastoreAutomationOption{
-					Key:   "workflow_id",
-					Value: workflow.ID,
+			// 3 year retention
+			if vulnCategoryConfig.Settings.Timeout == 0 {
+				vulnCategoryConfig.Settings.Timeout = 94608000
+				vulnConfigEdited = true
+			}
+
+			vulnAgentAutomation := DatastoreAutomation{
+				Name:        "Run AI Agent",
+				Description: "Runs an AI Agent to process the updated value. Uses built-in ShuffleAI configs. Learn more: https://shuffler.io/docs/AI",
+				Options: []DatastoreAutomationOption{
+					DatastoreAutomationOption{
+						Key:      "action",
+						Value:    "Review, analyze, and remediate this vulnerability. Follow this evaluation process:\n\n1. CLARIFY & DEMYSTIFY:\n- Explain what this CVE/vulnerability actually means in plain, direct language.\n- Identify the exploit mechanism (e.g. remote code execution, SQLi, authentication bypass, DoS, privilege escalation) and attack prerequisites.\n\n2. REAL-WORLD RISK & EXPLOITABILITY:\n- Evaluate exploitability beyond theoretical CVSS: check CISA KEV (known exploited in the wild), EPSS score, and availability of public weaponized PoCs.\n- Assess asset context: determine if the affected software/system is internet-facing or isolated internally.\n- Classify urgency: Immediate Patching, Next Maintenance Window, Scheduled Backlog, or False Positive / Not Applicable.\n\n3. ACTIONABLE REMEDIATION & MITIGATION:\n- Provide exact, copy-pasteable update commands for the package/system (e.g. apt, dnf, apk, npm, pip, docker) to reach a patched version.\n- If patching is immediately disruptive or requires a maintenance window, provide concrete temporary workarounds, configuration tweaks, or compensating controls.\n\n4. VERIFICATION & DOCUMENTATION:\n- Specify how to verify the fix (package query, service status, vulnerability rescan).\n- Update the internal datastore with category 'shuffle-security_vulns' and key. ONLY update modified fields in JSON format.",
+						Apps:     []string{"shuffle_vulnerabilities", "shuffle_software_and_packages", "b82668d868f6dc7ac1dc14caa92c674b"},
+						Disabled: false,
+						Template: "vulnerability",
+						Skill:    "vulnerability",
+					},
 				},
-			},
-			Icon:    "",
-			Enabled: true,
-		}
+				Type:     "singul",
+				Beta:     true,
+				Disabled: false,
+				Enabled:  true,
+			}
 
-		automationFound := false
-		if len(categoryConfig.Automations) > 0 {
-			for automationIndex, automation := range categoryConfig.Automations {
-				if strings.ToLower(automation.Name) != "run workflow" {
-					continue
-				}
+			vulnEnrichAutomation := DatastoreAutomation{
+				Name:        "Enrich",
+				Description: "Enriches the data. Only runs on valid JSON data AND if the 'enrichment' field does not exist.",
+				Type:        "singul",
+				Icon:        "/images/logos/singul.svg",
+				Beta:        false,
+				Disabled:    false,
+				Enabled:     true,
+			}
 
-				automationFound = true
+			vulnSecurityRuleAutomation := DatastoreAutomation{
+				Name:        "Security Rules",
+				Description: "Describes security rules that are validated BEFORE an update occurs. This is in order for bad writes to be avoided. Control: allow, deny, merge, overwrite. Logic: if, or, and. Functions: same_shape, is_superset, has_deleted_field",
+				Options: []DatastoreAutomationOption{
+					DatastoreAutomationOption{
+						Key:   "rule",
+						Value: "merge if always; deny if has_deleted_field",
+					},
+				},
+				Type:     "",
+				Icon:     "",
+				Beta:     false,
+				Disabled: false,
+				Enabled:  true,
+			}
 
-				workflowIdFound := false
-				for optionIndex, option := range automation.Options {
-					if option.Key != "workflow_id" {
+			vulnAgentFound := false
+			vulnEnrichFound := false
+			vulnSecurityRuleFound := false
+
+			vulnDeleteIndex := []int{}
+			for automationIndex, automation := range vulnCategoryConfig.Automations {
+				if strings.ToLower(automation.Name) == "run ai agent" {
+					if vulnAgentFound {
+						vulnDeleteIndex = append(vulnDeleteIndex, automationIndex)
 						continue
 					}
-
-					if debug {
-						log.Printf("[DEBUG] VALUE: %#v", option.Value)
+					vulnAgentFound = true
+					if !automation.Enabled {
+						vulnConfigEdited = true
+						vulnCategoryConfig.Automations[automationIndex].Enabled = true
 					}
-
-					workflowIdFound = true
-
-					if !strings.Contains(option.Value, workflow.ID) {
-						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+					found := false
+					for _, opt := range automation.Options {
+						if len(opt.Value) > 0 {
+							found = true
+							break
+						}
 					}
-
-					break
+					if !found {
+						vulnCategoryConfig.Automations[automationIndex].Options = vulnAgentAutomation.Options
+						vulnConfigEdited = true
+					} else {
+						for optIdx, opt := range automation.Options {
+							if len(opt.Template) == 0 && len(opt.Skill) == 0 {
+								vulnCategoryConfig.Automations[automationIndex].Options[optIdx].Template = "vulnerability"
+								vulnCategoryConfig.Automations[automationIndex].Options[optIdx].Skill = "vulnerability"
+								vulnConfigEdited = true
+							}
+						}
+					}
+				} else if strings.ToLower(automation.Name) == "enrich" {
+					if vulnEnrichFound {
+						vulnDeleteIndex = append(vulnDeleteIndex, automationIndex)
+						continue
+					}
+					vulnEnrichFound = true
+					if !automation.Enabled {
+						vulnConfigEdited = true
+						vulnCategoryConfig.Automations[automationIndex].Enabled = true
+					}
+				} else if strings.ToLower(automation.Name) == "security rules" {
+					if vulnSecurityRuleFound {
+						vulnDeleteIndex = append(vulnDeleteIndex, automationIndex)
+						continue
+					}
+					vulnSecurityRuleFound = true
+					if !automation.Enabled {
+						vulnConfigEdited = true
+						vulnCategoryConfig.Automations[automationIndex].Enabled = true
+					}
 				}
+			}
 
-				if !workflowIdFound {
-					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
-					automationOption := DatastoreAutomationOption{
-						Key:   "workflow_id",
-						Value: workflow.ID,
+			if len(vulnDeleteIndex) > 0 {
+				newAutomations := []DatastoreAutomation{}
+				for i, auto := range vulnCategoryConfig.Automations {
+					if !ArrayContainsInt(vulnDeleteIndex, i) {
+						newAutomations = append(newAutomations, auto)
 					}
-
-					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 				}
+				vulnCategoryConfig.Automations = newAutomations
+				vulnConfigEdited = true
+			}
 
-				datastoreCategoryConfigEdited = true
-				categoryConfig.Automations[automationIndex].Enabled = true
-				break
+			if !vulnAgentFound {
+				vulnCategoryConfig.Automations = append(vulnCategoryConfig.Automations, vulnAgentAutomation)
+				vulnConfigEdited = true
+			}
+			if !vulnEnrichFound {
+				vulnCategoryConfig.Automations = append(vulnCategoryConfig.Automations, vulnEnrichAutomation)
+				vulnConfigEdited = true
+			}
+			if !vulnSecurityRuleFound {
+				vulnCategoryConfig.Automations = append(vulnCategoryConfig.Automations, vulnSecurityRuleAutomation)
+				vulnConfigEdited = true
+			}
+
+			if vulnConfigEdited {
+				err := SetDatastoreCategoryConfig(ctx, *vulnCategoryConfig)
+				if err != nil {
+					log.Printf("[ERROR] Failed to update category config for vuln AI agent enablement: %s", err)
+				}
 			}
 		}
-
-		if !automationFound {
-			categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
-			datastoreCategoryConfigEdited = true
-		}
-
-		if datastoreCategoryConfigEdited {
-			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
-			if err != nil {
-				log.Printf("[ERROR] Failed to update category config for automation enablement (vuln comparison): %s", err)
-			}
-		}
-	} else if actionType == "assign_&_escalate" {
-		// This makes incident edits the actual trigger
-
+	} else if actionType == "assign_&_escalate" || actionType == "schedules_&_phone_notifications" || actionType == "schedules_notifications" || actionType == "phone_notifications" {
+		// Assign & Escalate is a specialized operational escalation pipeline
+		// (on-call schedule parsing, responder shifts, mobile app paging, AI copilot prompt).
+		// It operates strictly in the context of incident response and case management.
 		categoryCheck := "shuffle-security_incidents"
+
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
@@ -554,7 +728,124 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		if datastoreCategoryConfigEdited {
 			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
 			if err != nil {
-				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
+				log.Printf("[ERROR] Failed to update category config for Assign & Escalate enablement: %s", err)
+			} else {
+				log.Printf("[INFO] Configured Singul 'Assign & Escalate' workflow %s for org %s in %s", workflow.ID, user.ActiveOrg.Id, categoryCheck)
+			}
+		}
+	} else if actionType == "incident_routing" || actionType == "incident_routing_rules" || actionType == "automated_routing" || actionType == "automated_routing_rules" || strings.HasSuffix(actionType, "_routing") || strings.HasSuffix(actionType, "_routing_rules") {
+		// Dynamic Routing Rules evaluate declarative boolean condition trees on incoming entities
+		// across all datastore categories using $exec.shuffle_datastore.category and execute
+		// polymorphic actions (suggest_move, set_severity, add_label, run_agent, etc.).
+		resolvedCategory := resolveRoutingDatastoreCategory(actionType, categoryAction)
+		routingCategories := []string{
+			"shuffle-security_incidents",
+			"shuffle-security_vulns",
+			"shuffle-security_assets",
+			"shuffle-security_infrastructure",
+			"shuffle-security_packages",
+			"shuffle-security_software",
+			"shuffle-security_users",
+		}
+		if resolvedCategory != "" {
+			alreadyIncluded := false
+			for _, existingCat := range routingCategories {
+				if existingCat == resolvedCategory {
+					alreadyIncluded = true
+					break
+				}
+			}
+			if !alreadyIncluded {
+				routingCategories = append(routingCategories, resolvedCategory)
+			}
+		}
+
+		for _, categoryCheck := range routingCategories {
+			categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
+			if err != nil {
+				if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
+					categoryConfig = &DatastoreCategoryUpdate{
+						OrgId:       user.ActiveOrg.Id,
+						Category:    categoryCheck,
+						Automations: []DatastoreAutomation{},
+						Settings:    DatastoreCategorySettings{},
+					}
+				} else {
+					return err
+				}
+			}
+
+			datastoreCategoryConfigEdited := false
+
+			foundRunWorkflow := DatastoreAutomation{
+				Name:        "Run workflow",
+				Description: "Runs one or more workflows with the updated value as runtime argument",
+				Options: []DatastoreAutomationOption{
+					DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					},
+				},
+				Icon:    "",
+				Enabled: true,
+			}
+
+			automationFound := false
+			if len(categoryConfig.Automations) > 0 {
+				for automationIndex, automation := range categoryConfig.Automations {
+					if strings.ToLower(automation.Name) != "run workflow" {
+						continue
+					}
+
+					automationFound = true
+
+					workflowIdFound := false
+					for optionIndex, option := range automation.Options {
+						if option.Key != "workflow_id" {
+							continue
+						}
+
+						if debug {
+							log.Printf("[DEBUG] VALUE: %#v", option.Value)
+						}
+
+						workflowIdFound = true
+
+						if !strings.Contains(option.Value, workflow.ID) {
+							categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+						}
+
+						break
+					}
+
+					if !workflowIdFound {
+						log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+						automationOption := DatastoreAutomationOption{
+							Key:   "workflow_id",
+							Value: workflow.ID,
+						}
+
+						categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
+					}
+
+					datastoreCategoryConfigEdited = true
+					categoryConfig.Automations[automationIndex].Enabled = true
+					break
+				}
+			}
+
+			if !automationFound {
+				categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
+				datastoreCategoryConfigEdited = true
+			}
+
+			if datastoreCategoryConfigEdited {
+				err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+				if err != nil {
+					log.Printf("[ERROR] Failed to update category config for dynamic routing rules enablement: %s", err)
+				} else {
+					log.Printf("[INFO] Configured Singul dynamic routing rules workflow %s for org %s in %s", workflow.ID, user.ActiveOrg.Id, categoryCheck)
+				}
 			}
 		}
 	} else if actionType == "notification" || actionType == "notifications" || actionType == "forward_notification" || actionType == "forward_notifications" {
@@ -579,6 +870,137 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 }
 
+func resolveRoutingDatastoreCategory(actionType string, categoryAction CategoryAction) string {
+	baselineCategories := map[string]string{
+		"incidents":      "shuffle-security_incidents",
+		"incident":       "shuffle-security_incidents",
+		"vulns":          "shuffle-security_vulns",
+		"vuln":           "shuffle-security_vulns",
+		"vulnerabilities": "shuffle-security_vulns",
+		"vulnerability":  "shuffle-security_vulns",
+		"infrastructure": "shuffle-security_infrastructure",
+		"assets":         "shuffle-security_assets",
+		"asset":          "shuffle-security_assets",
+		"packages":       "shuffle-security_packages",
+		"package":        "shuffle-security_packages",
+		"software":       "shuffle-security_software",
+		"users":          "shuffle-security_users",
+		"user":           "shuffle-security_users",
+	}
+
+	rawCat := strings.TrimSpace(categoryAction.Category)
+	if strings.HasPrefix(rawCat, "shuffle-security_") {
+		return rawCat
+	}
+	lowerCat := strings.ToLower(rawCat)
+	if mapped, ok := baselineCategories[lowerCat]; ok {
+		return mapped
+	}
+
+	lowerLabel := strings.ToLower(categoryAction.Label)
+	lowerAction := strings.ToLower(actionType)
+	for key, mapped := range baselineCategories {
+		if key == "incident" || key == "incidents" {
+			continue
+		}
+		if strings.Contains(lowerCat, key) || strings.Contains(lowerLabel, key) || strings.Contains(lowerAction, key) {
+			return mapped
+		}
+	}
+
+	if rawCat != "" && !strings.Contains(rawCat, " ") {
+		return rawCat
+	}
+
+	return "shuffle-security_incidents"
+}
+
+func HandleSingulWorkflowDisablement(ctx context.Context, workflowId string, orgId string, categoryAction CategoryAction) error {
+	if len(orgId) == 0 || len(workflowId) == 0 {
+		return nil
+	}
+
+	categoriesToCheck := []string{
+		"shuffle-security_incidents",
+		"shuffle-security_vulns",
+		"shuffle-security_infrastructure",
+		"shuffle-security_assets",
+		"shuffle-security_packages",
+		"shuffle-security_software",
+		"shuffle-security_users",
+		"shuffle-security_routing",
+	}
+	if strings.TrimSpace(categoryAction.Category) != "" {
+		resolved := resolveRoutingDatastoreCategory("", categoryAction)
+		found := false
+		for _, c := range categoriesToCheck {
+			if c == resolved {
+				found = true
+				break
+			}
+		}
+		if !found {
+			categoriesToCheck = append(categoriesToCheck, resolved)
+		}
+	}
+
+	for _, categoryCheck := range categoriesToCheck {
+		categoryConfig, err := GetDatastoreCategoryConfig(ctx, orgId, categoryCheck)
+		if err != nil || categoryConfig == nil {
+			continue
+		}
+
+		datastoreCategoryConfigEdited := false
+		for automationIndex, automation := range categoryConfig.Automations {
+			if strings.ToLower(automation.Name) != "run workflow" {
+				continue
+			}
+
+			for optionIndex, option := range automation.Options {
+				if option.Key != "workflow_id" {
+					continue
+				}
+
+				if strings.Contains(option.Value, workflowId) {
+					ids := strings.Split(option.Value, ",")
+					newIds := []string{}
+					for _, id := range ids {
+						trimmed := strings.TrimSpace(id)
+						if len(trimmed) > 0 && trimmed != workflowId {
+							newIds = append(newIds, trimmed)
+						}
+					}
+
+					categoryConfig.Automations[automationIndex].Options[optionIndex].Value = strings.Join(newIds, ",")
+					if len(newIds) == 0 {
+						categoryConfig.Automations[automationIndex].Enabled = false
+					}
+					datastoreCategoryConfigEdited = true
+				}
+			}
+		}
+
+		if datastoreCategoryConfigEdited {
+			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+			if err != nil {
+				log.Printf("[ERROR] Failed to update category config on Singul workflow disablement for %s: %s", categoryCheck, err)
+			}
+		}
+	}
+
+	// Reset default notification workflow if this was the one
+	foundOrg, err := GetOrg(ctx, orgId)
+	if err == nil && foundOrg != nil && foundOrg.Defaults.NotificationWorkflow == workflowId {
+		foundOrg.Defaults.NotificationWorkflow = ""
+		err = SetOrg(ctx, *foundOrg, foundOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed to reset notification workflow on org %s: %s", orgId, err)
+		}
+	}
+
+	return nil
+}
+
 // These are just specific examples for specific cases
 // FIXME: Should these be loaded from public workflows?
 // I kind of think so ~
@@ -586,134 +1008,564 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 // replace a specific part of a workflow :thinking:
 
 func getVulnerabilityCorrelationScript(orgId string) string {
-	return fmt.Sprintf(`import json
+	return `import json
 import time
+import re
 import requests
 
-raw = r"""$exec"""
+DATASTORE_VULNS = "shuffle-security_vulns"
+DATASTORE_PACKAGES = "shuffle-security_packages"
+DATASTORE_SOFTWARE = "shuffle-security_software"
+DATASTORE_INCIDENTS = "shuffle-security_incidents"
 
-exec = json.loads(raw)
-if isinstance(exec, str):
-    exec = json.loads(exec)
-
-name = exec["name"]
-versions = exec.get("versions", [])
-
-DATASTORE_CATEGORY = "shuffle-security_vulnerabilities"
+API_SHUFFLE = "https://shuffler.io/api/v1/vulnerabilities"
+API_OSV = "https://api.osv.dev/v1/query"
 
 ECOSYSTEM_MAP = {
-    "python": "PyPI", "pip": "PyPI", "pypi": "PyPI",
-    "golang": "Go", "go": "Go",
-    "javascript": "npm", "node": "npm", "npm": "npm",
-    "rust": "crates.io", "cargo": "crates.io",
-    "ruby": "RubyGems", "gem": "RubyGems",
-    "java": "Maven", "maven": "Maven",
-    "php": "Packagist", "composer": "Packagist",
-    "dotnet": "NuGet", "nuget": "NuGet",
+    # Python
+    "python": "PyPI", "pip": "PyPI", "pypi": "PyPI", "pipenv": "PyPI", "poetry": "PyPI",
+    # JavaScript / TypeScript
+    "javascript": "npm", "js": "npm", "node": "npm", "nodejs": "npm", "npm": "npm", "yarn": "npm", "pnpm": "npm", "typescript": "npm", "ts": "npm",
+    # Go
+    "golang": "Go", "go": "Go", "gomod": "Go",
+    # Rust
+    "rust": "crates.io", "cargo": "crates.io", "crates": "crates.io",
+    # Ruby
+    "ruby": "RubyGems", "gem": "RubyGems", "rubygems": "RubyGems", "bundler": "RubyGems",
+    # Java
+    "java": "Maven", "maven": "Maven", "gradle": "Maven",
+    # PHP
+    "php": "Packagist", "composer": "Packagist", "packagist": "Packagist",
+    # .NET
+    "dotnet": "NuGet", ".net": "NuGet", "nuget": "NuGet", "c#": "NuGet", "csharp": "NuGet",
+    # Linux distributions
+    "ubuntu": "Ubuntu", "debian": "Debian", "alpine": "Alpine", "centos": "CentOS",
+    "redhat": "Red Hat", "rhel": "Red Hat", "fedora": "Red Hat", "rocky": "Rocky Linux",
+    "almalinux": "AlmaLinux", "alma": "AlmaLinux", "arch": "Arch Linux", "archlinux": "Arch Linux",
+    # Others
+    "conan": "ConanCenter", "pub": "Pub", "hex": "Hex", "cran": "CRAN",
 }
-raw_os = (exec.get("os") or "").strip()
-ecosystem = ECOSYSTEM_MAP.get(raw_os.lower(), raw_os)
 
-def normalize_version(v):
-    if not v:
-        return None
-    v = v.strip()
-    if v.startswith("=="):
-        v = v.lstrip("=")
-    if any(c in v for c in "<>=*~^ "):
-        return None
-    return v
+# -------------------------------------------------------------
+# 1. Safe Variable Resolution
+# -------------------------------------------------------------
+raw_exec = r"""$exec"""
+item_key = r"""$exec.shuffle_datastore.key"""
+item_cat = r"""$exec.shuffle_datastore.category"""
 
-API = "https://shuffler.io/api/v1/vulnerabilities"
-MAX_RETRIES = 4
-RETRY_WAIT = 20
-
-def is_rate_limited(resp, data):
-    if resp.status_code == 429:
-        return True
-    reason = (data.get("reason") or "") if isinstance(data, dict) else ""
-    return isinstance(data, dict) and data.get("success") is False and "too many requests" in reason.lower()
-
-found = []
-errors = []
-rate_limited = False
-
-for raw_version in versions:
-    version = normalize_version(raw_version)
-    if not version:
-        continue
-    if not ecosystem:
-        errors.append("No ecosystem mapping for os=%r" % raw_os)
-        break
-
-    body = {"package": {"name": name, "ecosystem": ecosystem}, "version": version}
-
-    for attempt in range(MAX_RETRIES):
-        try:
-            r = requests.post(API, json=body, timeout=30)
-        except Exception as e:
-            errors.append("Request failed for %s %s: %s" % (name, version, e))
-            break
-        try:
-            data = r.json()
-        except Exception:
-            errors.append("Bad response (%s) for %s %s: %s" % (r.status_code, name, version, r.text[:200]))
-            break
-
-        if is_rate_limited(r, data):
-            rate_limited = True
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(RETRY_WAIT)
-                continue
-            errors.append("RATE LIMITED on %s %s after %s retries" % (name, version, MAX_RETRIES))
-            break
-
-        if isinstance(data, dict) and data.get("success") is False:
-            errors.append("API error for %s %s: %s" % (name, version, data.get("reason")))
-            break
-
-        found.extend(data.get("vulns") or data.get("vulnerabilities") or [])
-        break
-
-seen, deduped = set(), []
-for v in found:
-    vid = v.get("id")
-    if vid and vid not in seen:
-        seen.add(vid)
-        deduped.append(v)
-
-stored = []
-store_errors = []
-for v in deduped:
-    vid = v.get("id")
-    if not vid:
-        continue
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
     try:
-        self.set_key(vid, json.dumps(v), category=DATASTORE_CATEGORY)
-        stored.append(vid)
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+payload = safe_parse_json(raw_exec, {})
+if not isinstance(payload, dict):
+    payload = {}
+
+# Unwrap nested arguments if passed as execution_argument or data
+if "execution_argument" in payload and isinstance(payload["execution_argument"], (dict, str)):
+    inner = safe_parse_json(payload["execution_argument"], {})
+    if isinstance(inner, dict) and inner:
+        payload = inner
+if "data" in payload and isinstance(payload["data"], (dict, str)):
+    inner = safe_parse_json(payload["data"], {})
+    if isinstance(inner, dict) and inner:
+        payload = inner
+
+# -------------------------------------------------------------
+# 2. Version Helpers & Range Evaluation
+# -------------------------------------------------------------
+def clean_ver(v):
+    if not v:
+        return ""
+    v = str(v).strip()
+    v = re.sub(r"^[=~^><\s]+", "", v)
+    return v.strip()
+
+def parse_ver_parts(v):
+    cleaned = clean_ver(v)
+    parts = re.split(r"[.\-+_]", cleaned)
+    res = []
+    for p in parts:
+        if not p:
+            continue
+        if p.isdigit():
+            res.append((0, int(p)))
+        else:
+            m = re.match(r"^(\d+)(.*)$", p)
+            if m:
+                res.append((0, int(m.group(1))))
+                if m.group(2):
+                    res.append((1, m.group(2).lower()))
+            else:
+                res.append((1, p.lower()))
+    return res
+
+def compare_vers(a, b):
+    pa = parse_ver_parts(a)
+    pb = parse_ver_parts(b)
+    lmax = max(len(pa), len(pb))
+    for i in range(lmax):
+        part_a = pa[i] if i < len(pa) else (0, 0)
+        part_b = pb[i] if i < len(pb) else (0, 0)
+        if part_a != part_b:
+            if part_a[0] != part_b[0]:
+                return -1 if part_a[0] < part_b[0] else 1
+            return -1 if part_a[1] < part_b[1] else 1
+    return 0
+
+def is_version_affected(inst_ver, vuln):
+    if not inst_ver or not isinstance(vuln, dict):
+        return True
+    cl = clean_ver(inst_ver)
+    if not cl:
+        return True
+
+    affected = vuln.get("affected") or []
+    if not isinstance(affected, list) or len(affected) == 0:
+        return True
+
+    matched_any_package = False
+    for a in affected:
+        if not isinstance(a, dict):
+            continue
+        matched_any_package = True
+        # Exact version list check
+        versions = a.get("versions") or []
+        for v in versions:
+            if clean_ver(v) == cl:
+                return True
+
+        # Range check with events
+        ranges = a.get("ranges") or []
+        for r in ranges:
+            events = r.get("events") or []
+            in_range = False
+            for e in events:
+                if not isinstance(e, dict):
+                    continue
+                if "introduced" in e:
+                    intro = str(e["introduced"]).strip()
+                    if intro == "0" or compare_vers(cl, intro) >= 0:
+                        in_range = True
+                if "fixed" in e:
+                    fixed = str(e["fixed"]).strip()
+                    if in_range and compare_vers(cl, fixed) >= 0:
+                        in_range = False
+                if "last_affected" in e:
+                    la = str(e["last_affected"]).strip()
+                    if in_range and compare_vers(cl, la) > 0:
+                        in_range = False
+            if in_range:
+                return True
+
+    return not matched_any_package
+
+# -------------------------------------------------------------
+# 3. Execution Logic
+# -------------------------------------------------------------
+is_incident = bool(
+    "observables" in payload or
+    "finding_uid" in payload or
+    (item_cat and item_cat == DATASTORE_INCIDENTS) or
+    ("rawOCSF" in payload)
+)
+
+errors = []
+stored = []
+now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+if not is_incident:
+    # Package / Software correlation mode
+    pkg_name = payload.get("name") or payload.get("package_name") or payload.get("software_name") or payload.get("package") or ""
+    if not pkg_name and item_key and not item_key.startswith("$"):
+        pkg_name = item_key.split("_")[0]
+
+    raw_os = (payload.get("os") or "").strip().lower()
+    ecosystem = ECOSYSTEM_MAP.get(raw_os, None)
+    if not ecosystem and raw_os:
+        for k, v in ECOSYSTEM_MAP.items():
+            if k in raw_os:
+                ecosystem = v
+                break
+    if not ecosystem and raw_os:
+        ecosystem = payload.get("os")
+
+    raw_versions = payload.get("versions") or []
+    if isinstance(raw_versions, str):
+        raw_versions = [raw_versions]
+    elif not isinstance(raw_versions, list):
+        raw_versions = []
+    if payload.get("version") and payload.get("version") not in raw_versions:
+        raw_versions.append(payload["version"])
+
+    hostnames = payload.get("hostnames") or []
+    if not isinstance(hostnames, list):
+        hostnames = []
+
+    for h in hostnames:
+        if isinstance(h, dict) and h.get("version"):
+            hv = str(h["version"]).strip()
+            if hv and hv not in raw_versions:
+                raw_versions.append(hv)
+
+    valid_versions = []
+    for v in raw_versions:
+        cv = clean_ver(v)
+        if cv and not any(c in cv for c in "<>*~^ ") and cv not in valid_versions:
+            valid_versions.append(cv)
+
+    found_vulns = []
+    rate_limited = False
+
+    if pkg_name:
+        queries = []
+        if valid_versions:
+            for v in valid_versions:
+                q = {"package": {"name": pkg_name}}
+                if ecosystem:
+                    q["package"]["ecosystem"] = ecosystem
+                q["version"] = v
+                queries.append(q)
+        else:
+            q = {"package": {"name": pkg_name}}
+            if ecosystem:
+                q["package"]["ecosystem"] = ecosystem
+            queries.append(q)
+
+        for q in queries:
+            resp_data = None
+            # Attempt 1: Shuffler.io API
+            for attempt in range(3):
+                try:
+                    r = requests.post(API_SHUFFLE, json=q, timeout=20)
+                    if r.status_code == 200:
+                        resp_data = r.json()
+                        break
+                    elif r.status_code == 429:
+                        rate_limited = True
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                except Exception:
+                    pass
+
+            # Attempt 2: Direct OSV.dev fallback
+            if not resp_data or (isinstance(resp_data, dict) and resp_data.get("success") is False):
+                for attempt in range(2):
+                    try:
+                        r = requests.post(API_OSV, json=q, timeout=20)
+                        if r.status_code == 200:
+                            resp_data = r.json()
+                            break
+                        elif r.status_code == 429:
+                            rate_limited = True
+                            time.sleep(2 * (attempt + 1))
+                            continue
+                    except Exception as e:
+                        errors.append("OSV request error for %s: %s" % (pkg_name, e))
+                        break
+
+            if isinstance(resp_data, dict):
+                vulns = resp_data.get("vulns") or resp_data.get("vulnerabilities") or []
+                if isinstance(vulns, list):
+                    found_vulns.extend(vulns)
+
+    seen_ids = set()
+    deduped_vulns = []
+    for v in found_vulns:
+        if isinstance(v, dict):
+            vid = v.get("id")
+            if vid and vid not in seen_ids:
+                seen_ids.add(vid)
+                deduped_vulns.append(v)
+
+    affected_hosts_global = set()
+    for v in deduped_vulns:
+        vid = v.get("id")
+        if not vid:
+            continue
+
+        vuln_hosts = []
+        for h in hostnames:
+            if not isinstance(h, dict):
+                continue
+            hname = h.get("hostname")
+            if not hname:
+                continue
+            hver = h.get("version") or (valid_versions[0] if valid_versions else None)
+            huser = h.get("user") or ""
+            if is_version_affected(hver, v):
+                affected_hosts_global.add(hname)
+                hpaths = h.get("paths") or []
+                paths_arr = []
+                if hpaths:
+                    for p in hpaths:
+                        paths_arr.append({
+                            "path": p,
+                            "version": hver,
+                            "last_seen": now_iso,
+                        })
+                else:
+                    paths_arr.append({
+                        "version": hver,
+                        "last_seen": now_iso,
+                    })
+                host_entry = {
+                    "hostname": hname,
+                    "paths": paths_arr,
+                }
+                if huser:
+                    host_entry["user"] = huser
+                vuln_hosts.append(host_entry)
+
+        existing_rec = None
+        try:
+            if "self" in locals() or "self" in globals():
+                raw_rec = self.get_key(vid, category=DATASTORE_VULNS)
+                if raw_rec:
+                    if isinstance(raw_rec, dict) and "value" in raw_rec:
+                        raw_rec = raw_rec["value"]
+                    if isinstance(raw_rec, str):
+                        try:
+                            existing_rec = json.loads(raw_rec)
+                        except Exception:
+                            pass
+                    elif isinstance(raw_rec, dict):
+                        existing_rec = raw_rec
+        except Exception:
+            pass
+
+        merged = dict(v)
+        if isinstance(existing_rec, dict):
+            for preserve_key in ["status", "resolution", "resolution_note", "resolved_at", "resolved_by", "activity"]:
+                if preserve_key in existing_rec and existing_rec[preserve_key]:
+                    merged[preserve_key] = existing_rec[preserve_key]
+
+            existing_hosts = existing_rec.get("hosts") or []
+            hmap = {}
+            for eh in existing_hosts:
+                if isinstance(eh, dict) and eh.get("hostname"):
+                    hmap[eh["hostname"]] = eh
+
+            for vh in vuln_hosts:
+                hn = vh["hostname"]
+                if hn in hmap:
+                    existing_entry = hmap[hn]
+                    if vh.get("user") and not existing_entry.get("user"):
+                        existing_entry["user"] = vh["user"]
+                    epaths = existing_entry.setdefault("paths", [])
+                    known_paths = {p.get("path") for p in epaths if isinstance(p, dict) and p.get("path")}
+                    for np in vh.get("paths", []):
+                        if np.get("path") not in known_paths:
+                            epaths.append(np)
+                        else:
+                            for ep in epaths:
+                                if ep.get("path") == np.get("path"):
+                                    ep["last_seen"] = now_iso
+                                    if np.get("version"):
+                                        ep["version"] = np.get("version")
+                else:
+                    hmap[hn] = vh
+            merged["hosts"] = list(hmap.values())
+        else:
+            merged["hosts"] = vuln_hosts
+
+        # Aggregate affected users on the vulnerability record
+        affected_users = set()
+        for hitem in merged.get("hosts", []):
+            if isinstance(hitem, dict) and hitem.get("user"):
+                affected_users.add(hitem["user"])
+        if affected_users:
+            merged["users"] = sorted(list(affected_users))
+
+        try:
+            if "self" in locals() or "self" in globals():
+                self.set_key(vid, json.dumps(merged), category=DATASTORE_VULNS)
+            stored.append(vid)
+        except Exception as e:
+            errors.append("Failed storing %s: %s" % (vid, e))
+
+    # Update the package / software datastore record with correlated vulnerability summary
+    try:
+        if ("self" in locals() or "self" in globals()) and item_key and not item_key.startswith("$"):
+            save_cat = item_cat if item_cat and not item_cat.startswith("$") else DATASTORE_PACKAGES
+            raw_pkg = self.get_key(item_key, category=save_cat)
+            pkg_obj = {}
+            if raw_pkg:
+                if isinstance(raw_pkg, dict) and "value" in raw_pkg:
+                    raw_pkg = raw_pkg["value"]
+                if isinstance(raw_pkg, str):
+                    try:
+                        pkg_obj = json.loads(raw_pkg)
+                    except Exception:
+                        pass
+                elif isinstance(raw_pkg, dict):
+                    pkg_obj = raw_pkg
+
+            if isinstance(pkg_obj, dict) and pkg_obj:
+                cve_list = [v.get("id") for v in deduped_vulns if isinstance(v, dict) and v.get("id")]
+                pkg_obj["cves"] = cve_list
+                pkg_obj["vulnerability_count"] = len(cve_list)
+                pkg_obj["vulnerabilities"] = [
+                    {
+                        "id": v.get("id"),
+                        "summary": v.get("summary") or v.get("details") or "",
+                        "severity": v.get("database_specific", {}).get("severity") or "unknown",
+                    }
+                    for v in deduped_vulns[:20]
+                    if isinstance(v, dict) and v.get("id")
+                ]
+                pkg_obj["status"] = "vulnerable" if cve_list else "clean"
+                pkg_obj["last_vuln_check"] = now_iso
+                self.set_key(item_key, json.dumps(pkg_obj), category=save_cat)
     except Exception as e:
-        store_errors.append("Failed storing %s: %s" % (vid, e))
+        errors.append("Failed updating package/software %s: %s" % (item_key, e))
 
-if rate_limited or errors or store_errors:
-    status = "unknown"
-elif deduped:
-    status = "vulnerable"
+    status = "vulnerable" if deduped_vulns else "not_vulnerable"
+    if rate_limited or errors:
+        status = "unknown"
+
+    result = {
+        "success": True,
+        "mode": "package",
+        "name": pkg_name,
+        "ecosystem": ecosystem,
+        "status": status,
+        "vuln_count": len(deduped_vulns),
+        "affected_hosts": list(affected_hosts_global),
+        "stored_count": len(stored),
+        "stored_ids": stored,
+        "rate_limited": rate_limited,
+        "errors": errors,
+    }
+    print(json.dumps(result, indent=2))
+
 else:
-    status = "not_vulnerable"
+    # Incident Correlation mode
+    inc_id = payload.get("finding_uid") or payload.get("id") or item_key or "unknown_incident"
+    observables = payload.get("observables") or []
+    if not isinstance(observables, list):
+        observables = []
 
-result = {
-    "name": name,
-    "ecosystem": ecosystem,
-    "status": status,
-    "vuln_count": len(deduped),
-    "stored_count": len(stored),
-    "stored_ids": stored,
-    "rate_limited": rate_limited,
-    "errors": errors,
-    "store_errors": store_errors,
-}
-print(json.dumps(result, indent=2))
-`, "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%d", "%s", "%s", "%s", "%s", "%s")					
+    hosts_in_incident = set()
+    packages_in_incident = set()
+    cves_in_incident = set()
+
+    for o in observables:
+        if not isinstance(o, dict):
+            continue
+        otype = (o.get("type") or "").strip().lower()
+        oval = (o.get("value") or "").strip()
+        if not oval:
+            continue
+        if otype in ("hostname", "host", "endpoint", "device", "asset"):
+            hosts_in_incident.add(oval)
+        elif otype in ("package", "software", "library"):
+            packages_in_incident.add(oval)
+        elif otype in ("cve", "vulnerability"):
+            cves_in_incident.add(oval)
+
+    raw_ocsf = payload.get("rawOCSF") or {}
+    if isinstance(raw_ocsf, dict):
+        device = raw_ocsf.get("device") or {}
+        if isinstance(device, dict) and device.get("hostname"):
+            hosts_in_incident.add(device["hostname"])
+
+    # Check datastore for known CVEs on packages and software mentioned in the incident
+    for pkg in packages_in_incident:
+        try:
+            if "self" in locals() or "self" in globals():
+                pdata = self.get_key(pkg, category=DATASTORE_PACKAGES) or self.get_key(pkg, category=DATASTORE_SOFTWARE)
+                if pdata:
+                    if isinstance(pdata, dict) and "value" in pdata:
+                        pdata = pdata["value"]
+                    if isinstance(pdata, str):
+                        try:
+                            pdata = json.loads(pdata)
+                        except Exception:
+                            pass
+                    if isinstance(pdata, dict):
+                        for cve_id in pdata.get("cves", []):
+                            if cve_id and isinstance(cve_id, str):
+                                cves_in_incident.add(cve_id)
+        except Exception:
+            pass
+
+    correlated_vulns = []
+    for cve in cves_in_incident:
+        try:
+            if "self" in locals() or "self" in globals():
+                vdata = self.get_key(cve, category=DATASTORE_VULNS)
+                if vdata:
+                    if isinstance(vdata, dict) and "value" in vdata:
+                        vdata = vdata["value"]
+                    if isinstance(vdata, str):
+                        vdata = json.loads(vdata)
+                    correlated_vulns.append(vdata)
+        except Exception:
+            pass
+
+    if correlated_vulns:
+        custom_attrs = payload.setdefault("metadata", {}).setdefault("extensions", {}).setdefault("custom_attributes", {})
+        existing_corr = custom_attrs.get("correlated_vulnerabilities") or []
+        corr_ids = {c.get("id") for c in existing_corr if isinstance(c, dict)}
+        for cv in correlated_vulns:
+            if cv.get("id") and cv["id"] not in corr_ids:
+                existing_corr.append({
+                    "id": cv["id"],
+                    "summary": cv.get("summary") or cv.get("details") or "",
+                    "severity": cv.get("database_specific", {}).get("severity") or "unknown",
+                    "correlated_at": now_iso,
+                })
+        custom_attrs["correlated_vulnerabilities"] = existing_corr
+
+        activities = payload.setdefault("activity", [])
+        cve_names = ", ".join([cv.get("id", "") for cv in correlated_vulns[:5]])
+        activities.append({
+            "id": "vuln-corr-%s" % int(time.time() * 1000),
+            "type": "comment",
+            "user": "Vulnerability Correlation",
+            "timestamp": int(time.time() * 1000),
+            "content": "Correlated %s vulnerabilities (%s) with incident observables." % (len(correlated_vulns), cve_names),
+            "details": {"source": "vulnerability_correlation", "cves": [cv.get("id") for cv in correlated_vulns]},
+            "ai_handled": True,
+        })
+
+        save_cat = item_cat if item_cat and not item_cat.startswith("$") else DATASTORE_INCIDENTS
+        save_key = item_key if item_key and not item_key.startswith("$") else inc_id
+        try:
+            if "self" in locals() or "self" in globals():
+                self.set_key(save_key, json.dumps(payload), category=save_cat)
+        except Exception as e:
+            errors.append("Failed syncing correlated incident: %s" % e)
+
+    result = {
+        "success": True,
+        "mode": "incident",
+        "incident_id": inc_id,
+        "hosts_checked": list(hosts_in_incident),
+        "packages_checked": list(packages_in_incident),
+        "cves_checked": list(cves_in_incident),
+        "correlated_count": len(correlated_vulns),
+        "status": "correlated" if correlated_vulns else "no_correlation",
+        "errors": errors,
+    }
+    print(json.dumps(result, indent=2))
+`
 }
 
 // Should workflows be written as YAML and be text-editable?
@@ -740,11 +1592,18 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		startTriggerId = uuid.NewV4().String()
 	}
 
-	actionEnv := "Cloud"
-	triggerEnv := "Cloud"
 	ctx := context.Background()
-	if project.Environment != "cloud" {
-		triggerEnv = "onprem"
+
+	actionEnv := ""
+	triggerEnv := "Cloud"
+	for _, action := range workflow.Actions { 
+		if len(action.Environment) > 0 { 
+			actionEnv = action.Environment
+		}
+	}
+
+	if len(actionEnv) == 0 {
+		actionEnv = "Cloud"
 
 		envs, err := GetEnvironments(ctx, orgId)
 		if err == nil {
@@ -755,7 +1614,11 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				}
 			}
 		} else {
-			actionEnv = "Shuffle"
+			if project.Environment == "cloud" { 
+				actionEnv = "Cloud"
+			} else {
+				actionEnv = "Shuffle"
+			}
 		}
 	}
 
@@ -1413,15 +2276,33 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow.OrgId = orgId
 
 	} else if parsedActiontype == "vulnerability_correlation" {
-	createCaseId := uuid.NewV4().String()
-		//defaultWorkflow := getVulnerabilityCorrelationWorkflow(actionType, orgId, startActionId, actionEnv, categoryAction)
+		createCaseId := uuid.NewV4().String()
 		defaultWorkflow := Workflow{
 			Name:        actionType,
-			Description: "For each software package + version coming from a host monitor, queries the Shuffle vulnerability API and stores any matching CVEs into the shuffle-security_vulnerabilities datastore category.",
+			Description: "For each software package + version coming from a host monitor, queries the Shuffle vulnerability API and stores any matching CVEs into the shuffle-security_vulns datastore category.",
 			OrgId:       orgId,
 			Start:       startActionId,
 			UsecaseIds:  []string{"vulnerabilities"},
 			Tags:        []string{"correlate", "vulnerability", "automatic"},
+			Triggers: []Trigger{
+				Trigger{
+					ID:          startTriggerId,
+					Name:        "Schedule",
+					TriggerType: "SCHEDULE",
+					Label:       "Vulnerability Correlation",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "cron",
+							Value: "*/15 * * * *",
+						},
+						WorkflowAppActionParameter{
+							Name:  "execution_argument",
+							Value: "Automatically configured by Shuffle Security",
+						},
+					},
+				},
+			},
 			Actions: []Action{
 				{
 					Name:        "execute_python",
@@ -1435,8 +2316,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					Sharing:     true,
 					Parameters: []WorkflowAppActionParameter{
 						{
-							Name: "code",
-							Value: getVulnerabilityCorrelationScript(orgId),
+							Name:      "code",
+							Value:     getVulnerabilityCorrelationScript(orgId),
 							Multiline: true,
 							Required:  true,
 						},
@@ -1475,10 +2356,31 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				},
 			},
 			Branches: []Branch{
-				{
+				Branch{
+					SourceID:      startTriggerId,
+					DestinationID: startActionId,
+					ID:            uuid.NewV4().String(),
+				},
+				Branch{
 					SourceID:      startActionId,
 					DestinationID: createCaseId,
 					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "{{ $$verify_package_vulnerability.vuln_count }}",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "larger than",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "0",
+							},
+						},
+					},
 				},
 			},
 		}
@@ -1486,8 +2388,9 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
 
-	} else if parsedActiontype == "assign_&_escalate" {
+	} else if parsedActiontype == "assign_&_escalate" || parsedActiontype == "schedules_&_phone_notifications" || parsedActiontype == "schedules_notifications" || parsedActiontype == "phone_notifications" {
 		relevantPeopleId := uuid.NewV4().String()
+		connectToPersonId := uuid.NewV4().String()
 		prepareAgentRun := uuid.NewV4().String()
 		aiAgentRun := uuid.NewV4().String()
 		addAgentResponse := uuid.NewV4().String()
@@ -1498,11 +2401,11 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 		defaultWorkflow := Workflow{
 			Name:        actionType,
-			Description: "Assigns and escalates based on the /admin/users page's schedule.",
+			Description: "Assigns and escalates based on team schedules and notifies responders on mobile.",
 			OrgId:       orgId,
 			Start:       startActionId,
 			UsecaseIds:  []string{},
-			Tags:        []string{"schedule", "assign", "automatic"},
+			Tags:        []string{"schedule", "assign", "automatic", "escalate", "phone", "notifications", "mobile", "paging"},
 			Actions: []Action{
 				Action{
 					Name:        "get_datastore_value",
@@ -1651,8 +2554,31 @@ $exec`,
 						},
 					},
 				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          connectToPersonId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Connect_to_responder",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "code",
+							Multiline: true,
+							Required:  true,
+							Value:     getConnectToResponderCode(),
+						},
+					},
+				},
 			},
 			Branches: []Branch{
+				Branch{
+					SourceID:      relevantPeopleId,
+					DestinationID: connectToPersonId,
+					ID:            uuid.NewV4().String(),
+					Conditions:    []Condition{},
+				},
 				Branch{
 					SourceID:      startActionId,
 					DestinationID: relevantPeopleId,
@@ -1792,6 +2718,316 @@ $exec`,
 		//prepareAgentRun := uuid.NewV4().String()
 		//aiAgentRun := uuid.NewV4().String()
 		//addAgentResponse := uuid.NewV4().String()
+
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+	} else if parsedActiontype == "incident_routing" || parsedActiontype == "incident_routing_rules" || parsedActiontype == "automated_routing" || parsedActiontype == "automated_routing_rules" || strings.HasSuffix(parsedActiontype, "_routing") || strings.HasSuffix(parsedActiontype, "_routing_rules") {
+		getRoutingRulesId := startActionId
+		validateRulesId := uuid.NewV4().String()
+		executeRulesId := uuid.NewV4().String()
+		updateStatsId := uuid.NewV4().String()
+		setCrossTenantCacheId := uuid.NewV4().String()
+
+		targetCategory := resolveRoutingDatastoreCategory(parsedActiontype, categoryAction)
+		workflowDescription := "Evaluates items against routing rules based on $exec.shuffle_datastore.category to suggest moves, assignees, severities, or automate containment."
+		workflowTags := []string{"routing", "incident", "vulnerability", "asset", "automatic", "automated routing", "automated routing rules", "automated_routing_rules", "incident routing", "incident routing rules", "incident_routing_rules", "incident_routing"}
+
+		if targetCategory == "shuffle-security_vulns" {
+			workflowDescription = "Evaluates vulnerabilities against routing rules to suggest priorities, severities, or automate remediation."
+			workflowTags = []string{"routing", "vulnerability", "automatic", "automated routing", "automated routing rules", "automated_routing_rules", "vulnerabilities routing", "vulnerabilities routing rules", "vulnerability_routing_rules", "vulnerability_routing"}
+		}
+
+		openapiAuthId := ""
+		allAuths, authErr := GetAllWorkflowAppAuth(ctx, orgId)
+		if authErr == nil {
+			for _, auth := range allAuths {
+				if !auth.Defined {
+					continue
+				}
+				normalizedAppName := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(auth.App.Name), " ", "_"))
+				if auth.App.ID == "fc92c1d806df0c96f0c152a7b43b2878" || normalizedAppName == "shuffle_openapi" {
+					openapiAuthId = auth.Id
+					if auth.Active {
+						break
+					}
+				}
+			}
+			if openapiAuthId == "" {
+				for _, auth := range allAuths {
+					normalizedAppName := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(auth.App.Name), " ", "_"))
+					if auth.App.ID == "fc92c1d806df0c96f0c152a7b43b2878" || normalizedAppName == "shuffle_openapi" {
+						openapiAuthId = auth.Id
+						break
+					}
+				}
+			}
+		}
+
+		crossTenantParams := []WorkflowAppActionParameter{
+			WorkflowAppActionParameter{
+				Name:      "headers",
+				Multiline: true,
+				Required:  false,
+				Value:     "Org-Id: $execute_rule_automation_for_found_rules.message.target_org_id",
+			},
+			WorkflowAppActionParameter{
+				Name:      "body",
+				Multiline: true,
+				Required:  true,
+				Value:     `{"key": "$execute_rule_automation_for_found_rules.message.key", "category": "$execute_rule_automation_for_found_rules.message.category", "value": $execute_rule_automation_for_found_rules.message.updated_value}`,
+			},
+			WorkflowAppActionParameter{
+				Name:     "queries",
+				Value:    "",
+				Required: false,
+			},
+			WorkflowAppActionParameter{
+				Name:     "org_id",
+				Value:    "",
+				Required: false,
+			},
+			WorkflowAppActionParameter{
+				Name:     "ssl_verify",
+				Value:    "",
+				Required: false,
+			},
+			WorkflowAppActionParameter{
+				Name:     "to_file",
+				Value:    "",
+				Required: false,
+			},
+		}
+		if project.Environment == "cloud" {
+			crossTenantParams = append([]WorkflowAppActionParameter{
+				WorkflowAppActionParameter{
+					Name:          "url",
+					Value:         "$execute_rule_automation_for_found_rules.message.target_region_url",
+					Required:      true,
+					Configuration: true,
+				},
+			}, crossTenantParams...)
+		}
+
+		defaultWorkflow := Workflow{
+			Name:        "Automated Routing Rules",
+			Description: workflowDescription,
+			OrgId:       orgId,
+			Start:       getRoutingRulesId,
+			UsecaseIds:  []string{},
+			Tags:        workflowTags,
+			Triggers:    []Trigger{},
+			Actions: []Action{
+				Action{
+					Name:        "list_datastore_category",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          getRoutingRulesId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Get_all_rules_from_the_system",
+					Position: Position{
+						X: 100,
+						Y: 200,
+					},
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:     "category",
+							Value:    "shuffle-security_routing",
+							Required: true,
+						},
+						WorkflowAppActionParameter{
+							Name:  "output_type",
+							Value: "values",
+						},
+					},
+				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          validateRulesId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Find_relevant_rules_for_category",
+					Position: Position{
+						X: 400,
+						Y: 200,
+					},
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "code",
+							Multiline: true,
+							Required:  true,
+							Value:     getRoutingValidationScript(targetCategory),
+						},
+					},
+				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          executeRulesId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Execute_rule_automation_for_found_rules",
+					Position: Position{
+						X: 700,
+						Y: 200,
+					},
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "code",
+							Multiline: true,
+							Required:  true,
+							Value:     getRoutingExecutionScript(targetCategory),
+						},
+					},
+				},
+				Action{
+					Name:             "post_count_custom_stats",
+					AppID:            "fc92c1d806df0c96f0c152a7b43b2878",
+					AppName:          "shuffle_openapi",
+					ID:               updateStatsId,
+					AppVersion:       "1.0.0",
+					Environment:      actionEnv,
+					AuthenticationId: openapiAuthId,
+					Label:            "Update_rule_statistics",
+					Position: Position{
+						X: 1050,
+						Y: 80,
+					},
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "body",
+							Multiline: true,
+							Required:  true,
+							Value:     `{"key": "$execute_rule_automation_for_found_rules.message.stats_key", "value": $execute_rule_automation_for_found_rules.message.stats_value}`,
+						},
+						WorkflowAppActionParameter{
+							Name:     "queries",
+							Value:    "",
+							Required: false,
+						},
+						WorkflowAppActionParameter{
+							Name:     "org_id",
+							Value:    "",
+							Required: false,
+						},
+						WorkflowAppActionParameter{
+							Name:     "ssl_verify",
+							Value:    "",
+							Required: false,
+						},
+						WorkflowAppActionParameter{
+							Name:     "to_file",
+							Value:    "",
+							Required: false,
+						},
+					},
+				},
+				Action{
+					Name:             "post_add_a_key",
+					AppID:            "fc92c1d806df0c96f0c152a7b43b2878",
+					AppName:          "shuffle_openapi",
+					ID:               setCrossTenantCacheId,
+					AppVersion:       "1.0.0",
+					Environment:      actionEnv,
+					AuthenticationId: openapiAuthId,
+					Label:            "Set_key_in_target_tenant",
+					Position: Position{
+						X: 1050,
+						Y: 320,
+					},
+					Parameters: crossTenantParams,
+				},
+			},
+			Branches: []Branch{
+				Branch{
+					SourceID:      getRoutingRulesId,
+					DestinationID: validateRulesId,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "{{ $$get_all_rules_from_the_system | size }}",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "larger than",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "0",
+							},
+						},
+					},
+				},
+				Branch{
+					SourceID:      validateRulesId,
+					DestinationID: executeRulesId,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$find_relevant_rules_for_category.message.matched",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "equals",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "true",
+							},
+						},
+					},
+				},
+				Branch{
+					SourceID:      executeRulesId,
+					DestinationID: updateStatsId,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$execute_rule_automation_for_found_rules.message.matched",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "equals",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "true",
+							},
+						},
+					},
+				},
+				Branch{
+					SourceID:      executeRulesId,
+					DestinationID: setCrossTenantCacheId,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$execute_rule_automation_for_found_rules.message.move_to_org",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "equals",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "true",
+							},
+						},
+					},
+				},
+			},
+		}
 
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
@@ -2428,6 +3664,91 @@ func GetWorkflowRunAmount(key string) int {
 		"2721fee4ca3361ce809f6728d3709cb8bb232d661b0baac8c6eba332d040a5e6": 8000000,
 		"549d5a3ac457706409f3e29cc5fb4cb5fd35c5b83adfb0f0d2407dd98b5f215d": 9000000,
 		"d88c4d2e73b0dfdd45fecf06dda99b1f16d31bc36605daea0879c53844a18de4": 10000000,
+		"ffb8871be9d266fe5f30aa2db874c0b9b1504b777d9d3de58034fff8d45ccee8": 150000,
+		"d9d855017acab8b37f370e53890141f5a44daa7e372f7bcb5566286c62f1b907": 250000,
+		"c7032bde9d6acd433a4fb352e231b2b57b2a9cf7f437140f453aea9c7025545d": 350000,
+		"0469ad598acff9e49fa23fee7d2db072a50f03417eb004c69a4d78008432aa29": 450000,
+		"69e12df982835c62c5d5c6ac8a56014fc55bdcb1f42e24fb5e0244fa86a7af3a": 550000,
+		"7681ff8cac658a475e0e3ddbf464779a1bb865b342dd8b0a32c1744d41f8c97d": 650000,
+		"1fffcb50755d696d9df8fb761b56df6ac2d1fa4a005d3a31c0fc0d3b55aa77d8": 750000,
+		"b63cef9fa2b6861e45a15df454c51b776334524743330709f584630c138d1c26": 850000,
+		"35ffa25f8cc5dc949d8d1bb7341f89087d81aed81a96aa62fc46b30ba3994068": 950000,
+		"0959eaec406300af0c2b4c0fd7b78588fab6f48f84b000b9bee693a2a9d220d0": 1050000,
+		"dcfb4f5fdadb94f97f76731ddff9a06d15fc966d594191b395cf7440cc29e48d": 1100000,
+		"a48f7210ed9e98ea968e0a500f4033ba54e62c04aae11d868d0a9f24423dc51d": 1150000,
+		"5d849e659e08fe134334edc3a42e4161565c65eac52280cf236c4703e0d2680b": 1200000,
+		"25b05eed2039db334bd9095efc40b7295fbffab0b6d1a2afbd0147df05075054": 1250000,
+		"c8910308b4e6febaa3e535efc31e298c2c4aa614ed6343bf053c12d30ae54dbc": 1300000,
+		"f4eb914d19fc974b5c65c04f52427cfd7b527d112e89d40ef2fd234ad2958c5c": 1350000,
+		"98e3939514d46c49b962b832cb30182a0577daaa6b563cc85505a95fcb0289ca": 1400000,
+		"069785e4124549ca980001b89e55fa48dbdc075d555e1ad176d1c3462be34c6e": 1450000,
+		"d9e6da79c229b1aead52588131a5392afc6daba85941064cf421bf48ecfd1ae6": 1500000,
+		"c65a9d9243669627f5d3ff82917fecb3b954b8c958dcf68492378b7d35f6ebe8": 1550000,
+		"70c05a571be549843dcff9fc088c36ce6a55a79c8dd449a1c67c1ec91a1ad2b0": 1600000,
+		"aa928d25cb76000660427c567ea36b21d873a2585eedd650f0e7eed9cacd00b8": 1650000,
+		"1334eb7de1d4cebfefd675fea5e438c9c29dcf06220142a95a92b224426031a3": 1700000,
+		"04751c0730257749051e3dc0a569b22a0f45466bb4dab383e8ea77bb63bd75ac": 1750000,
+		"814a691fdd0461911dc5ed3475ad568817f7ebb5a6fcbc3ada4c7c9c43dacf5a": 1800000,
+		"26fed530459175e47752a569fbc1631a5794a5bb82481d11838a11797e8b6d1a": 1850000,
+		"aeb065a27c2701380da11f31c83ae428722531e76ff5e31784f46ac497e7ecf7": 1900000,
+		"bb3c49ce839d5e5ba3e03046a4dada639eb8cef2b5ec6887d8048f41d01745a0": 1950000,
+		"a7c8f7a9c8502cd2143b7c5b08e64eb917890a888f89de7b2d64e178390a31d3": 2050000,
+		"e2ad238dca34d1655727ccb99469e73c9c0b687b02a6c7b9a3b7e3ee08576975": 2100000,
+		"d67bd6efc1ad1d81657c7496670ec52d9f134ee1aa0e8ffc10a7675c9cc6b576": 2150000,
+		"e4ebc35a987b0a286ebab5ddba71d638d5af3b1d1de3b31fe9204e23a1b77672": 2200000,
+		"7685408d3315881927067e40c7cb723577e73fe3809f1b8e0a50db59e41a22e9": 2250000,
+		"72bc10400f80649735d598b08600c6f6e2221c19d7c0bf68b94c19d024b980fa": 2300000,
+		"1d8064b61cbf76601997f2fc1457c9238da7df814b6a09353ff0c49c31f5ec4f": 2350000,
+		"1a77c707e71525ba2795812fe95a1a409274713651707cab7af2bd6fe9a74a66": 2400000,
+		"afc295d50fbeb84f132678cf40bbb4812dbf4575922dc79a91c220ec7ef6b415": 2450000,
+		"d1603fd0c617fd0be64890541b4c29a94ba57b18e47c11898b2e3b75322f78f0": 2500000,
+		"bcfdc00a11981372502bcce121b1e018d920490df419ec0b339a4a0a71d928a0": 2550000,
+		"92ff0e98e77c474fb1bbea34b7ff88acd4cbba657e5adc43a041948a31866dfe": 2600000,
+		"48009c76fb4cad4218fb8ec78a52bf90c136e9491bd06d08ac34ac7ea1539523": 2650000,
+		"a1fb382148042aefb7c9c110f2fa14ac676c4e958c5f326c043326b16b8e838b": 2700000,
+		"7aa8748efa051934d1689236d9d2f4b533ff03f9ff4bff38206bfeca89ce0791": 2750000,
+		"3fc52e1a8f7d0248565191bb763723ece6bf33dd67858741a715b29570161524": 2800000,
+		"1adeb8bc7ff109e83b8711327e73c5d65580735a1c393c8997cdeea6e70c431d": 2850000,
+		"002af684847c558ad9540a0e0af5dff11b860a7c6e170a3f33667083b5de04b9": 2900000,
+		"75c92e5f33a05f5cfadb5151d0fc6424bbbca0abad85aee4f6cf167c6e3a3f91": 2950000,
+		"8986145f7fa53b94a13f2533669311ebf47ee92377c2e83f2df19721cc70971e": 3050000,
+		"a131d2c4f35c3495d9144987e2b9e02c7966807dd6ace5824c9610c0b7d2232a": 3100000,
+		"a3751b650c2727d2f6e9e7fb101dec390349f51831dbfc62ac67d343597f8b40": 3150000,
+		"00c61b508c1822470433f08ef3a2dc781d7194e8a956ba46e00e17b3c13354e7": 3200000,
+		"3f133de864ad4f778a670e39a30884e11876c7dd9ed51dbc18d161d677f9b0bf": 3250000,
+		"f3c24510e4162f03bdbfff175cae6332d7ab14c1d0097c669685a657cdb75314": 3300000,
+		"e3eabccf56445cdde73194b8d3554e1d89b315f195c558b25319772d5a896d12": 3350000,
+		"8c0f44e54445a77a48e16deafc23a53cfcd5c21ff83d8ec9c93d1e5d7885270e": 3400000,
+		"c45ed99b6bf85deaee26726b448e5a3c4e3e90e29697b8f9df9fb8c74f054947": 3450000,
+		"2de087ae016ce0677a959604cd4c2cf94462a4cd9ba6b60bbc8e18ee214ee8d1": 3500000,
+		"0e70bc68312ffb76dfd2aa3ab0837f066dbcc7fbdb162fed5aecf6292e9f4264": 3550000,
+		"ee99da5e7efb12e473eeb05dc379fa0bc2f19c0c56297cbc03e5de924166ff89": 3600000,
+		"3d0cdf0daed1a08fd8fc54687ac6f2f0e654b6c3950e4cf62b2695b5080da45c": 3650000,
+		"48a7616cf76287f2a3fdbca0323ccdec1f4e6228701716a01c9429b833eb0b48": 3700000,
+		"fd8fd539c9e23486d6a5ed3c41dff25467d2eb2b729b8f329610adf4489d85cb": 3750000,
+		"64ba205b411ecff957cfa25e427e6467951671251baae908b8aae06aaf4c4ccc": 3800000,
+		"37a39c4879e32fbfdc12c60bf5a4cc84192dc72c6bbc8235b2d0620ed8a69054": 3850000,
+		"af6fdea4a4d91cc495465cc8720e84e78ce6629148cb146dc2f37f994f020b2a": 3900000,
+		"cdbd5411a79054c9cfb3d79d4ef375b8f247aef337b2182ee7896c112dc40499": 3950000,
+		"c1d74ecc3a34ea5305da6a1010ea06dfbed2beffe4128e2fe6dc658d89e521f5": 4050000,
+		"c205b0243fa9be49ea66facbb7444a2f9f4d4ee1c3c2fa754d1258c7e2d154cc": 4100000,
+		"ced51ef249a5bced2863f202677dba13aed63fe6c0e31039f6e80eb55c438fd5": 4150000,
+		"30cabe5cb1fa5a379ea80bb1d8e0a3d68ef3697d2196a8d30fee4764ad81cef3": 4200000,
+		"742d06bf1f169ee83896a63115ace64d8e9c20d209ec7791cb20c5b1df0d2bed": 4250000,
+		"7924d6888a0b99693a1ac230382c6f28778ceea6a4559e34dbbd638f314f8895": 4300000,
+		"735fa6045f4a92c57113f3e21d9ff5353aa628ce1d16cad4791fc9ec1b6320b0": 4350000,
+		"11ebaff5d7033bcf2621437644f23fe873038aec6ecf6046654ad1a304d766c9": 4400000,
+		"ff1d068bc0ca3d8e7109e04e31d87e085cc9f43ef83b6db03c1db26a822f22eb": 4450000,
+		"043b8c284000bf32e349f35d926eefe74ffd369b56cb8025bc86db76363b3203": 4500000,
+		"221f34a3beafd9008512544928592c3ac1ab4681cda731b8362048914c242a4f": 4550000,
+		"7feafbb633e45d9ea45ac6d6be18916bd43d0eef923cb405b001a21ecc7fe19d": 4600000,
+		"5ae4714133f4564b2a32e88428f5cba1f9b97e105915baae96656665ddb76978": 4650000,
+		"b0d895c56f7064f8d14eda03faf19ac665c85e406a8e0e886add9a34cfb6fa05": 4700000,
+		"5f1df07ff233b4173cf4042e994281f3dc5a6edf0739483605d3109ee085a8b5": 4750000,
+		"3c5ad974d83eacd34a765eb4cf8ea37a4b35988018e108428b94d619ffacb528": 4800000,
+		"0e72e3a219f3642169877597ef95fca20d9416d867894ed0704d566da2d8d11f": 4850000,
+		"6c17a4222990959ead2b538e78750a06b81f68752a92d6e39721c753d36bc40e": 4900000,
+		"23ac4ba07e31d6b8d40ae91ed99a268265c18a4e3eede40475170e83b51a5df2": 4950000,
 	}
 
 	if val, ok := amounts[key]; ok {
@@ -2601,6 +3922,14 @@ func GetRuntimeLocationAmount(key string) int {
 
 func GetBrandingAvailable(key string) bool {
 	if key == "f2a3b6d37929a8de75b753f68043f20aeca54b090eb6bb3c0eeedb6ddd10ae1b" {
+		return true
+	}
+
+	return false
+}
+
+func GetAppRunsGrouping(key string) bool {
+	if key == "1e1bf9b426033f9f15e8070e007f9414d11d7fdd6a07402a9290e1a0d7965f8f" {
 		return true
 	}
 
@@ -3008,6 +4337,10 @@ func GetTriggerData(triggerType string) string {
 		return "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iOCIgZmlsbD0iIzIxQTBCRCIvPgo8cGF0aCBkPSJNMjMuOTYxNyAxOC4wOTk0QzI1LjAwMDQgMTguMDY5NiAyNS42ODE3IDE5LjE3NTIgMjUuMTg4MiAyMC4wODk2TDI1LjE3NDYgMjAuMTE1TDI1LjE5MDIgMjAuMTM5NEwyNy45ODMyIDI0LjY4MDRMMjguMDA0NiAyNC43MTU2TDI4LjA0MzcgMjQuN0MyOC41MzgzIDI0LjUwMDcgMjkuMDY3MSAyNC4zOTgyIDI5LjYwMDMgMjQuMzk4MkMzMS4wODE0IDI0LjM5ODkgMzIuNDQ5OSAyNS4xODkyIDMzLjE5MTIgMjYuNDcxNEMzNC43ODk2IDI5LjIzNzMgMzIuNzk0OCAzMi42OTY1IDI5LjYwMDMgMzIuNjk4QzI5LjM2ODEgMzIuNjk4IDI5LjE1MzkgMzIuNTczOSAyOS4wMzc4IDMyLjM3MjhDMjguNzg3NyAzMS45Mzk1IDI5LjEgMzEuMzk4MiAyOS42MDAzIDMxLjM5ODJDMzEuMjA2NyAzMS4zOTg4IDMyLjQ5NjEgMzAuMDcyMyAzMi40NSAyOC40NjY2QzMyLjM4NjcgMjYuMjczNiAyOS45NzM3IDI0Ljk3MTYgMjguMTA2MiAyNi4xMjI4QzI3LjgwMDggMjYuMzEwOCAyNy40MDAxIDI2LjIxNSAyNy4yMTE3IDI1LjkwOTlIMjcuMjEyNkwyNC4wODE4IDIwLjgyMkwyNC4wNjcxIDIwLjc5ODZIMjQuMDAwN0MyMy41MzIzIDIwLjc5ODYgMjMuMDk3MSAyMC41NTU4IDIyLjg1MTMgMjAuMTU3QzIyLjMwNjIgMTkuMjcyMyAyMi45MjMgMTguMTI5MyAyMy45NjE3IDE4LjA5OTRaTTE1LjA4MDggMjYuMDU3NEMxNS4zODE0IDI1LjY1NzIgMTYuMDAyNiAyNS43MzI4IDE2LjE5OSAyNi4xOTMxQzE2LjI3ODcgMjYuMzgwMSAxNi4yNjU3IDI2LjU5MTkgMTYuMTY3NyAyNi43NjY0TDE2LjEyMDggMjYuODM4NkMxNS43NDkxIDI3LjMzMSAxNS41NDg1IDI3LjkzMTYgMTUuNTUwNSAyOC41NDg2QzE1LjU1MDcgMzAuNzQyMyAxNy45MjYxIDMyLjExMzIgMTkuODI1OSAzMS4wMTY0QzIwLjcwNzUgMzAuNTA3MyAyMS4yNTA2IDI5LjU2NjYgMjEuMjUwNyAyOC41NDg2QzIxLjI1MDcgMjguMTg5NyAyMS41NDE0IDI3Ljg5ODQgMjEuOTAwMSAyNy44OTgySDI4LjQxNzdMMjguNDMyNCAyNy44NzM4QzI4Ljk1MiAyNi45NzM4IDMwLjI1MTYgMjYuOTczOCAzMC43NzEyIDI3Ljg3MzhDMzEuMjkwMyAyOC43NzM3IDMwLjY0MDMgMjkuODk4MiAyOS42MDEzIDI5Ljg5ODJDMjkuMTE5MiAyOS44OTgxIDI4LjY3MzUgMjkuNjQwOSAyOC40MzI0IDI5LjIyMzRMMjguNDE3NyAyOS4xOThIMjIuNDk4OEwyMi40OTE5IDI5LjI0QzIxLjk1OTcgMzIuMzg5NyAxOC4yMTc0IDMzLjc4MjIgMTUuNzU1NiAzMS43NDY4QzE0LjA0ODEgMzAuMzM0NyAxMy43NTA4IDI3LjgyOTYgMTUuMDgwOCAyNi4wNTc0Wk0yMC42NjA5IDE2Ljk5QzIyLjU1NTQgMTQuNDE3OSAyNi41MjQxIDE0Ljg2MTIgMjcuODA0NCAxNy43ODc4QzI3Ljg5NzMgMTguMDAwOCAyNy44NjkxIDE4LjI0NzQgMjcuNzMxMiAxOC40MzQzQzI3LjQzNCAxOC44MzY0IDI2LjgxMzQgMTguNzY2NCAyNi42MTMgMTguMzA4M1YxOC4zMDc0QzI1Ljk0NTQgMTYuNzc5MyAyNC4xMTM0IDE2LjE0ODUgMjIuNjQ2MiAxNi45NDEyQzIwLjcxNjIgMTcuOTg0IDIwLjYzODYgMjAuNzI1NiAyMi41MDY2IDIxLjg3NTdDMjIuODEyIDIyLjA2MzkgMjIuOTA3MyAyMi40NjM3IDIyLjcxOTUgMjIuNzY5M0wxOS41ODk2IDI3Ljg1NjJMMTkuNTc1IDI3Ljg4MDZMMTkuNTg4NiAyNy45MDZDMjAuMDc1IDI4LjgwNTUgMTkuNDIzNiAyOS44OTgzIDE4LjQwMTEgMjkuODk4MkMxNy45MTk2IDI5Ljg5NzggMTcuNDc0MyAyOS42NDEyIDE3LjIzMzIgMjkuMjI0NEMxNi43MTI5IDI4LjMyNDggMTcuMzYxOSAyNy4xOTg4IDE4LjQwMTEgMjcuMTk4SDE4LjQ2NzVMMTguNDgyMiAyNy4xNzQ2TDIxLjI3NjEgMjIuNjM1NUwyMS4yOTg2IDIyLjU5OTRMMjEuMjY2NCAyMi41NzFDMTkuNjQ2MSAyMS4xNTAxIDE5LjM4MjkgMTguNzI1MiAyMC42NjA5IDE2Ljk5WiIgZmlsbD0id2hpdGUiIHN0cm9rZT0iIzIxQTBCRCIgc3Ryb2tlLXdpZHRoPSIwLjEiLz4KPC9zdmc+Cg=="
 	case "schedule":
 		return "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iOCIgZmlsbD0iI0UzQTQxQiIvPgo8cmVjdCB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEyIDEyKSIgZmlsbD0iI0UzQTQxQiIvPgo8Y2lyY2xlIGN4PSIyNCIgY3k9IjI0IiByPSI4Ljc1IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjEuNSIvPgo8cGF0aCBkPSJNMjguNSAyNEgyNC4yNUMyNC4xMTE5IDI0IDI0IDIzLjg4ODEgMjQgMjMuNzVWMjAuNSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4="
+	case "user-input", "user input", "userinput", "user_input":
+		return "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iOCIgZmlsbD0iIzg2MzZCNCIvPgo8cGF0aCBkPSJNMjEuMjgyMiAxNi43VjE0LjdNMTYuNzgyMiAyMS4ySDE0Ljc4MjJNMTcuOTc5MSAyNC41MDMyTDE2LjU2NDkgMjUuOTE3NE0yNS45OTk3IDE2LjQ4MjRMMjQuNTg1NCAxNy44OTY2TTE2LjU2NDggMTYuNDgyNUwxNy45NzkgMTcuODk2N00yNS4yODk4IDMyLjM1MDRMMjYuNzc3NyAyOC40NTc4QzI2Ljk3OTYgMjcuOTI5NSAyNy40NDggMjcuNTQ5IDI4LjAwNjUgMjcuNDU5N0wzMS42MjY0IDI2Ljg4MDVDMzMuMTkwOSAyNi42MzAyIDMzLjQ1ODUgMjQuNDkxNiAzMi4wMDQgMjMuODYzNEwyMi4zNDUyIDE5LjY5MjdDMjEuMTc1MSAxOS4xODc0IDE5LjkxNzkgMjAuMjAxMyAyMC4xNjQgMjEuNDUxOUwyMi4yNTczIDMyLjA5MDhDMjIuNTY0MyAzMy42NTEgMjQuNzIyMSAzMy44MzU4IDI1LjI4OTggMzIuMzUwNFoiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMS4yNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+Cjwvc3ZnPgo="
+	case "subflow", "shuffle workflow", "shuffle_workflow", "shuffle-workflow":
+		return "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iOCIgZmlsbD0idXJsKCNwYWludDBfbGluZWFyXzMxN181OTcpIi8+CjxwYXRoIGQ9Ik0xNS45OTk4IDE2LjAwMTVMMTUuOTk5OCAyNS43NDA2TDE5LjIwMDEgMjUuNzQwNkwxOS4yMDAxIDE5LjI0ODVMMzEuOTk5OCAxOS4yNDg1TDMxLjk5OTggMTYuMDAxNUwxNS45OTk4IDE2LjAwMTVaIiBmaWxsPSJ3aGl0ZSIvPgo8cGF0aCBkPSJNMjguNzk5NCAyMi4yNjE3TDI4Ljc5OTQgMjguNzUzOEwxNS45OTk4IDI4Ljc1MzhMMTUuOTk5OCAzMi4wMDA4TDMxLjk5OTggMzIuMDAwOEwzMS45OTk4IDIyLjI2MTdMMjguNzk5NCAyMi4yNjE3WiIgZmlsbD0id2hpdGUiLz4KPHBhdGggZD0iTTI1LjczOSAyMi4yNjE3TDIyLjI2MDcgMjIuMjYxN0wyMi4yNjA3IDI1Ljc0TDI1LjczOSAyNS43NEwyNS43MzkgMjIuMjYxN1oiIGZpbGw9IndoaXRlIi8+CjxkZWZzPgo8bGluZWFyR3JhZGllbnQgaWQ9InBhaW50MF9saW5lYXJfMzE3XzU5NyIgeDE9Ii03LjcwNzc2ZS0wOSIgeTE9IjI3LjA3NjkiIHgyPSI0OC4wMDE0IiB5Mj0iMjYuOTM3NyIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgo8c3RvcCBzdG9wLWNvbG9yPSIjRkY4NDQ0Ii8+CjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI0YyNjQzQiIvPgo8L2xpbmVhckdyYWRpZW50Pgo8L2RlZnM+Cjwvc3ZnPgo="
 	default:
 		return ""
 	}
@@ -3025,44 +4358,60 @@ func getVulnerabilityComparison() string {
 func getIocParsingScript() string {
 	return `import json
 import re
-import threading 
+import os
+import requests
+import threading
 
-input_data = '''$exec'''
-if len(input_data) < 4:
-  print({
-    "success": False,
-    "reason": "No input data"
-  })
-  exit()
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
 
-try:
-  all_items = json.loads(r'''$ioc_listing''')
-except Exception as e:
-  print(json.dumps({
-    "success": False,
-    "reason": "Bad input data from threat feed listing. Are the ioc patterns correct?"
-  }))
-  exit()
+input_raw = r"""$exec"""
+input_data = ""
+if not input_raw.startswith("$") and len(input_raw) > 0:
+    input_data = input_raw
+else:
+    print(json.dumps({
+        "success": False,
+        "reason": "No input data"
+    }))
+    exit()
+
+all_items = safe_parse_json(r"""$ioc_listing""", [])
+if isinstance(all_items, dict) and "data" in all_items:
+    all_items = all_items["data"]
+if not isinstance(all_items, list):
+    all_items = []
+
+if not all_items:
+    print(json.dumps({
+        "success": False,
+        "reason": "Bad input data from threat feed listing. Are the ioc patterns correct?"
+    }))
+    exit()
 
 def sanitize_regex(pattern):
-    """
-    Clean up a regex pattern to find matches anywhere in text.
-    
-    Removes anchors (^, $) that force start/end matching.
-    Returns the core pattern for use with findall/finditer.
-    """
-
     pattern = str(pattern)
-    # Remove leading ^ (start anchor)
-    if pattern.startswith('^'):
+    if pattern.startswith("^"):
         pattern = pattern[1:]
-    
-    # Remove trailing $ (end anchor)
-    if pattern.endswith('$'):
+    if pattern.endswith("$"):
         pattern = pattern[:-1]
-    
     return pattern
-
 
 def findall_with_limit(pattern, text, max_matches=None, timeout_seconds=5):
     results = []
@@ -3082,384 +4431,398 @@ def findall_with_limit(pattern, text, max_matches=None, timeout_seconds=5):
     thread.join(timeout=timeout_seconds)
     
     if thread.is_alive():
-        # Thread still running — timeout occurred
-        return results  # or raise TimeoutError
+        return results
     
     if exception[0]:
         return results
 
     return results
 
-# These are the regex items from the datastore
 found_items = []
 found_types = {}
 for ioc_object in all_items:
-  try:
-    ioc_object = json.loads(ioc_object)
-  except:
-    pass
-  
-  try:
-    if "enabled" not in ioc_object or not ioc_object["enabled"]:
-      continue
-  except:
-    continue
-  
-  if "regex" not in ioc_object:
-    continue
-  
-  cleaned_regex = sanitize_regex(ioc_object["regex"])
-  matches = findall_with_limit(cleaned_regex, input_data, max_matches=100, timeout_seconds=2)
-  if not matches:
-    continue
-  
-  found = []
-  for match in matches:
-    if match in found:
-      continue
-
-    if "shuffler.io" in match:
-      continue
-
-    # Check if we match ip while in domain. Very basic check.
-    if ioc_object["name"] == "domain" and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", match):
-      continue
+    if isinstance(ioc_object, str):
+        ioc_object = safe_parse_json(ioc_object, {})
+    if not isinstance(ioc_object, dict):
+        continue
     
-    found.append(match)
-    found_items.append({
-      "value": match,
-      "type": ioc_object["name"],
-    })
-	    
-    if ioc_object["name"] not in found_types:
-      found_types[ioc_object["name"]] = 1
-    else:
-      found_types[ioc_object["name"]] += 1
+    if not ioc_object.get("enabled"):
+        continue
+    
+    raw_regex = ioc_object.get("regex")
+    if not raw_regex:
+        continue
+    
+    ioc_name = ioc_object.get("name") or "unknown"
+    cleaned_regex = sanitize_regex(raw_regex)
+    matches = findall_with_limit(cleaned_regex, input_data, max_matches=100, timeout_seconds=2)
+    if not matches:
+        continue
+    
+    found = []
+    for match in matches:
+        if match in found:
+            continue
+        if "shuffler.io" in match:
+            continue
+        if ioc_name == "domain" and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", match):
+            continue
+        
+        found.append(match)
+        found_items.append({
+            "value": match,
+            "type": ioc_name,
+        })
+        
+        found_types[ioc_name] = found_types.get(ioc_name, 0) + 1
+
+target_key = r"""$exec.shuffle_datastore.key"""
+target_cat = r"""$exec.shuffle_datastore.category"""
+target_org = r"""$exec.shuffle_datastore.org_id"""
+
+if target_key.startswith("$"):
+    target_key = ""
+if target_cat.startswith("$"):
+    target_cat = ""
+if target_org.startswith("$"):
+    target_org = ""
+
+if not found_items or not target_key or not target_cat:
+    print(json.dumps({
+        "success": True,
+        "reason": "No new indicators to upload or missing target key/category",
+        "types": found_types,
+        "count": 0,
+    }))
+    exit()
 
 full_body = [{
-  "key": "$exec.shuffle_datastore.key",
-  "category": "$exec.shuffle_datastore.category",
-  "org_id": "$exec.shuffle_datastore.org_id",
-  "enrichments": found_items,
-}]   
+    "key": target_key,
+    "category": target_cat,
+    "org_id": target_org,
+    "enrichments": found_items,
+}]
 
-upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
-parsed_headers = {}
-if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
-  parsed_headers["Authorization"] = f"Bearer {os.environ.get('SHUFFLE_AUTHORIZATION', '')}"
+upload_url = ""
+if hasattr(self, "base_url") and self.base_url:
+    upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
 else:
-  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+    upload_url = "https://shuffler.io/api/v2/datastore?bulk=true"
+
+parsed_headers = {}
+auth_token = os.environ.get("SHUFFLE_AUTHORIZATION", "")
+if auth_token:
+    parsed_headers["Authorization"] = f"Bearer {auth_token}"
+elif hasattr(self, "authorization") and hasattr(self, "current_execution_id"):
+    upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}"
 
 try:
-  ret = requests.post(upload_url, json=full_body, headers=parsed_headers)
-  if ret.status_code == 200:
-    print(json.dumps({
-      "success": True, 
-      "reason": "Uploaded '$exec.shuffle_datastore.key' in '$exec.shuffle_datastore.category' with %d indicators" % (len(found_items)),
-	  "types": found_types,
-    }))
-  else:
-    print(json.dumps({
-      "success": False,
-      "reason": f"Failed request with status %d and body %s" % (ret.status_code, ret.text)
-    }))
+    ret = requests.post(upload_url, json=full_body, headers=parsed_headers, timeout=15)
+    if ret.status_code == 200:
+        print(json.dumps({
+            "success": True, 
+            "reason": "Uploaded indicators to datastore with %d indicators" % (len(found_items)),
+            "types": found_types,
+            "count": len(found_items),
+        }))
+    else:
+        print(json.dumps({
+            "success": False,
+            "reason": "Failed request with status %d: %s" % (ret.status_code, ret.text[:200]),
+            "count": len(found_items),
+        }))
 except Exception as e:
-  print(json.dumps({
-    "success": False,
-    "reason": f"Failed request: {e}"
-  }))`
+    print(json.dumps({
+        "success": False,
+        "reason": "Failed request: %s" % e,
+        "count": len(found_items),
+    }))`
 }
 
 // For scheduled runs to ingest data
 func getIocIngestionScript(orgId string) string {
-	timestampFormat := "%Y-%m-%d %H:%M:%S"
-	timestampFormat2 := "%Y-%m-%dT%H:%M:%SZ"
-
-	return fmt.Sprintf(`import os
+	return `import os
 import re
 import json
 import uuid
 import time
 import requests
 
-try:
-  all_urls = json.loads(r'''$threat_feed_listing''')
-except Exception as e:
-  print({
-    "success": False,
-    "reason": "Bad data from threat feed listing"
-  })
-  exit()
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+all_urls = safe_parse_json(r'''$threat_feed_listing''', [])
+if isinstance(all_urls, dict) and "data" in all_urls:
+    all_urls = all_urls["data"]
+if not isinstance(all_urls, list):
+    all_urls = []
 
 if len(all_urls) == 0:
-  print({
-    "success": False,
-    "reason": "No threat feeds configured"
-  })
-  exit()
+    print(json.dumps({
+        "success": False,
+        "reason": "No threat feeds configured"
+    }))
+    exit()
 
 input_data = []
 for key in all_urls:
-  try:
-    key = json.loads(key)
-  except:
-    pass
+    if isinstance(key, str):
+        key = safe_parse_json(key, {})
+    if not isinstance(key, dict):
+        continue
 
-  if key["enabled"] != True:
-    continue
+    if not key.get("enabled"):
+        continue
 
-  parsed_headers = {}
+    parsed_headers = {}
+    raw_headers = key.get("headers") or ""
+    if isinstance(raw_headers, str) and len(raw_headers) > 0:
+        headers_list = raw_headers.split(";")
+        for header in headers_list:
+            if "=" in header:
+                header_parts = header.split("=", 1)
+                parsed_headers[header_parts[0].strip()] = header_parts[1].strip()
+            else:
+                parsed_headers[header.strip()] = ""
 
-  if "headers" in key and len(key["headers"]) > 0:
-    # Split with = and newlines
-    headers = headers.split(";")
-    for header in headers:
-      if "=" in header:
-        header_parts = header.split("=")
-        parsed_headers[header_parts[0].strip()] = header_parts[1].strip()
-      else:
-        parsed_headers[header.strip()] = ""
+    feed_url = key.get("url")
+    if not feed_url:
+        continue
 
-  try:
-    resp = requests.get(key["url"], headers=parsed_headers, verify=False, timeout=3)
-    content = {
-      "status": resp.status_code,
-      "body": resp.text,
-      "url": key["url"],
-    }
+    try:
+        resp = requests.get(feed_url, headers=parsed_headers, verify=False, timeout=15)
+        content = {
+            "status": resp.status_code,
+            "body": resp.text,
+            "url": feed_url,
+        }
+        if "type" in key:
+            content["type"] = key["type"]
+        input_data.append(content)
+    except Exception:
+        pass
 
-    if "type" in key:
-      content["type"] = key["type"]
+ioc_regexes = safe_parse_json(r'''$ioc_listing''', [])
+if isinstance(ioc_regexes, dict) and "data" in ioc_regexes:
+    ioc_regexes = ioc_regexes["data"]
+if not isinstance(ioc_regexes, list):
+    ioc_regexes = []
 
-    input_data.append(content)
-
-  except Exception as e:
-    pass
-	
-try:
-  ioc_regexes = json.loads(r'''$ioc_listing''')
-except Exception as e:
-  print(json.dumps({
-    "success": False,
-    "reason": "Bad input data from ioc listing. Are the ioc patterns correct?"
-  }))
-  exit()
+if not ioc_regexes:
+    print(json.dumps({
+        "success": False,
+        "reason": "Bad input data from ioc listing. Are the ioc patterns correct?"
+    }))
+    exit()
 
 def sanitize_regex(pattern):
-  """
-  Clean up a regex pattern to find matches anywhere in text.
-  
-  Removes anchors (^, $) that force start/end matching.
-  Returns the core pattern for use with findall/finditer.
-  """
-
-  pattern = str(pattern)
-
-  # Remove leading ^ (start anchor)
-  if pattern.startswith('^'):
-  	pattern = pattern[1:]
-  
-  # Remove trailing $ (end anchor)
-  if pattern.endswith('$'):
-  	pattern = pattern[:-1]
-  
-  return pattern
+    pattern = str(pattern)
+    if pattern.startswith("^"):
+        pattern = pattern[1:]
+    if pattern.endswith("$"):
+        pattern = pattern[:-1]
+    return pattern
 
 regexsearch = {}
-found_items = []
 for ioc_object in ioc_regexes:
-  try:
-    ioc_object = json.loads(ioc_object)
-  except:
-    pass
-  
-  try:
-    if "enabled" not in ioc_object or not ioc_object["enabled"]:
-      continue
-  except:
-    continue
-  
-  if "regex" not in ioc_object:
-    continue
+    if isinstance(ioc_object, str):
+        ioc_object = safe_parse_json(ioc_object, {})
+    if not isinstance(ioc_object, dict):
+        continue
+    
+    if not ioc_object.get("enabled"):
+        continue
+    
+    raw_regex = ioc_object.get("regex")
+    if not raw_regex:
+        continue
 
-  regexsearch[ioc_object["name"]] = sanitize_regex(ioc_object["regex"])
+    ioc_name = ioc_object.get("name") or "unknown"
+    regexsearch[ioc_name] = sanitize_regex(raw_regex)
 
 if not regexsearch:
-  print(json.dumps({
-	"success": False,
-	"reason": "No valid regexes found in ioc listing. Are the ioc patterns correct?"
-  }))
-  exit()
+    print(json.dumps({
+        "success": False,
+        "reason": "No valid regexes found in ioc listing. Are the ioc patterns correct?"
+    }))
+    exit()
 
 all_items = {}
-
 if not isinstance(input_data, list):
-  input_data = [input_data]
+    input_data = [input_data]
 
-
-## Assuming
 max_items = 1000
 threat_timeout = 90 # days
+
 for content in input_data:
-  iocs = content["body"]
+    iocs = content.get("body") or ""
+    if not iocs:
+        continue
 
-  found_type = ""
-  if "type" in content and len(content["type"]) > 0:
-    found_type = content["type"].lower()
-    found = False
-    for key, value in regexsearch.items():
-      if key == found_type:
-        found = True
-        break
-
-    if not found:
-      continue
-
-  if not found_type:
-    searchspace = iocs[0:1000]
-    for key, value in regexsearch.items():
-      value = sanitize_regex(value)
-      match = re.search(value, searchspace)
-      if match:
-        found_type = key
-        break
-
-  if len(found_type) == 0:
-    continue
-
-  appended_items = []
-  discovered_split_index = -1
-  datestamp_index = -1
-
-  cnt = 0
-  for line in iocs.split("\n"):
-    if len(line) < 3:
-      continue
-
-    if line.startswith("#"):
-      continue
-
-    if cnt > max_items:
-      continue
-
-    # Remove ANYTHING after # on the line
-    line = line.split("#")[0].strip()
-
-    linesplit = line.split(",")
-    if discovered_split_index >= 0:
-      if datestamp_index >= 0:
-        # Check if the timestamp is more than 90 days ago (threat_timeout)
-        try:
-          timestamp = time.strptime(linesplit[datestamp_index], "%s")
-          current_time = time.time()
-          if (current_time - time.mktime(timestamp)) / (24 * 3600) > threat_timeout:
+    found_type = ""
+    if "type" in content and len(content["type"]) > 0:
+        ctype = content["type"].lower()
+        for k in regexsearch.keys():
+            if k == ctype:
+                found_type = k
+                break
+        if not found_type:
             continue
-        except ValueError:
-          continue
 
-      appended_items.append(linesplit[discovered_split_index])
+    if not found_type:
+        searchspace = iocs[0:1000]
+        for key, value in regexsearch.items():
+            match = re.search(value, searchspace)
+            if match:
+                found_type = key
+                break
 
-    else:
-      # Discovering pattern
-      cnt += 1
-      linesplit = line.split(",")
-      if len(linesplit) == 1:
-        discovered_split_index = 0
-      else:
-        itemcnt = 0
+    if len(found_type) == 0:
+        continue
 
-        for item in linesplit:
-          # Check if item is a timestamp
-          import time
-          try:
-            time.strptime(item, "%s")
-            datestamp_index = itemcnt
+    appended_items = []
+    discovered_split_index = -1
+    datestamp_index = -1
 
-            # Check if the timestamp is more than 90 days ago. If so, break and continue
-          except ValueError:
-            pass
+    cnt = 0
+    for line in iocs.split("\n"):
+        if len(line) < 3:
+            continue
 
-          match = re.search(regexsearch[found_type], item)
-          if match:
-            discovered_split_index = itemcnt
-            break
+        if line.startswith("#"):
+            continue
 
-          itemcnt += 1
+        if cnt > max_items:
+            continue
+
+        line = line.split("#")[0].strip()
+        linesplit = line.split(",")
 
         if discovered_split_index >= 0:
-          appended_items.append(linesplit[discovered_split_index])
+            if datestamp_index >= 0 and datestamp_index < len(linesplit):
+                try:
+                    timestamp = time.strptime(linesplit[datestamp_index], "%Y-%m-%d %H:%M:%S")
+                    current_time = time.time()
+                    if (current_time - time.mktime(timestamp)) / (24 * 3600) > threat_timeout:
+                        continue
+                except ValueError:
+                    pass
 
-  # Parsing STIX
-  for item in appended_items:
-    key = item.strip()
+            if discovered_split_index < len(linesplit):
+                appended_items.append(linesplit[discovered_split_index])
 
-    if key in all_items:
-      if content["url"] not in all_items[found_type][key]["urls"]:
-        all_items[found_type][key] = all_items[found_type][key]["urls"].append(content["url"])
-    else:
+        else:
+            cnt += 1
+            if len(linesplit) == 1:
+                discovered_split_index = 0
+            else:
+                itemcnt = 0
+                for item in linesplit:
+                    try:
+                        time.strptime(item, "%Y-%m-%d %H:%M:%S")
+                        datestamp_index = itemcnt
+                    except ValueError:
+                        pass
 
-      # Silly workaround to ensure we got a good UUID
-      # But keeping it deterministic for now
-      static_namespace = "c59d2471-df00-48ae-bc18-dd76e84a60df"
-      stix_id = f"indicator--{uuid.uuid5(uuid.UUID(static_namespace), key)}"
+                    match = re.search(regexsearch[found_type], item)
+                    if match:
+                        discovered_split_index = itemcnt
+                        break
 
-      stix_pattern = ""
-      if found_type == "md5":
-        stix_pattern = f"[file:hashes.MD5 = '{key}']" 
-      elif found_type == "sha1":
-        stix_pattern = f"[file:hashes.SHA1 = '{key}']" 
-      elif found_type == "sha256":
-        stix_pattern = f"[file:hashes.SHA256 = '{key}']" 
-      elif found_type == "ip" or found_type == "ipv4":
-        stix_pattern = f"[ipv4-addr:value = '{key}']" 
-      elif found_type == "ipv6": 
-        stix_pattern = f"[ipv6-addr:value = '{key}']" 
-      elif found_type == "domain":
-        stix_pattern = f"[domain-name:value = '{key}']" 
-      else:
-        stix_pattern = f"[{found_type}:value = '{key}']"
+                    itemcnt += 1
 
-      if not found_type in all_items:
-        all_items[found_type] = {}
+                if discovered_split_index >= 0 and discovered_split_index < len(linesplit):
+                    appended_items.append(linesplit[discovered_split_index])
 
-      all_items[found_type][key] = {
-        "type": "indicator",
-        "spec_version": "2.1",
-        "id": stix_id,
-        "pattern": stix_pattern,
-        "pattern_type": "stix",
+    for item in appended_items:
+        key = item.strip()
+        if not key:
+            continue
 
-        "created": time.strftime("%s", time.gmtime()),
-        "modified": time.strftime("%s", time.gmtime()),
+        if found_type in all_items and key in all_items[found_type]:
+            if content.get("url") and content["url"] not in all_items[found_type][key].get("urls", []):
+                all_items[found_type][key].setdefault("urls", []).append(content["url"])
+        else:
+            static_namespace = "c59d2471-df00-48ae-bc18-dd76e84a60df"
+            stix_id = f"indicator--{uuid.uuid5(uuid.UUID(static_namespace), key)}"
 
-		"x_raw_pattern": key,
-        "urls": [content["url"]],
-      }
+            stix_pattern = ""
+            if found_type == "md5":
+                stix_pattern = f"[file:hashes.MD5 = '{key}']" 
+            elif found_type == "sha1":
+                stix_pattern = f"[file:hashes.SHA1 = '{key}']" 
+            elif found_type == "sha256":
+                stix_pattern = f"[file:hashes.SHA256 = '{key}']" 
+            elif found_type in ("ip", "ipv4"):
+                stix_pattern = f"[ipv4-addr:value = '{key}']" 
+            elif found_type == "ipv6": 
+                stix_pattern = f"[ipv6-addr:value = '{key}']" 
+            elif found_type == "domain":
+                stix_pattern = f"[domain-name:value = '{key}']" 
+            else:
+                stix_pattern = f"[{found_type}:value = '{key}']"
 
+            if found_type not in all_items:
+                all_items[found_type] = {}
 
-upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
-parsed_headers = {}
-if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
-  parsed_headers["Authorization"] = f"Bearer {os.environ.get('SHUFFLE_AUTHORIZATION', '')}"
+            all_items[found_type][key] = {
+                "type": "indicator",
+                "spec_version": "2.1",
+                "id": stix_id,
+                "pattern": stix_pattern,
+                "pattern_type": "stix",
+                "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "modified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "x_raw_pattern": key,
+                "urls": [content["url"]],
+            }
+
+upload_url = ""
+if hasattr(self, "base_url") and self.base_url:
+    upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
 else:
-  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+    upload_url = "https://shuffler.io/api/v2/datastore?bulk=true"
+
+parsed_headers = {}
+auth_token = os.environ.get("SHUFFLE_AUTHORIZATION", "")
+if auth_token:
+    parsed_headers["Authorization"] = f"Bearer {auth_token}"
+elif hasattr(self, "authorization") and hasattr(self, "current_execution_id"):
+    upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}"
 
 uploaded = {
-	"sources": len(input_data),
+    "sources": len(input_data),
 }
 for k, v in all_items.items():
     new_list = []
-
     cnt = 0
     for subkey, subval in v.items():
         subval["external_references"] = []
-        for url in subval["urls"]:
+        for url in subval.get("urls", []):
             subval["external_references"].append({
                 "source_name": "threatfeed",
                 "url": url,
             })
 
-        del subval["urls"]
+        if "urls" in subval:
+            del subval["urls"]
+
         new_list.append({
             "key": subkey,
             "category": f"ioc_{k}", 
@@ -3471,14 +4834,15 @@ for k, v in all_items.items():
             break
 
     if len(new_list) > 0:
-        ret = requests.post(upload_url, json=new_list, headers=parsed_headers)
-		#print(ret.text)
-        #print(ret.status_code)
+        try:
+            requests.post(upload_url, json=new_list, headers=parsed_headers, timeout=15)
+        except Exception:
+            pass
 
     uploaded["uploaded_" + k] = len(new_list)
 
 print(json.dumps(uploaded))
-	`, timestampFormat, timestampFormat, timestampFormat2, timestampFormat2)
+`
 }
 
 func GetHealthAppConfig() string {
@@ -3813,7 +5177,7 @@ func GetUsecaseData() string {
     "step": 1,
     "list": [
       {
-        "name": "Phishing",
+        "name": "Email reports",
         "type": "Email",
         "destination": "Cases",
         "running": false,
@@ -3930,7 +5294,7 @@ func GetUsecaseData() string {
         "type": "Assets",
         "destination": "Cases",
         "running": false,
-        "disabled": true,
+        "disabled": false,
         "id": "vulnerability_ingestion_1",
         "source_id": "asset_management",
         "target_id": "case_management",
@@ -3941,12 +5305,219 @@ func GetUsecaseData() string {
         ],
         "description": "Ingest vulnerability findings (CVEs, misconfigurations, missing patches) from your scanners into a unified inventory so they can be correlated with assets and incidents.",
         "agentic_description": "An agent normalizes scanner output across vendors, deduplicates findings per asset, enriches each CVE with exploitability and threat intel, and keeps the vulnerability inventory continuously up to date.",
+        "automation_label": "Ingest Vulnerabilities",
+        "automation_category": "vulnerabilities",
         "automation_area": "automatic_ingestion",
         "custom_action": {
           "label": "Configure Vulnerabilities",
           "href": "/vulnerabilities",
           "description": "Open the vulnerability inventory to ingest CVEs from your scanners."
         }
+      },
+      {
+        "name": "IOC feeds",
+        "type": "Threat Intel",
+        "destination": "Cases",
+        "running": true,
+        "disabled": false,
+        "id": "threat_intel_ingest_1",
+        "source_id": "threat_intel",
+        "target_id": "case_management",
+        "tags": [
+          "Ingest",
+          "Threat Intel",
+          "Feeds",
+          "IOCs"
+        ],
+        "description": "Ingest indicator of compromise (IOC) feeds from open-source intelligence (OSINT), commercial threat feeds, and ISACs into Shuffle to detect malicious IPs, domains, hashes, and URLs.",
+        "agentic_description": "An agent continuously ingests and deduplicates threat feeds, normalizes indicators, tracks source confidence, and stages them for real-time incident matching.",
+        "automation_label": "Enable Threat feeds",
+        "automation_category": "cases",
+        "automation_area": "threat_intel",
+        "custom_action": {
+          "label": "Threat Feeds",
+          "href": "/incidents/threat-feeds",
+          "description": "IOC feeds and Threat feeds refer to the same thing — manage your configured threat feeds and IOC sources."
+        }
+      }
+    ]
+  },
+  {
+    "name": "Context & Correlation",
+    "description": "Enrich alerts with intelligence, assets, and identity data.",
+    "color": "#1AC4E6",
+    "phase": "correlation",
+    "step": 2,
+    "list": [
+      {
+        "name": "Telemetry",
+        "type": "EDR",
+        "destination": "SIEM",
+        "running": false,
+        "disabled": true,
+        "id": "edr_siem_1",
+        "source_id": "edr",
+        "target_id": "siem",
+        "tags": [
+          "Logs",
+          "Detection",
+          "Correlation"
+        ],
+        "description": "Endpoint telemetry (process trees, file hashes, registry changes) enriches SIEM detections with host-level context, enabling accurate correlation rules.",
+        "agentic_description": "An agent cross-references endpoint telemetry with known attack patterns, surfaces hidden process chains, and annotates SIEM events with host risk scores before they reach an analyst.",
+        "automation_area": "correlation",
+        "manual_verification": true
+      },
+      {
+        "name": "Auth logs",
+        "type": "IAM",
+        "destination": "SIEM",
+        "running": false,
+        "disabled": true,
+        "id": "iam_siem_1",
+        "source_id": "iam",
+        "target_id": "siem",
+        "tags": [
+          "Logs",
+          "Detection",
+          "Correlation"
+        ],
+        "description": "Authentication and authorization logs reveal credential abuse, impossible travel, privilege escalation, and brute-force attempts across the identity layer.",
+        "agentic_description": "An agent detects impossible travel, credential stuffing patterns, and privilege escalation attempts in auth logs, then creates SIEM alerts with user risk context and recommended actions.",
+        "automation_area": "correlation",
+        "manual_verification": true
+      },
+      {
+        "name": "Enrichment",
+        "type": "Threat Intel",
+        "destination": "Cases",
+        "running": true,
+        "disabled": false,
+        "id": "threat_intel_case_management_1",
+        "source_id": "threat_intel",
+        "target_id": "case_management",
+        "tags": [
+          "Intel",
+          "Correlation",
+          "Context"
+        ],
+        "description": "Threat intelligence enriches cases with reputation scores, malware families, threat actor attribution, and related IOCs — giving analysts immediate context.",
+        "agentic_description": "An agent autonomously enriches all observables in a case, maps findings to MITRE ATT&CK, identifies related campaigns, and updates case severity and recommended playbook based on findings.",
+        "automation_label": "Enable Threat feeds",
+        "automation_category": "cases",
+        "automation_area": "threat_intel"
+      },
+      {
+        "name": "Asset context",
+        "type": "Assets",
+        "destination": "Cases",
+        "running": false,
+        "disabled": true,
+        "id": "asset_management_case_management_1",
+        "source_id": "asset_management",
+        "target_id": "case_management",
+        "tags": [
+          "Context",
+          "Correlation"
+        ],
+        "description": "Asset context (owner, criticality, business unit, OS) helps analysts prioritize cases and understand blast radius during an incident.",
+        "agentic_description": "An agent automatically fetches asset owner, business criticality, and known vulnerabilities for every observable in a case, recalculates impact score, and suggests prioritization.",
+        "automation_area": "correlation"
+      },
+      {
+        "name": "Vulnerability Correlation",
+        "type": "Assets",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "asset_management_case_management_vuln_1",
+        "source_id": "asset_management",
+        "target_id": "case_management",
+        "tags": [
+          "Context",
+          "Correlation",
+          "Vulnerability"
+        ],
+        "description": "Correlate known vulnerabilities (CVEs, misconfigurations, missing patches) on affected assets with active incidents — surfacing exploitable weaknesses that elevate risk and guide containment priorities.",
+        "agentic_description": "An agent matches observables and affected hosts in a case against the vulnerability inventory, identifies exploitable CVEs aligned with the attack technique, recalculates incident severity, and recommends remediation or compensating controls.",
+        "automation_label": "Vulnerability Correlation",
+        "automation_category": "cases",
+        "automation_area": "correlation"
+      },
+      {
+        "name": "Phishing IOCs",
+        "type": "Email",
+        "destination": "Threat Intel",
+        "running": false,
+        "disabled": true,
+        "id": "email_threat_intel_1",
+        "source_id": "email",
+        "target_id": "threat_intel",
+        "tags": [
+          "Intel",
+          "Correlation",
+          "Logs"
+        ],
+        "description": "Extracting IOCs from phishing emails (sender domains, URLs, attachments) and feeding them into threat intel platforms helps detect broader campaigns.",
+        "agentic_description": "An agent detonates suspicious attachments and URLs in a sandbox, extracts all IOCs, correlates with known campaigns, and auto-publishes confirmed indicators to the threat intel platform.",
+        "automation_area": "threat_intel"
+      },
+      {
+        "name": "Identity events",
+        "type": "Cloud",
+        "destination": "IAM",
+        "running": false,
+        "disabled": true,
+        "id": "cloud_iam_1",
+        "source_id": "cloud",
+        "target_id": "iam",
+        "tags": [
+          "Logs",
+          "Correlation",
+          "Detection"
+        ],
+        "description": "Cloud identity events (role changes, permission grants, federation configs) feed IAM monitoring to detect privilege escalation in cloud environments.",
+        "agentic_description": "An agent tracks excessive permission grants, detects role assumption chains indicating privilege escalation, and triggers automated least-privilege review recommendations in IAM.",
+        "automation_area": "correlation",
+        "manual_verification": true
+      },
+      {
+        "name": "Resource inventory",
+        "type": "Cloud",
+        "destination": "Assets",
+        "running": false,
+        "disabled": true,
+        "id": "cloud_asset_management_1",
+        "source_id": "cloud",
+        "target_id": "asset_management",
+        "tags": [
+          "Logs",
+          "Context"
+        ],
+        "description": "Auto-syncing cloud resources into the asset inventory ensures the CMDB stays current, preventing blind spots in vulnerability management and incident response.",
+        "agentic_description": "An agent continuously reconciles cloud inventory with the CMDB, flags newly exposed resources, identifies shadow IT, and marks assets with missing security controls for immediate action.",
+        "automation_area": "correlation",
+        "manual_verification": true
+      },
+      {
+        "name": "Incident Routing Rules",
+        "type": "Cases",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "case_management_incident_routing_1",
+        "source_id": "case_management",
+        "target_id": "case_management",
+        "tags": [
+          "Context",
+          "Correlation",
+          "Routing"
+        ],
+        "description": "Route incoming incidents to the right sub-organization based on tenant, source, severity, observables, or any field in the incident payload. Keeps multi-tenant environments tidy and ensures the right team owns each incident from the start.",
+        "agentic_description": "An agent evaluates each new incident against your routing rules, decides which sub-organization should own it, and either suggests or executes the move with full audit trail.",
+        "automation_area": "correlation",
+        "automation_label": "Incident Routing Rules",
+        "automation_category": "cases"
       }
     ]
   },
@@ -3955,7 +5526,7 @@ func GetUsecaseData() string {
     "description": "Automate containment, notifications, and remediation.",
     "color": "#EF4444",
     "phase": "response",
-    "step": 2,
+    "step": 3,
     "list": [
       {
         "name": "IOC feeds",
@@ -4143,11 +5714,34 @@ func GetUsecaseData() string {
         "automation_area": "assign_escalate"
       },
       {
+        "name": "Schedules & Phone Notifications",
+        "type": "Cases",
+        "destination": "Communication",
+        "running": false,
+        "disabled": false,
+        "id": "case_management_schedules_notifications_1",
+        "source_id": "case_management",
+        "target_id": "communication",
+        "tags": [
+          "Response",
+          "On-Call",
+          "Mobile",
+          "Escalation",
+          "Paging"
+        ],
+        "description": "Trigger phone notifications and emergency paging via the Shuffle Mobile App based on on-call team schedules, with automatic escalations across response tiers.",
+        "agentic_description": "An agent monitors incoming critical incidents, determines the active on-call responder for the current shift, dispatches mobile app phone notifications and siren paging, and automatically escalates to higher tiers if unacknowledged.",
+        "automation_label": "Schedules & Phone Notifications",
+        "automation_category": "cases",
+        "automation_area": "schedules_notifications"
+      },
+      {
         "name": "Vulnerability Response",
         "type": "Assets",
         "destination": "Cases",
         "running": false,
-        "disabled": false,
+        "disabled": true,
+        "support_only": true,
         "id": "asset_management_case_management_vuln_response_1",
         "source_id": "asset_management",
         "target_id": "case_management",
@@ -4166,7 +5760,7 @@ func GetUsecaseData() string {
         }
       },
       {
-        "name": "Add Host-Monitors",
+        "name": "Host Monitoring",
         "type": "Cases",
         "destination": "Assets",
         "running": false,
@@ -4181,11 +5775,11 @@ func GetUsecaseData() string {
         ],
         "description": "Deploy host monitors to endpoints for real-time telemetry collection, compliance checks, and on-demand response action execution. Monitors enable direct interaction with hosts during investigations and continuous visibility into endpoint state.",
         "agentic_description": "An agent identifies hosts missing monitor coverage, generates the appropriate deployment command for each platform, tracks rollout status, and verifies telemetry is flowing back into the platform after install.",
-        "automation_label": "Add Monitors",
+        "automation_label": "Host Monitoring",
         "automation_category": "cases",
         "automation_area": "response",
         "custom_action": {
-          "label": "Add Monitor",
+          "label": "Deploy Host Monitor",
           "href": "/monitors?add_host=true",
           "description": "Open the monitor deployment dialog to register a new host."
         }
@@ -4215,208 +5809,6 @@ func GetUsecaseData() string {
         }
       }
     ]
-  },
-  {
-    "name": "Context & Correlation",
-    "description": "Enrich alerts with intelligence, assets, and identity data.",
-    "color": "#1AC4E6",
-    "phase": "correlation",
-    "step": 3,
-    "list": [
-      {
-        "name": "Telemetry",
-        "type": "EDR",
-        "destination": "SIEM",
-        "running": false,
-        "disabled": true,
-        "id": "edr_siem_1",
-        "source_id": "edr",
-        "target_id": "siem",
-        "tags": [
-          "Logs",
-          "Detection",
-          "Correlation"
-        ],
-        "description": "Endpoint telemetry (process trees, file hashes, registry changes) enriches SIEM detections with host-level context, enabling accurate correlation rules.",
-        "agentic_description": "An agent cross-references endpoint telemetry with known attack patterns, surfaces hidden process chains, and annotates SIEM events with host risk scores before they reach an analyst.",
-        "automation_area": "correlation",
-        "manual_verification": true
-      },
-      {
-        "name": "Auth logs",
-        "type": "IAM",
-        "destination": "SIEM",
-        "running": false,
-        "disabled": true,
-        "id": "iam_siem_1",
-        "source_id": "iam",
-        "target_id": "siem",
-        "tags": [
-          "Logs",
-          "Detection",
-          "Correlation"
-        ],
-        "description": "Authentication and authorization logs reveal credential abuse, impossible travel, privilege escalation, and brute-force attempts across the identity layer.",
-        "agentic_description": "An agent detects impossible travel, credential stuffing patterns, and privilege escalation attempts in auth logs, then creates SIEM alerts with user risk context and recommended actions.",
-        "automation_area": "correlation",
-        "manual_verification": true
-      },
-      {
-        "name": "Enrichment",
-        "type": "Threat Intel",
-        "destination": "Cases",
-        "running": true,
-        "disabled": false,
-        "id": "threat_intel_case_management_1",
-        "source_id": "threat_intel",
-        "target_id": "case_management",
-        "tags": [
-          "Intel",
-          "Correlation",
-          "Context"
-        ],
-        "description": "Threat intelligence enriches cases with reputation scores, malware families, threat actor attribution, and related IOCs — giving analysts immediate context.",
-        "agentic_description": "An agent autonomously enriches all observables in a case, maps findings to MITRE ATT&CK, identifies related campaigns, and updates case severity and recommended playbook based on findings.",
-        "automation_label": "Enable Threat feeds",
-        "automation_category": "cases",
-        "automation_area": "threat_intel"
-      },
-      {
-        "name": "Asset context",
-        "type": "Assets",
-        "destination": "Cases",
-        "running": false,
-        "disabled": true,
-        "id": "asset_management_case_management_1",
-        "source_id": "asset_management",
-        "target_id": "case_management",
-        "tags": [
-          "Context",
-          "Correlation"
-        ],
-        "description": "Asset context (owner, criticality, business unit, OS) helps analysts prioritize cases and understand blast radius during an incident.",
-        "agentic_description": "An agent automatically fetches asset owner, business criticality, and known vulnerabilities for every observable in a case, recalculates impact score, and suggests prioritization.",
-        "automation_area": "correlation"
-      },
-      {
-        "name": "Vulnerability Correlation",
-        "type": "Assets",
-        "destination": "Cases",
-        "running": false,
-        "disabled": false,
-        "id": "asset_management_case_management_vuln_1",
-        "source_id": "asset_management",
-        "target_id": "case_management",
-        "tags": [
-          "Context",
-          "Correlation",
-          "Vulnerability"
-        ],
-        "description": "Correlate known vulnerabilities (CVEs, misconfigurations, missing patches) on affected assets with active incidents — surfacing exploitable weaknesses that elevate risk and guide containment priorities.",
-        "agentic_description": "An agent matches observables and affected hosts in a case against the vulnerability inventory, identifies exploitable CVEs aligned with the attack technique, recalculates incident severity, and recommends remediation or compensating controls.",
-        "automation_label": "Vulnerability Correlation",
-        "automation_category": "cases",
-        "automation_area": "correlation"
-      },
-      {
-        "name": "Phishing IOCs",
-        "type": "Email",
-        "destination": "Threat Intel",
-        "running": false,
-        "disabled": true,
-        "id": "email_threat_intel_1",
-        "source_id": "email",
-        "target_id": "threat_intel",
-        "tags": [
-          "Intel",
-          "Correlation",
-          "Logs"
-        ],
-        "description": "Extracting IOCs from phishing emails (sender domains, URLs, attachments) and feeding them into threat intel platforms helps detect broader campaigns.",
-        "agentic_description": "An agent detonates suspicious attachments and URLs in a sandbox, extracts all IOCs, correlates with known campaigns, and auto-publishes confirmed indicators to the threat intel platform.",
-        "automation_area": "threat_intel"
-      },
-      {
-        "name": "Identity events",
-        "type": "Cloud",
-        "destination": "IAM",
-        "running": false,
-        "disabled": true,
-        "id": "cloud_iam_1",
-        "source_id": "cloud",
-        "target_id": "iam",
-        "tags": [
-          "Logs",
-          "Correlation",
-          "Detection"
-        ],
-        "description": "Cloud identity events (role changes, permission grants, federation configs) feed IAM monitoring to detect privilege escalation in cloud environments.",
-        "agentic_description": "An agent tracks excessive permission grants, detects role assumption chains indicating privilege escalation, and triggers automated least-privilege review recommendations in IAM.",
-        "automation_area": "correlation",
-        "manual_verification": true
-      },
-      {
-        "name": "IOC feeds",
-        "type": "Threat Intel",
-        "destination": "Cloud",
-        "running": true,
-        "disabled": false,
-        "id": "threat_intel_cloud_1",
-        "source_id": "threat_intel",
-        "target_id": "cloud",
-        "tags": [
-          "Intel",
-          "Correlation",
-          "Detection"
-        ],
-        "description": "Pushing IOC feeds to cloud-native security tools (GuardDuty, Sentinel, SCC) enables detection of known-malicious activity within cloud workloads.",
-        "agentic_description": "An agent maps threat intel IOCs to active cloud workloads, identifies which resources are communicating with known-malicious infrastructure, and auto-creates remediation tasks in cloud security tools.",
-        "automation_label": "Enable Threat feeds",
-        "automation_category": "cases",
-        "automation_area": "threat_intel"
-      },
-      {
-        "name": "Resource inventory",
-        "type": "Cloud",
-        "destination": "Assets",
-        "running": false,
-        "disabled": true,
-        "id": "cloud_asset_management_1",
-        "source_id": "cloud",
-        "target_id": "asset_management",
-        "tags": [
-          "Logs",
-          "Context"
-        ],
-        "description": "Auto-syncing cloud resources into the asset inventory ensures the CMDB stays current, preventing blind spots in vulnerability management and incident response.",
-        "agentic_description": "An agent continuously reconciles cloud inventory with the CMDB, flags newly exposed resources, identifies shadow IT, and marks assets with missing security controls for immediate action.",
-        "automation_area": "correlation",
-        "manual_verification": true
-      },
-      {
-        "name": "Incident Routing Rules",
-        "type": "Cases",
-        "destination": "Cases",
-        "running": false,
-        "disabled": false,
-        "id": "case_management_incident_routing_1",
-        "source_id": "case_management",
-        "target_id": "case_management",
-        "tags": [
-          "Context",
-          "Correlation",
-          "Routing"
-        ],
-        "description": "Route incoming incidents to the right sub-organization based on tenant, source, severity, observables, or any field in the incident payload. Keeps multi-tenant environments tidy and ensures the right team owns each incident from the start.",
-        "agentic_description": "An agent evaluates each new incident against your routing rules, decides which sub-organization should own it, and either suggests or executes the move with full audit trail.",
-        "automation_area": "correlation",
-        "custom_action": {
-          "label": "Configure Routing",
-          "href": "/preferences?tab=routing",
-          "description": "Open Organization Preferences to manage incident routing rules."
-        }
-      }
-    ]
   }
 ]`)
 }
@@ -4427,65 +5819,125 @@ import random
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-cur_exec = json.loads(r"""$exec""")
-users = json.loads(r"""$get_assignment_schedules.value.userSchedules""")
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+cur_exec = safe_parse_json(r"""$exec""", {})
+if not isinstance(cur_exec, dict):
+    cur_exec = {}
+
+raw_schedules = safe_parse_json(r"""$get_assignment_schedules.value.userSchedules""", [])
+if not raw_schedules:
+    raw_wrapper = safe_parse_json(r"""$get_assignment_schedules""", {})
+    if isinstance(raw_wrapper, dict):
+        raw_schedules = raw_wrapper.get("value", {})
+        if isinstance(raw_schedules, dict):
+            raw_schedules = raw_schedules.get("userSchedules", [])
+
+if not isinstance(raw_schedules, list):
+    raw_schedules = []
+
+users = raw_schedules
 
 def is_user_active(user, now_utc):
+    if not isinstance(user, dict):
+        return False
     if not user.get("enabled"):
         return False
 
     for sched in user.get("schedules", []):
-        tz = ZoneInfo(sched["timezone"])
-        now_local = now_utc.astimezone(tz)
-
-        # Date check
-        start_date = datetime.fromisoformat(sched["startDate"]).date()
-        end_date = datetime.fromisoformat(sched["endDate"]).date()
-        if not (start_date <= now_local.date() <= end_date):
+        if not isinstance(sched, dict):
             continue
+        try:
+            tz_str = sched.get("timezone") or "UTC"
+            try:
+                tz = ZoneInfo(tz_str)
+            except Exception:
+                tz = ZoneInfo("UTC")
 
-        # Day of week check (Python: Monday=0 → convert to 1–7)
-        weekday = now_local.isoweekday()
-        if weekday not in sched["daysOfWeek"]:
+            now_local = now_utc.astimezone(tz)
+
+            start_date_str = sched.get("startDate")
+            end_date_str = sched.get("endDate")
+            if start_date_str and end_date_str:
+                start_date = datetime.fromisoformat(str(start_date_str)).date()
+                end_date = datetime.fromisoformat(str(end_date_str)).date()
+                if not (start_date <= now_local.date() <= end_date):
+                    continue
+
+            days = sched.get("daysOfWeek")
+            if days:
+                weekday = now_local.isoweekday()
+                if weekday not in days and str(weekday) not in days:
+                    continue
+
+            start_time_str = sched.get("startTime")
+            end_time_str = sched.get("endTime")
+            if start_time_str and end_time_str:
+                start_time = time.fromisoformat(str(start_time_str))
+                end_time = time.fromisoformat(str(end_time_str))
+                if not (start_time <= now_local.time() <= end_time):
+                    continue
+
+            return True
+        except Exception:
             continue
-
-        # Time check
-        start_time = time.fromisoformat(sched["startTime"])
-        end_time = time.fromisoformat(sched["endTime"])
-        if not (start_time <= now_local.time() <= end_time):
-            continue
-
-        return True
 
     return False
 
-
 def main():
-    now_utc = datetime.now(tz=ZoneInfo("UTC"))
+    try:
+        now_utc = datetime.now(tz=ZoneInfo("UTC"))
+    except Exception:
+        now_utc = datetime.utcnow()
 
     active_users = []
     usernames = []
     for user in users:
+        if isinstance(user, str):
+            user = safe_parse_json(user, {})
+        if not isinstance(user, dict):
+            continue
+
         if is_user_active(user, now_utc):
+            uname = user.get("userName") or user.get("name") or user.get("email") or ""
+            uemail = user.get("userEmail") or user.get("email") or ""
+            ulevel = user.get("escalationLevel") or user.get("level") or "analyst"
+
             active_users.append({
-                "userName": user["userName"],
-                "email": user["userEmail"],
-                "level": user["escalationLevel"]
+                "userName": uname,
+                "email": uemail,
+                "level": ulevel
             })
             
-            if user["userName"] not in usernames and not user["escalationLevel"] == "manager":
-              usernames.append(user["userName"])
+            if uname and uname not in usernames and ulevel != "manager":
+                usernames.append(uname)
     
     assignee = ""
-    if len(usernames) > 0 and "assignee" not in cur_exec or cur_exec["assignee"] == "":
-      # Chose from usernames
-      assignee = random.choice(usernames)
+    if len(usernames) > 0 and not cur_exec.get("assignee"):
+        assignee = random.choice(usernames)
 
     print(json.dumps({
-      "assign": assignee,
-      "all_available": active_users,
+        "assign": assignee,
+        "all_available": active_users,
     }))
-        
+
 main()
 `
 }
@@ -4493,183 +5945,2554 @@ main()
 func handleRelevantPeopleAgentPrepareCode() string {
 	return `import json
 
-# Make sure we are always up to date, even if the workflow is a bit late.
-cur_exec = self.get_key("$exec.shuffle_datastore.key", category="$exec.shuffle_datastore.category")
-if cur_exec["success"] and cur_exec["value"]:
-  cur_exec = cur_exec["value"]
-else:
-  print(json.dumps({
-    "success": False,
-    "reason": "Failed to find the incident"
-  }))
-  exit()
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
 
-activities = []
-if "activity" in cur_exec:
-  activities = cur_exec["activity"]
+raw_key = r"""$exec.shuffle_datastore.key"""
+raw_cat = r"""$exec.shuffle_datastore.category"""
+item_key = raw_key if not raw_key.startswith("$") else ""
+item_cat = raw_cat if not raw_cat.startswith("$") else ""
+
+cur_exec = safe_parse_json(r"""$exec""", {})
+if not isinstance(cur_exec, dict):
+    cur_exec = {}
+
+if item_key and item_cat:
+    try:
+        db_res = self.get_key(item_key, category=item_cat)
+        if isinstance(db_res, dict):
+            val = db_res.get("value")
+            if isinstance(val, str):
+                val = safe_parse_json(val, {})
+            if isinstance(val, dict) and val:
+                cur_exec = val
+        elif isinstance(db_res, str):
+            val = safe_parse_json(db_res, {})
+            if isinstance(val, dict) and val:
+                cur_exec = val
+    except Exception:
+        pass
+
+if not cur_exec:
+    print(json.dumps({
+        "success": False,
+        "reason": "Failed to find the incident"
+    }))
+    exit()
+
+activities = cur_exec.get("activity")
+if not isinstance(activities, list):
+    activities = []
 
 agent_name = ""
 ai_agent_activities = []
 activities_changed = False
+
+exec_id = getattr(self, "current_execution_id", "")
+
 for activityIndex in range(len(activities)):
-  activity = activities[activityIndex]
-  if "ai_handled" not in activity or activity["ai_handled"] == False:
-    activity["ai_handled"] = True
-    activity["execution_id"] = self.current_execution_id
+    activity = activities[activityIndex]
+    if not isinstance(activity, dict):
+        continue
 
-    activities_changed = True
-    activities[activityIndex] = activity
-  else:
-    continue
+    content = str(activity.get("content") or "")
+    if "@aiagent" not in content.lower():
+        continue
 
-  if "content" not in activity or ("@aiagent" not in activity["content"].lower()):
-    continue
+    if not activity.get("ai_handled"):
+        activity["ai_handled"] = True
+        if exec_id:
+            activity["execution_id"] = exec_id
+        activities_changed = True
+        activities[activityIndex] = activity
+    else:
+        continue
 
-  agent_name = "default"
-  ai_agent_activities.append(activity)
-
-db_updated = False
+    agent_name = "default"
+    ai_agent_activities.append(activity)
 
 assignee = ""
-assignee_outer = json.loads(r"""$find_relevant_people""")
-if "message" in assignee_outer:
-  if "assign" in assignee_outer["message"]:
-    assignee = assignee_outer["message"]["assign"]
+assignee_outer = safe_parse_json(r"""$find_relevant_people""", {})
+if isinstance(assignee_outer, dict):
+    msg = assignee_outer.get("message")
+    if isinstance(msg, dict):
+        assignee = str(msg.get("assign") or "")
+    elif "assign" in assignee_outer:
+        assignee = str(assignee_outer.get("assign") or "")
 
-if activities_changed or len(assignee) > 0:
-  # Update datastore
-  #db_updated = True
-  #cur_exec["activity"] = activities
-  #cur_exec = json.dumps(cur_exec)
-  parsed_activity = {}
-  if activities_changed:
-    parsed_activity["activity"] = activities
+assignee_changed = len(assignee) > 0 and "@" in assignee and not cur_exec.get("assignee")
 
-  if len(assignee) > 0 and "@" in assignee:
-    parsed_activity["assignee"] = assignee
+db_updated = False
+if activities_changed or assignee_changed:
+    if activities_changed:
+        cur_exec["activity"] = activities
+    if assignee_changed:
+        cur_exec["assignee"] = assignee
 
-  ret = self.set_key("$exec.shuffle_datastore.key", json.dumps(parsed_activity), category="$exec.shuffle_datastore.category")
-  if ret["success"]:
-    db_updated = True
-    
+    if item_key and item_cat:
+        try:
+            ret = self.set_key(item_key, json.dumps(cur_exec), category=item_cat)
+            if (isinstance(ret, dict) and ret.get("success")) or ret is True:
+                db_updated = True
+        except Exception:
+            pass
+
 available_apps = ""
-assigned_apps = json.loads(r"""$get_assigned_apps""")
-if "success" in assigned_apps and assigned_apps["success"] == True and "value" in assigned_apps and len(str(assigned_apps["value"])) > 0:
-  try:
-    assigned_apps["value"] = json.loads(assigned_apps["value"])
-  except:
-    pass
-  
-  for agent_config in assigned_apps["value"]:
-    if agent_config["agent"] != agent_name:
-      continue
-    
-    for tool in agent_config["tools"]:
-      available_apps += tool["name"]+","
-      
-    if len(available_apps) > 0:
-      available_apps = available_apps[:-1] 
+assigned_apps = safe_parse_json(r"""$get_assigned_apps""", {})
+app_items = []
+if isinstance(assigned_apps, dict):
+    val = assigned_apps.get("value")
+    if isinstance(val, str):
+        val = safe_parse_json(val, [])
+    if isinstance(val, list):
+        app_items = val
+    elif isinstance(assigned_apps.get("data"), list):
+        app_items = assigned_apps["data"]
+elif isinstance(assigned_apps, list):
+    app_items = assigned_apps
 
-# Print the details of the key after it's been updated
-# To get the value, use self.get_key(key)["value"]
-if len(ai_agent_activities) > 0:
-  print(json.dumps({
+for agent_config in app_items:
+    if not isinstance(agent_config, dict):
+        continue
+    if agent_config.get("agent") != agent_name:
+        continue
+    
+    tools = agent_config.get("tools") or []
+    for tool in tools:
+        if isinstance(tool, dict) and tool.get("name"):
+            available_apps += tool["name"] + ","
+
+if len(available_apps) > 0 and available_apps.endswith(","):
+    available_apps = available_apps[:-1]
+
+first_agent_activity = ai_agent_activities[0] if len(ai_agent_activities) > 0 else {"content": "", "id": "", "user": ""}
+
+print(json.dumps({
     "assignee": assignee,
     "updated": db_updated,
-    "agent": ai_agent_activities[0],
+    "agent": first_agent_activity,
     "assigned_apps": available_apps,
-  }))
-else:
-  print(json.dumps({
-    "updated": db_updated,
-    "agent": "",
-  }))`
+}))`
 }
 
 func handleRelevantPeopleAgentResponseCode() string {
 	return `import json
 import time
 
-# Make sure we are always up to date, even if the workflow is a bit late.
-cur_exec = self.get_key("$exec.shuffle_datastore.key", category="$exec.shuffle_datastore.category")
-if cur_exec["success"] and cur_exec["value"]:
-  cur_exec = cur_exec["value"]
-  
-  if "finding_uid" in cur_exec and len(cur_exec["finding_uid"]) > 0:
-    pass
-  else:
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+raw_key = r"""$exec.shuffle_datastore.key"""
+raw_cat = r"""$exec.shuffle_datastore.category"""
+item_key = raw_key if not raw_key.startswith("$") else ""
+item_cat = raw_cat if not raw_cat.startswith("$") else ""
+
+cur_exec = safe_parse_json(r"""$exec""", {})
+if not isinstance(cur_exec, dict):
+    cur_exec = {}
+
+if item_key and item_cat:
+    try:
+        db_res = self.get_key(item_key, category=item_cat)
+        if isinstance(db_res, dict):
+            val = db_res.get("value")
+            if isinstance(val, str):
+                val = safe_parse_json(val, {})
+            if isinstance(val, dict) and val:
+                cur_exec = val
+        elif isinstance(db_res, str):
+            val = safe_parse_json(db_res, {})
+            if isinstance(val, dict) and val:
+                cur_exec = val
+    except Exception:
+        pass
+
+if not cur_exec:
     print(json.dumps({
-      "success": False,
-      "reason": "No finding_uid in the incident. Not updating."
+        "success": False,
+        "reason": "Failed to find the incident"
     }))
     exit()
-    
-else:
-  print(json.dumps({
-    "success": False,
-    "reason": "Failed to find the incident"
-  }))
-  exit()
-  
 
-respond_to = json.loads(r"""$handle_ai_agent_run""")
-if respond_to["message"]["updated"] == False or len(respond_to["message"]["agent"]) == 0:
-  print(json.dumps({
-    "success": False,
-    "reason": "No comment to respond to"
-  }))
-  exit()
+finding_uid = cur_exec.get("finding_uid") or cur_exec.get("id") or item_key
+if not finding_uid:
+    print(json.dumps({
+        "success": False,
+        "reason": "No finding_uid in the incident. Not updating."
+    }))
+    exit()
 
-currentuser = "@AIAgent"
-activities = cur_exec["activity"]
-agent_response = """$run_questions.output"""
+respond_to = safe_parse_json(r"""$handle_ai_agent_run""", {})
+msg = respond_to.get("message") if isinstance(respond_to, dict) else {}
+if not isinstance(msg, dict):
+    msg = respond_to if isinstance(respond_to, dict) else {}
+
+agent_act = msg.get("agent") or {}
+if not isinstance(agent_act, dict) or not agent_act.get("content"):
+    print(json.dumps({
+        "success": False,
+        "reason": "No comment to respond to"
+    }))
+    exit()
+
+activities = cur_exec.get("activity")
+if not isinstance(activities, list):
+    activities = []
+
+agent_response = r"""$run_questions.output"""
+if agent_response.startswith("$"):
+    agent_response = ""
+
 timenow = int(time.time())
+exec_id = getattr(self, "current_execution_id", "")
 
 prepared_response = {
-  "ai_handled": True,
-  "attachments":[],
-  "content": agent_response,
-  "details":{},
-  "id":"comment-%d" % timenow,
-  "replyToId": respond_to["message"]["agent"]["id"], 
-  "replyToLabel": respond_to["message"]["agent"]["user"],
-  "timestamp": timenow,
-  "type":"comment",
-  "user":"@AIAgent",
-  "is_agent": True,
-  "execution_id": self.current_execution_id,
+    "ai_handled": True,
+    "attachments": [],
+    "content": agent_response,
+    "details": {},
+    "id": "comment-%d" % timenow,
+    "replyToId": agent_act.get("id", ""), 
+    "replyToLabel": agent_act.get("user", ""),
+    "timestamp": timenow,
+    "type": "comment",
+    "user": "@AIAgent",
+    "is_agent": True,
+    "execution_id": exec_id,
 }
 
-# In case we want to update an old one. New is better tho.
-for item in activities:  
-  if "replyToId" not in item:
-    continue
-  
-  if item["user"] == currentuser:
-    continue
-  
-  if "replyToId" == respond_to["message"]["agent"]["id"]:
-    if item["content"] == agent_response:
-      print(json.dumps({
-        "success": True,
-        "reason": "Already answered with this message"
-      }))
-      exit()
+currentuser = "@aiagent"
+for item in activities:
+    if not isinstance(item, dict):
+        continue
+    if not item.get("replyToId"):
+        continue
+    if str(item.get("user", "")).lower() == currentuser and item.get("replyToId") == agent_act.get("id"):
+        if item.get("content") == agent_response or len(str(item.get("content", ""))) > 0:
+            print(json.dumps({
+                "success": True,
+                "reason": "Already answered with this message"
+            }))
+            exit()
 
-# Update datastore 
 activities.append(prepared_response)
-ret = self.set_key("$exec.shuffle_datastore.key", json.dumps({"activity": activities}), category="$exec.shuffle_datastore.category")
+cur_exec["activity"] = activities
 
-if ret["success"]:
-  print(json.dumps({
-    "success": True,
-    "updated": True,
-    "comment": prepared_response,
-  }))
+if item_key and item_cat:
+    try:
+        ret = self.set_key(item_key, json.dumps(cur_exec), category=item_cat)
+        if (isinstance(ret, dict) and ret.get("success")) or ret is True:
+            print(json.dumps({
+                "success": True,
+                "updated": True,
+                "comment": prepared_response,
+            }))
+        else:
+            print(json.dumps({
+                "success": False,
+                "updated": False,
+                "reason": "Failed to update the activity in the db",
+            }))
+    except Exception as e:
+        print(json.dumps({
+            "success": False,
+            "updated": False,
+            "reason": f"Exception updating activity: {e}",
+        }))
 else:
-  print(json.dumps({
-    "success": False,
-    "updated": False,
-    "reason": "Failed to update the activity in the db",
-  }))`
+    print(json.dumps({
+        "success": True,
+        "updated": False,
+        "comment": prepared_response,
+        "reason": "No datastore key to persist to",
+    }))`
+}
+
+func getConnectToResponderCode() string {
+	return `import json
+import os
+import urllib.request
+import urllib.error
+
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+cur_exec = safe_parse_json(r"""$exec""", {})
+if not isinstance(cur_exec, dict):
+    cur_exec = {}
+
+relevant_people = safe_parse_json(r"""$find_relevant_people""", {})
+if not isinstance(relevant_people, dict):
+    relevant_people = {}
+
+assignee = relevant_people.get("assign") or ""
+all_available = relevant_people.get("all_available") or []
+
+incident = cur_exec.get("incident") or cur_exec.get("data") or cur_exec
+incident_id = str(incident.get("id") or cur_exec.get("execution_id") or "incident-auto")
+incident_title = str(incident.get("title") or incident.get("name") or "On-call Incident Escalation")
+severity = str(incident.get("severity") or "critical").lower()
+
+target_user = None
+for u in all_available:
+    if isinstance(u, dict) and (u.get("userName") == assignee or u.get("email") == assignee):
+        target_user = u
+        break
+
+if not target_user and all_available and isinstance(all_available[0], dict):
+    target_user = all_available[0]
+
+target_name = (target_user.get("userName") if target_user else "") or assignee or "On-Call Responder"
+target_email = target_user.get("email", "") if target_user else ""
+tier_level = target_user.get("level", "tier1") if target_user else "tier1"
+
+tier_num = 1
+if "2" in str(tier_level):
+    tier_num = 2
+elif "3" in str(tier_level):
+    tier_num = 3
+elif "manager" in str(tier_level).lower():
+    tier_num = 4
+
+pager_payload = {
+    "type": "critical" if severity in ["critical", "high"] else "general",
+    "incident_id": incident_id,
+    "title": f"[{severity.upper()}] {incident_title}",
+    "body": f"Urgent incident assigned to {target_name}. Escalation tier: {tier_level}.",
+    "source": "Shuffle Security Mobile Pager",
+    "severity": severity,
+    "tier": tier_num,
+    "auto_escalate_seconds": 60,
+    "target_user": target_name,
+    "target_email": target_email,
+}
+
+base_url = os.environ.get("BASE_URL") or os.environ.get("SHUFFLE_BACKEND_URL") or "http://shuffle-backend:5001"
+auth_header = os.environ.get("AUTHORIZATION") or os.environ.get("SHUFFLE_API_KEY") or ""
+
+dispatched = False
+dispatch_error = None
+
+try:
+    req = urllib.request.Request(
+        f"{base_url}/api/v1/functions/pager",
+        data=json.dumps(pager_payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {auth_header}" if auth_header and not auth_header.startswith("Bearer ") else auth_header,
+        },
+        method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=5) as response:
+        if response.status in [200, 201, 204]:
+            dispatched = True
+except Exception as e:
+    dispatch_error = str(e)
+
+print(json.dumps({
+    "success": True,
+    "connected_person": target_name,
+    "email": target_email,
+    "tier": tier_level,
+    "pager_dispatched": dispatched,
+    "dispatch_error": dispatch_error,
+    "payload": pager_payload,
+}))`
+}
+
+func getRoutingValidationScript(targetCategory string) string {
+	if targetCategory == "" {
+		targetCategory = "shuffle-security_incidents"
+	}
+
+	script := `import json
+import re
+import base64
+import binascii
+import html
+import urllib.parse
+
+# ── Evaluator helpers ────────────────────────────────────────────────────────
+
+MAX_STRINGS = 400
+MAX_DEPTH = 12
+MIN_BASE64_LEN = 8
+MAX_BASE64_LEN = 65536
+
+_BASE64_RE = re.compile(r"^[A-Za-z0-9+/_-]+={0,2}$")
+_EMBEDDED_B64_RE = re.compile(r"(?:data:[^;\s]+;base64,)?([A-Za-z0-9+/_-]{12,}={0,2}|[A-Za-z0-9+/_-]{6,}={1,2})")
+_HEX_CONTINUOUS_RE = re.compile(r"^(?:0x)?([0-9a-fA-F]{8,})$")
+_HEX_ESCAPED_RE = re.compile(r"(?:\\x[0-9a-fA-F]{2}){2,}")
+_UNICODE_ESCAPE_RE = re.compile(r"\\u[0-9a-fA-F]{4}")
+_PCT_ENCODED_RE = re.compile(r"%[0-9a-fA-F]{2}")
+
+BASELINE_CATEGORIES = {
+    "incidents": "shuffle-security_incidents",
+    "incident": "shuffle-security_incidents",
+    "vulns": "shuffle-security_vulns",
+    "vuln": "shuffle-security_vulns",
+    "vulnerabilities": "shuffle-security_vulns",
+    "vulnerability": "shuffle-security_vulns",
+    "infrastructure": "shuffle-security_infrastructure",
+    "assets": "shuffle-security_assets",
+    "asset": "shuffle-security_assets",
+    "packages": "shuffle-security_packages",
+    "package": "shuffle-security_packages",
+    "software": "shuffle-security_software",
+    "users": "shuffle-security_users",
+    "user": "shuffle-security_users",
+}
+
+OBSERVABLE_TYPE_ALIASES = {
+    "ip": {"ip", "ip_address", "ipv4", "ipv6", "src_ip", "dst_ip", "ip_addr", "client_ip", "remote_ip"},
+    "domain": {"domain", "domain_name", "hostname", "fqdn", "host", "dns"},
+    "hostname": {"hostname", "host", "domain", "domain_name", "fqdn", "device_name"},
+    "url": {"url", "uri", "link", "http_url"},
+    "hash": {"hash", "file_hash", "md5", "sha1", "sha256", "sha512", "imp_hash", "ssdeep"},
+    "md5": {"md5", "hash", "file_hash"},
+    "sha1": {"sha1", "hash", "file_hash"},
+    "sha256": {"sha256", "hash", "file_hash"},
+    "email": {"email", "email_address", "email_addr", "sender", "recipient", "mail"},
+    "user": {"user", "username", "user_name", "account", "actor_user", "uid"},
+    "file": {"file", "file_name", "filename", "filepath", "file_path", "path"},
+    "process": {"process", "process_name", "cmd_line", "command_line", "executable"},
+}
+
+
+def normalize_category(cat) -> str:
+    if not cat or not isinstance(cat, str):
+        return ""
+    s = cat.strip()
+    if not s or s.startswith("$"):
+        return ""
+    low = s.lower()
+    if low in ("*", "all", "any"):
+        return "*"
+    if low.startswith("shuffle-security_"):
+        suffix = low[len("shuffle-security_"):]
+        if suffix in BASELINE_CATEGORIES:
+            return BASELINE_CATEGORIES[suffix]
+        return s
+    if low in BASELINE_CATEGORIES:
+        return BASELINE_CATEGORIES[low]
+    return s
+
+
+def _resolve_rule_category(rule: dict) -> str:
+    if not isinstance(rule, dict):
+        return "shuffle-security_incidents"
+    raw_cat = rule.get("entityCategory") or rule.get("category") or ""
+    norm = normalize_category(raw_cat)
+    return norm or "shuffle-security_incidents"
+
+
+def _categories_match(rule_cat, target_cat: str) -> bool:
+    norm_target = normalize_category(target_cat) or "shuffle-security_incidents"
+    norm_rule = normalize_category(rule_cat) or "shuffle-security_incidents"
+    if norm_rule == "*":
+        return True
+    return norm_rule == norm_target or norm_rule.lower() == norm_target.lower()
+
+
+def _is_mostly_printable(s: str, threshold: float = 0.85) -> bool:
+    if not s:
+        return False
+    printable = sum(1 for ch in s if ch.isprintable() or ch in "\r\n\t")
+    return (printable / len(s)) >= threshold
+
+
+def _decode_bytes_to_Printable(raw: bytes):
+    if not raw:
+        return None
+    # Check for UTF-16LE (common in PowerShell -EncodedCommand payloads)
+    if len(raw) >= 4 and len(raw) % 2 == 0:
+        null_odds = sum(1 for i in range(1, len(raw), 2) if raw[i] == 0)
+        if null_odds >= (len(raw) // 2) * 0.75:
+            try:
+                u16 = raw.decode("utf-16-le").rstrip("\x00")
+                if u16 and _is_mostly_printable(u16):
+                    return u16
+            except Exception:
+                pass
+    try:
+        decoded = raw.decode("utf-8")
+        if _is_mostly_printable(decoded):
+            return decoded
+    except UnicodeDecodeError:
+        pass
+    try:
+        decoded = raw.decode("latin-1")
+        if _is_mostly_printable(decoded, 0.92):
+            return decoded
+    except UnicodeDecodeError:
+        pass
+    return None
+
+
+def _looks_base64ish(s: str) -> bool:
+    if not s or len(s) > MAX_BASE64_LEN:
+        return False
+    # Allow padded short base64 (e.g. "dGVzdA==" len 8) or longer unpadded tokens
+    has_padding = s.endswith("=")
+    if has_padding:
+        if len(s) < 4 or len(s) % 4 != 0:
+            return False
+    else:
+        if len(s) < MIN_BASE64_LEN:
+            return False
+        # Avoid treating plain lowercase/uppercase dictionary words as unpadded base64
+        has_digit_or_sym = any(c.isdigit() or c in "+/_-" for c in s)
+        has_mixed_case = any(c.islower() for c in s) and any(c.isupper() for c in s)
+        if not has_digit_or_sym and not has_mixed_case and len(s) < 20:
+            return False
+    return bool(_BASE64_RE.match(s))
+
+
+def _try_decode_base64(s: str):
+    if not s or not isinstance(s, str):
+        return None
+    candidate = s.strip()
+    if candidate.lower().startswith("data:") and ";base64," in candidate.lower():
+        candidate = candidate.split(",", 1)[1].strip()
+    # Handle multiline MIME base64
+    if "\n" in candidate or "\r" in candidate:
+        compact = re.sub(r"[\r\n\s]+", "", candidate)
+    else:
+        compact = candidate
+    if not _looks_base64ish(compact):
+        return None
+    normalized = compact.replace("-", "+").replace("_", "/")
+    pad = (4 - (len(normalized) % 4)) % 4
+    if pad:
+        if pad == 3:
+            return None
+        normalized += "=" * pad
+    try:
+        raw = base64.b64decode(normalized, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    decoded = _decode_bytes_to_Printable(raw)
+    if not decoded or decoded == s or decoded == compact:
+        return None
+    return decoded
+
+
+def _try_decode_url(s: str):
+    if not s or not isinstance(s, str):
+        return None
+    if _PCT_ENCODED_RE.search(s):
+        try:
+            unq = urllib.parse.unquote(s)
+            if unq and unq != s and _is_mostly_printable(unq):
+                return unq
+        except Exception:
+            pass
+    if "+" in s and (_PCT_ENCODED_RE.search(s) or "=" in s or "&" in s):
+        try:
+            unq_plus = urllib.parse.unquote_plus(s)
+            if unq_plus and unq_plus != s and _is_mostly_printable(unq_plus):
+                return unq_plus
+        except Exception:
+            pass
+    return None
+
+
+def _try_decode_hex(s: str):
+    if not s or not isinstance(s, str):
+        return None
+    stripped = s.strip()
+    # Check \xNN\xNN escaped hex sequences
+    if "\\x" in stripped and _HEX_ESCAPED_RE.search(stripped):
+        try:
+            def _replace_hex_seq(m):
+                hex_bytes = bytes.fromhex(m.group(0).replace("\\x", ""))
+                dec = _decode_bytes_to_Printable(hex_bytes)
+                return dec if dec is not None else m.group(0)
+            converted = _HEX_ESCAPED_RE.sub(_replace_hex_seq, stripped)
+            if converted != stripped:
+                return converted
+        except Exception:
+            pass
+    # Check continuous hex string (e.g. 0x61646d696e or 48656c6c6f)
+    m = _HEX_CONTINUOUS_RE.match(stripped)
+    if m:
+        hex_part = m.group(1)
+        if len(hex_part) % 2 == 0 and len(hex_part) <= MAX_BASE64_LEN:
+            try:
+                raw = bytes.fromhex(hex_part)
+                dec = _decode_bytes_to_Printable(raw)
+                if dec and dec != stripped and _is_mostly_printable(dec, 0.9):
+                    return dec
+            except Exception:
+                pass
+    return None
+
+
+def _try_decode_escapes_and_html(s: str):
+    if not s or not isinstance(s, str):
+        return None
+    out = s
+    if "&" in out and ";" in out:
+        try:
+            unesc = html.unescape(out)
+            if unesc != out:
+                out = unesc
+        except Exception:
+            pass
+    if "\\u" in out and _UNICODE_ESCAPE_RE.search(out):
+        try:
+            unesc = _UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(0)[2:], 16)), out)
+            if unesc != out and _is_mostly_printable(unesc):
+                out = unesc
+        except Exception:
+            pass
+    return out if out != s else None
+
+
+def _decode_single_pass(s: str) -> list:
+    if not s or not isinstance(s, str):
+        return []
+    variants = []
+    # 1. Whole-string decodes
+    for fn in (_try_decode_base64, _try_decode_url, _try_decode_hex, _try_decode_escapes_and_html):
+        dec = fn(s)
+        if dec and dec != s and dec not in variants:
+            variants.append(dec)
+
+    # 2. JWT token segments (header.payload.signature)
+    if s.count(".") == 2 and " " not in s and len(s) >= 24:
+        for seg in s.split(".")[:2]:
+            dec = _try_decode_base64(seg)
+            if dec and dec not in variants:
+                variants.append(dec)
+
+    # 3. Embedded base64 tokens inside command lines / log strings
+    if (" " in s or "=" in s or ":" in s or "/" in s) and len(s) <= MAX_BASE64_LEN:
+        for m in _EMBEDDED_B64_RE.finditer(s):
+            tok = m.group(1)
+            if tok and tok != s:
+                dec = _try_decode_base64(tok)
+                if dec and len(dec) >= 3 and dec not in variants:
+                    variants.append(dec)
+                    # Also provide the full string with the token decoded in-place
+                    replaced = s.replace(m.group(0), dec)
+                    if replaced != s and replaced not in variants:
+                        variants.append(replaced)
+
+    # 4. If s (or any decoded variant) is JSON, extract inner strings as well
+    json_Check_list = [s] + list(variants)
+    for candidate in json_Check_list:
+        st = candidate.strip()
+        if (st.startswith("{") and st.endswith("}")) or (st.startswith("[") and st.endswith("]")):
+            try:
+                parsed = json.loads(st)
+                extracted = []
+                _collect_all_strings(parsed, extracted)
+                for ex in extracted:
+                    if isinstance(ex, str) and ex and ex not in variants and ex != s:
+                        variants.append(ex)
+            except Exception:
+                pass
+
+    return variants
+
+
+def _with_all_decodes(haystacks) -> list:
+    seen = set()
+    out = []
+
+    def _add(val):
+        if not isinstance(val, str):
+            val = str(val)
+        if val not in seen and len(out) < MAX_STRINGS:
+            seen.add(val)
+            out.append(val)
+            return True
+        return False
+
+    queue = []
+    for s in haystacks:
+        if s is None:
+            continue
+        s_str = s if isinstance(s, str) else str(s)
+        if _add(s_str):
+            queue.append((s_str, 0))
+
+    # Multi-pass decoding (up to 3 levels deep, e.g. URL -> Base64 -> JSON -> inner Base64)
+    idx = 0
+    while idx < len(queue) and len(out) < MAX_STRINGS:
+        cur_str, depth = queue[idx]
+        idx += 1
+        if depth >= 3:
+            continue
+        for dec in _decode_single_pass(cur_str):
+            if _add(dec):
+                queue.append((dec, depth + 1))
+
+    return out
+
+
+def _try_coerce_structured(val):
+    """If val is a string that is JSON or encoded (Base64/URL/Hex) JSON, parse and return the dict/list."""
+    if isinstance(val, (dict, list)):
+        return val
+    if not isinstance(val, str):
+        return None
+    s = val.strip()
+    if not s:
+        return None
+    candidates = [s]
+    for fn in (_try_decode_base64, _try_decode_url, _try_decode_hex, _try_decode_escapes_and_html):
+        dec = fn(s)
+        if dec and dec not in candidates:
+            candidates.append(dec)
+            # Second pass (e.g. URL-encoded Base64 JSON)
+            dec2 = _try_decode_base64(dec) or _try_decode_url(dec)
+            if dec2 and dec2 not in candidates:
+                candidates.append(dec2)
+
+    for c in candidates:
+        st = c.strip()
+        if (st.startswith("{") and st.endswith("}")) or (st.startswith("[") and st.endswith("]")):
+            try:
+                parsed = json.loads(st)
+                if isinstance(parsed, str):
+                    try:
+                        parsed = json.loads(parsed)
+                    except Exception:
+                        pass
+                if isinstance(parsed, (dict, list)):
+                    return parsed
+            except Exception:
+                pass
+    return None
+
+
+def _collect_all_strings(val, out, depth=0):
+    if depth > MAX_DEPTH or len(out) >= MAX_STRINGS or val is None:
+        return
+    if isinstance(val, str):
+        out.append(val)
+        return
+    if isinstance(val, bool):
+        out.append("true" if val else "false")
+        return
+    if isinstance(val, (int, float)):
+        if isinstance(val, float) and val.is_integer():
+            out.append(str(int(val)))
+        else:
+            out.append(str(val))
+        return
+    if isinstance(val, list):
+        for item in val:
+            _collect_all_strings(item, out, depth + 1)
+            if len(out) >= MAX_STRINGS:
+                break
+        return
+    if isinstance(val, dict):
+        for v in val.values():
+            _collect_all_strings(v, out, depth + 1)
+            if len(out) >= MAX_STRINGS:
+                break
+
+
+def _norm_key(k: str) -> str:
+    return re.sub(r"[\s_\-]+", "", str(k or "").lower())
+
+
+def _dict_lookup(d: dict, key: str):
+    if not isinstance(d, dict) or not key:
+        return False, None
+    if key in d:
+        return True, d[key]
+    key_low = key.lower()
+    for k, v in d.items():
+        if str(k).lower() == key_low:
+            return True, v
+    key_norm = _norm_key(key)
+    if key_norm:
+        for k, v in d.items():
+            if _norm_key(k) == key_norm:
+                return True, v
+    return False, None
+
+
+def _split_field_path(path: str) -> list:
+    if not path or not isinstance(path, str):
+        return []
+    s = path.strip()
+    # Strip common root prefixes if user typed $exec.foo or $.foo or incident.foo
+    s = re.sub(r"^\$\.?exec\.?", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"^\$\.?", "", s)
+    # Convert bracket notation like a['b.c'][0].d or a[0].b into segments
+    tokens = []
+    pos = 0
+    n = len(s)
+    buf = []
+    while pos < n:
+        ch = s[pos]
+        if ch == ".":
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+            pos += 1
+        elif ch == "[":
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+            end_bracket = s.find("]", pos + 1)
+            if end_bracket == -1:
+                buf.append(ch)
+                pos += 1
+            else:
+                inner = s[pos + 1 : end_bracket].strip()
+                if (inner.startswith("'") and inner.endswith("'")) or (inner.startswith('"') and inner.endswith('"')):
+                    inner = inner[1:-1]
+                if inner and inner != "*":
+                    tokens.append(inner)
+                pos = end_bracket + 1
+        else:
+            buf.append(ch)
+            pos += 1
+    if buf:
+        tokens.append("".join(buf))
+    return [t for t in tokens if t and t != "*"]
+
+
+def _get_deep_parts(obj, parts: list, depth: int = 0):
+    if obj is None or depth > MAX_DEPTH:
+        return None
+    if not parts:
+        return obj
+
+    if isinstance(obj, str):
+        coerced = _try_coerce_structured(obj)
+        if coerced is not None:
+            obj = coerced
+        else:
+            return None
+
+    head = parts[0]
+    tail = parts[1:]
+
+    if isinstance(obj, dict):
+        # Also support composite dotted keys stored flat in dicts (e.g. customFields["a.b"])
+        if len(parts) > 1:
+            joined = ".".join(parts)
+            found_flat, flat_val = _dict_lookup(obj, joined)
+            if found_flat and flat_val is not None:
+                return flat_val
+        found, val = _dict_lookup(obj, head)
+        if found:
+            return _get_deep_parts(val, tail, depth + 1)
+        return None
+
+    if isinstance(obj, list):
+        # Support explicit list index (e.g. evidences[0].actor or evidences.0.actor)
+        if re.match(r"^-?\d+$", head):
+            idx = int(head)
+            if -len(obj) <= idx < len(obj):
+                return _get_deep_parts(obj[idx], tail, depth + 1)
+        vals = []
+        for item in obj:
+            v = _get_deep_parts(item, parts, depth + 1)
+            if v is not None:
+                if isinstance(v, list):
+                    vals.extend(v)
+                else:
+                    vals.append(v)
+        return vals if vals else None
+
+    return None
+
+
+def _get_deep(obj, path: str):
+    if not path or obj is None:
+        return None
+    parts = _split_field_path(path)
+    if not parts:
+        return None
+    return _get_deep_parts(obj, parts)
+
+
+def _search_deep_by_suffix(obj, target_parts: list, depth: int = 0, out: list = None) -> list:
+    """Fallback recursive search for deeply nested fields when a user specifies a partial path or leaf key."""
+    if out is None:
+        out = []
+    if obj is None or depth > MAX_DEPTH or not target_parts or len(out) >= MAX_STRINGS:
+        return out
+
+    if isinstance(obj, str):
+        coerced = _try_coerce_structured(obj)
+        if coerced is not None:
+            obj = coerced
+        else:
+            return out
+
+    if isinstance(obj, dict):
+        # Check if target_parts resolves directly from this dict node
+        direct = _get_deep_parts(obj, target_parts, depth)
+        if not _is_empty_val(direct):
+            if isinstance(direct, list):
+                out.extend(direct)
+            else:
+                out.append(direct)
+        for k, v in obj.items():
+            if len(out) >= MAX_STRINGS:
+                break
+            if isinstance(v, (dict, list, str)):
+                _search_deep_by_suffix(v, target_parts, depth + 1, out)
+    elif isinstance(obj, list):
+        for item in obj:
+            if len(out) >= MAX_STRINGS:
+                break
+            if isinstance(item, (dict, list, str)):
+                _search_deep_by_suffix(item, target_parts, depth + 1, out)
+
+    return out
+
+
+def _is_empty_val(v) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, str) and v == "":
+        return True
+    if isinstance(v, (list, dict)) and len(v) == 0:
+        return True
+    return False
+
+
+def _merge_resolved_values(results: list):
+    non_empty = [r for r in results if not _is_empty_val(r)]
+    if not non_empty:
+        return None
+    if len(non_empty) == 1:
+        return non_empty[0]
+    merged = []
+    for r in non_empty:
+        if isinstance(r, list):
+            merged.extend(r)
+        else:
+            merged.append(r)
+    return merged
+
+
+def _gather_observables(ctx: dict) -> list:
+    obs = []
+    for src in (ctx.get("observables"), _get_deep(ctx.get("rawOCSF") or {}, "observables")):
+        if isinstance(src, str):
+            src = _try_coerce_structured(src)
+        if isinstance(src, list):
+            for item in src:
+                if isinstance(item, dict):
+                    obs.append(item)
+    return obs
+
+
+def _resolve_field(ctx: dict, field: str):
+    whole_tok = "$" + "whole"
+    clean_field = (field or "").strip()
+    if not clean_field or clean_field.lower() in ("*", whole_tok, "all", "any", "_raw"):
+        all_strs = []
+        _collect_all_strings(ctx, all_strs)
+        return all_strs
+
+    parts = _split_field_path(clean_field)
+    if not parts:
+        all_strs = []
+        _collect_all_strings(ctx, all_strs)
+        return all_strs
+
+    # Strip leading entity wrapper prefix if present (e.g. "incident.title" -> "title")
+    wrapper_prefixes = ("incident", "vulnerability", "vuln", "asset", "infrastructure", "package", "software", "user", "entity", "item")
+    if len(parts) > 1 and parts[0].lower() in wrapper_prefixes and parts[0] not in ctx:
+        parts = parts[1:]
+        clean_field = ".".join(parts)
+
+    candidates = []
+
+    # 1. Special handling for observables.*
+    if parts[0].lower() == "observables" and len(parts) >= 2:
+        obs_list = _gather_observables(ctx)
+        sub_key = parts[1].lower()
+        rest_parts = parts[2:]
+        type_matches = OBSERVABLE_TYPE_ALIASES.get(sub_key, {sub_key})
+        vals = []
+        for o in obs_list:
+            o_type = str(o.get("type") or o.get("type_id") or "").lower().strip()
+            if o_type in type_matches or _norm_key(o_type) in {_norm_key(t) for t in type_matches}:
+                if rest_parts:
+                    v = _get_deep_parts(o, rest_parts)
+                else:
+                    v = o.get("value") if o.get("value") is not None else (o.get("name") or o.get("data"))
+                if not _is_empty_val(v):
+                    vals.append(v)
+        if vals:
+            candidates.append(vals)
+        # Also allow normal property traversal on observables (e.g. observables.value, observables[0].value)
+        prop_val = _get_deep_parts(obs_list, parts[1:])
+        if not _is_empty_val(prop_val):
+            candidates.append(prop_val)
+
+    # 2. Special handling for stakeholders.*
+    if parts[0].lower() == "stakeholders" and len(parts) >= 2:
+        stk_list = ctx.get("stakeholders") or _get_deep(ctx.get("rawOCSF") or {}, "stakeholders") or []
+        if isinstance(stk_list, list):
+            prop_val = _get_deep_parts(stk_list, parts[1:])
+            if not _is_empty_val(prop_val):
+                candidates.append(prop_val)
+
+    # 3. Explicit rawOCSF.* prefix
+    raw_ocsf = ctx.get("rawOCSF")
+    if isinstance(raw_ocsf, str):
+        raw_ocsf = _try_coerce_structured(raw_ocsf)
+    if not isinstance(raw_ocsf, dict):
+        raw_ocsf = {}
+
+    if parts[0].lower() in ("rawocsf", "raw_ocsf") and len(parts) > 1:
+        v = _get_deep_parts(raw_ocsf, parts[1:])
+        if not _is_empty_val(v):
+            candidates.append(v)
+
+    # 4. Direct & deep lookup on ctx
+    direct_ctx = _get_deep_parts(ctx, parts)
+    if not _is_empty_val(direct_ctx):
+        candidates.append(direct_ctx)
+
+    # 5. Lookup inside rawOCSF, customFields, custom_attributes, and unmapped
+    if parts[0].lower() not in ("rawocsf", "raw_ocsf"):
+        ocsf_val = _get_deep_parts(raw_ocsf, parts)
+        if not _is_empty_val(ocsf_val):
+            candidates.append(ocsf_val)
+
+    for cf_key in ("customFields", "custom_fields"):
+        cf = ctx.get(cf_key)
+        if isinstance(cf, str):
+            cf = _try_coerce_structured(cf)
+        if isinstance(cf, dict):
+            sub_parts = parts[1:] if parts[0].lower() in ("customfields", "custom_fields") and len(parts) > 1 else parts
+            cf_val = _get_deep_parts(cf, sub_parts)
+            if not _is_empty_val(cf_val):
+                candidates.append(cf_val)
+
+    custom_attrs = _get_deep_parts(raw_ocsf, ["metadata", "extensions", "custom_attributes"])
+    if isinstance(custom_attrs, dict):
+        sub_parts = parts[1:] if parts[0].lower() in ("custom_attributes", "customattributes") and len(parts) > 1 else parts
+        ca_val = _get_deep_parts(custom_attrs, sub_parts)
+        if not _is_empty_val(ca_val):
+            candidates.append(ca_val)
+
+    unmapped = raw_ocsf.get("unmapped")
+    if isinstance(unmapped, dict):
+        sub_parts = parts[1:] if parts[0].lower() == "unmapped" and len(parts) > 1 else parts
+        um_val = _get_deep_parts(unmapped, sub_parts)
+        if not _is_empty_val(um_val):
+            candidates.append(um_val)
+
+    # 6. Well-known semantic field aliases across entity types
+    leaf_low = clean_field.lower()
+    if leaf_low in ("message", "description", "desc", "details", "summary"):
+        for k in ("description", "message", "summary", "details"):
+            v = ctx.get(k) or raw_ocsf.get(k) or _get_deep_parts(raw_ocsf, ["finding_info", "desc"])
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low in ("title", "name"):
+        for v in (
+            ctx.get("title"),
+            ctx.get("name"),
+            _get_deep_parts(raw_ocsf, ["finding_info", "title"]),
+            ctx.get("hostname"),
+            ctx.get("username"),
+            ctx.get("email"),
+            ctx.get("cve"),
+            ctx.get("purl"),
+            ctx.get("id"),
+        ):
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low == "severity":
+        for v in (
+            ctx.get("severity"),
+            _get_deep_parts(ctx, ["database_specific", "severity"]),
+            raw_ocsf.get("severity"),
+        ):
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low in ("assignee", "assigned_to", "owner"):
+        for k in ("assignee", "assigned_to", "owner"):
+            v = ctx.get(k) or raw_ocsf.get(k)
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low in ("labels", "tags", "types", "type"):
+        for k in ("labels", "tags", "types", "type"):
+            v = ctx.get(k) or raw_ocsf.get(k)
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low in ("source", "source_tool", "product", "vendor"):
+        for v in (
+            ctx.get("source"),
+            ctx.get("source_tool"),
+            ctx.get("product"),
+            ctx.get("vendor"),
+            _get_deep_parts(raw_ocsf, ["metadata", "product", "name"]),
+            _get_deep_parts(raw_ocsf, ["metadata", "product", "vendor_name"]),
+        ):
+            if not _is_empty_val(v):
+                candidates.append(v)
+
+    merged = _merge_resolved_values(candidates)
+    if merged is not None:
+        return merged
+
+    # 7. Deep recursive suffix fallback (finds very nested fields anywhere in ctx or decoded JSON blobs)
+    deep_matches = _search_deep_by_suffix(ctx, parts)
+    return _merge_resolved_values(deep_matches)
+
+
+def _as_string_array(v):
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v]
+    if isinstance(v, list):
+        out = []
+        for it in v:
+            out.extend(_as_string_array(it))
+        return out
+    if isinstance(v, dict):
+        out = []
+        _collect_all_strings(v, out)
+        return out
+    if isinstance(v, bool):
+        return ["true" if v else "false"]
+    if isinstance(v, float) and v.is_integer():
+        return [str(int(v))]
+    return [str(v)]
+
+
+def _normalize_operator(op: str) -> str:
+    s = str(op or "").strip().lower()
+    if s in ("==", "=", "is", "equal", "equals", "exact"):
+        return "equals"
+    if s in ("!=", "!==", "is_not", "is not", "not_equal", "not_equals", "notequals", "notequal", "does_not_equal", "does not equal"):
+        return "not_equals"
+    if s in ("contains", "contain", "includes", "include", "has"):
+        return "contains"
+    if s in ("not_contains", "not contains", "notcontains", "does_not_contain", "does not contain", "excludes", "exclude"):
+        return "not_contains"
+    if s in ("startswith", "starts_with", "starts with", "start_with", "start with", "prefix"):
+        return "startsWith"
+    if s in ("endswith", "ends_with", "ends with", "end_with", "end with", "suffix"):
+        return "endsWith"
+    if s in ("regex", "matches_regex", "matches regex", "match_regex", "match regex", "matchesregex", "match", "matches", "re", "pattern"):
+        return "regex"
+    if s in ("exists", "is_set", "is set", "not_empty", "not empty", "is_not_empty", "is not empty", "present"):
+        return "exists"
+    if s in ("not_exists", "not exists", "notexists", "does_not_exist", "does not exist", "is_empty", "is empty", "empty", "missing"):
+        return "not_exists"
+    if s in ("in", "one_of", "one of", "oneof"):
+        return "in"
+    if s in (">", "gt", "greater_than", "greater than", "larger_than", "larger than"):
+        return "gt"
+    if s in (">=", "gte", "greater_or_equal", "at_least"):
+        return "gte"
+    if s in ("<", "lt", "less_than", "less than", "smaller_than", "smaller than"):
+        return "lt"
+    if s in ("<=", "lte", "less_or_equal", "at_most"):
+        return "lte"
+    return s
+
+
+def _compare_numeric_or_str(haystacks: list, needle: str, op_norm: str) -> bool:
+    if not needle:
+        return False
+    try:
+        n_val = float(needle)
+        for h in haystacks:
+            try:
+                h_val = float(h.strip())
+                if op_norm == "gt" and h_val > n_val:
+                    return True
+                if op_norm == "gte" and h_val >= n_val:
+                    return True
+                if op_norm == "lt" and h_val < n_val:
+                    return True
+                if op_norm == "lte" and h_val <= n_val:
+                    return True
+            except ValueError:
+                continue
+        return False
+    except ValueError:
+        for h in haystacks:
+            if op_norm == "gt" and h > needle:
+                return True
+            if op_norm == "gte" and h >= needle:
+                return True
+            if op_norm == "lt" and h < needle:
+                return True
+            if op_norm == "lte" and h <= needle:
+                return True
+        return False
+
+
+def evaluate_condition_detailed(ctx: dict, condition: dict) -> dict:
+    field = condition.get("field") or condition.get("key") or ""
+    raw_op = condition.get("op") or condition.get("operator") or "contains"
+    op = _normalize_operator(raw_op)
+    value = condition.get("value")
+
+    raw = _resolve_field(ctx, field)
+    raw_strings = _as_string_array(raw)
+    expanded_strings = _with_all_decodes(raw_strings)
+    haystacks = [s.lower() for s in expanded_strings]
+
+    needle_str = "" if value is None else str(value)
+    needle_variants = [s.lower() for s in _with_all_decodes([needle_str])] if needle_str else [""]
+    needle = needle_str.lower()
+
+    is_matched = False
+    if op == "exists":
+        is_matched = len(haystacks) > 0 and any(len(s.strip()) > 0 for s in haystacks)
+    elif op == "not_exists":
+        is_matched = len(haystacks) == 0 or all(len(s.strip()) == 0 for s in haystacks)
+    elif op == "equals":
+        is_matched = any(s == n or s.strip() == n.strip() for s in haystacks for n in needle_variants)
+    elif op == "not_equals":
+        is_matched = len(haystacks) == 0 or not any(s == n or s.strip() == n.strip() for s in haystacks for n in needle_variants)
+    elif op == "contains":
+        is_matched = len(needle) > 0 and any(n in s for s in haystacks for n in needle_variants if n)
+    elif op == "not_contains":
+        is_matched = len(needle) > 0 and not any(n in s for s in haystacks for n in needle_variants if n)
+    elif op == "startsWith":
+        is_matched = len(needle) > 0 and any(s.startswith(n) or s.strip().startswith(n.strip()) for s in haystacks for n in needle_variants if n)
+    elif op == "endsWith":
+        is_matched = len(needle) > 0 and any(s.endswith(n) or s.strip().endswith(n.strip()) for s in haystacks for n in needle_variants if n)
+    elif op == "in":
+        items = [p.strip().lower() for p in re.split(r"[,;|]", needle_str) if p.strip()]
+        expanded_items = [s.lower() for s in _with_all_decodes(items)]
+        is_matched = len(expanded_items) > 0 and any(s == it or s.strip() == it for s in haystacks for it in expanded_items)
+    elif op in ("gt", "gte", "lt", "lte"):
+        is_matched = _compare_numeric_or_str(haystacks, needle.strip(), op)
+    elif op == "regex":
+        if needle_str:
+            for pat in _with_all_decodes([needle_str]):
+                try:
+                    re_c = re.compile(pat, re.IGNORECASE)
+                    if any(re_c.search(s) is not None for s in expanded_strings):
+                        is_matched = True
+                        break
+                except re.error:
+                    continue
+
+    # Include both raw and decoded values in preview_actuals so it is clear when decoding occurred
+    preview_actuals = [s[:200] for s in expanded_strings[:10]]
+    return {
+        "field": field,
+        "op": raw_op,
+        "expected": value,
+        "expected_value": value,
+        "actual_values": preview_actuals,
+        "matched": is_matched,
+    }
+
+
+def evaluate_condition(ctx: dict, condition: dict) -> bool:
+    return evaluate_condition_detailed(ctx, condition)["matched"]
+
+
+def _get_group_children(n: dict) -> list:
+    if not isinstance(n, dict):
+        return []
+    for k in ("children", "conditions", "rules", "groups"):
+        ch = n.get(k)
+        if isinstance(ch, list):
+            return ch
+    return []
+
+
+def _is_group(n) -> bool:
+    if not isinstance(n, dict):
+        return False
+    kind = str(n.get("kind") or n.get("type") or "").lower()
+    if kind == "group":
+        return True
+    if kind == "condition":
+        return False
+    return any(isinstance(n.get(k), list) for k in ("children", "conditions", "rules", "groups"))
+
+
+def _is_leaf(n) -> bool:
+    if not isinstance(n, dict) or _is_group(n):
+        return False
+    kind = str(n.get("kind") or n.get("type") or "").lower()
+    if kind == "condition":
+        return True
+    return bool(n.get("field") or n.get("key") or n.get("op") or n.get("operator"))
+
+
+def _is_and_group(node: dict) -> bool:
+    raw = str(
+        node.get("op")
+        or node.get("operator")
+        or node.get("matchMode")
+        or node.get("logicalOp")
+        or node.get("logic")
+        or "and"
+    ).strip().lower()
+    if raw in ("or", "any", "match_any", "match any", "||"):
+        return False
+    return True
+
+
+def evaluate_tree(node: dict, ctx: dict, depth: int = 0) -> bool:
+    if depth > 16 or not isinstance(node, dict):
+        return False
+    if _is_leaf(node):
+        return evaluate_condition(
+            ctx,
+            {
+                "field": node.get("field") or node.get("key") or "",
+                "op": node.get("op") or node.get("operator") or "contains",
+                "value": node.get("value"),
+            },
+        )
+    if not _is_group(node):
+        return False
+    children = [c for c in _get_group_children(node) if _is_leaf(c) or (_is_group(c) and len(_collect_leaves(c)) > 0)]
+    if not children:
+        return False
+    if _is_and_group(node):
+        return all(evaluate_tree(c, ctx, depth + 1) for c in children)
+    return any(evaluate_tree(c, ctx, depth + 1) for c in children)
+
+
+def _collect_leaves(node, depth: int = 0) -> list:
+    if depth > 16 or not isinstance(node, dict):
+        return []
+    if _is_leaf(node):
+        return [node]
+    if not _is_group(node):
+        return []
+    out = []
+    for c in _get_group_children(node):
+        out.extend(_collect_leaves(c, depth + 1))
+    return out
+
+
+def _build_groups(rule):
+    conditions = rule.get("conditions") or []
+    has_or_flag = any(isinstance(c, dict) and c.get("or") for c in conditions)
+    if not has_or_flag:
+        match_mode = str(rule.get("matchMode") or rule.get("op") or "all").strip().lower()
+        if match_mode in ("any", "or", "match_any", "match any"):
+            return [list(conditions)]
+        return [[c] for c in conditions]
+    groups = []
+    for c in conditions:
+        if isinstance(c, dict) and c.get("or") and groups:
+            groups[-1].append(c)
+        else:
+            groups.append([c])
+    return groups
+
+
+def filter_relevant_rules_for_category(rules, target_category: str = "__TARGET_CATEGORY__") -> list:
+    active = [
+        r for r in rules
+        if isinstance(r, dict)
+        and r.get("enabled", True) is not False
+        and _categories_match(_resolve_rule_category(r), target_category)
+    ]
+    active.sort(key=lambda r: r.get("priority", 100))
+    return active
+
+
+def inspect_and_evaluate_rules(ctx: dict, rules, target_category: str = "__TARGET_CATEGORY__", incident_ref: dict = None) -> tuple:
+    incident_info = incident_ref or {}
+    rules_checked = []
+    rules_skipped = []
+    matches = []
+
+    sorted_rules = [r for r in rules if isinstance(r, dict)]
+    sorted_rules.sort(key=lambda r: r.get("priority", 100))
+
+    for rule in sorted_rules:
+        rule_id = str(rule.get("id") or "")
+        rule_name = str(rule.get("name") or "Unnamed rule")
+        rule_priority = rule.get("priority", 100)
+        rule_enabled = rule.get("enabled", True) is not False
+        rule_cat = _resolve_rule_category(rule)
+        if not rule.get("entityCategory"):
+            rule["entityCategory"] = rule_cat
+        cat_matches = _categories_match(rule_cat, target_category)
+
+        if not rule_enabled:
+            rules_skipped.append({
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "priority": rule_priority,
+                "enabled": False,
+                "entity_category": rule_cat,
+                "checked": False,
+                "matched": False,
+                "should_trigger": False,
+                "status": "skipped_disabled",
+                "reason": "Rule is disabled",
+            })
+            continue
+
+        if not cat_matches:
+            rules_skipped.append({
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "priority": rule_priority,
+                "enabled": True,
+                "entity_category": rule_cat,
+                "checked": False,
+                "matched": False,
+                "should_trigger": False,
+                "status": "skipped_category_mismatch",
+                "reason": f"Rule targets category '{rule_cat}', incoming entity is '{target_category}'",
+            })
+            continue
+
+        evaluated_conditions = []
+        matched_conditions = []
+        failed_conditions = []
+        rule_matched = False
+        reason = ""
+
+        tree = rule.get("conditionTree")
+        if _is_group(tree):
+            leaves = _collect_leaves(tree)
+            for leaf in leaves:
+                detail = evaluate_condition_detailed(
+                    ctx,
+                    {
+                        "field": leaf.get("field", ""),
+                        "op": leaf.get("op", ""),
+                        "value": leaf.get("value"),
+                    },
+                )
+                evaluated_conditions.append(detail)
+                if detail["matched"]:
+                    matched_conditions.append(detail)
+                else:
+                    failed_conditions.append(detail)
+
+            if not leaves:
+                rule_matched = False
+                reason = "Rule condition tree has no conditions configured"
+            else:
+                rule_matched = evaluate_tree(tree, ctx)
+                if rule_matched:
+                    reason = f"Matched {len(matched_conditions)} of {len(evaluated_conditions)} condition(s) in condition tree"
+                else:
+                    reason = f"Did not match condition tree ({len(failed_conditions)} of {len(evaluated_conditions)} condition(s) failed)"
+        else:
+            conds = rule.get("conditions") or []
+            if not conds:
+                rule_matched = False
+                reason = "Rule has no conditions configured"
+            else:
+                groups = _build_groups(rule)
+                all_passed = True
+                for g in groups:
+                    group_matched_any = False
+                    for c in g:
+                        if _is_group(c):
+                            for leaf in _collect_leaves(c):
+                                detail = evaluate_condition_detailed(ctx, leaf)
+                                evaluated_conditions.append(detail)
+                                if detail["matched"]:
+                                    matched_conditions.append(detail)
+                                else:
+                                    failed_conditions.append(detail)
+                            if evaluate_tree(c, ctx):
+                                group_matched_any = True
+                        else:
+                            detail = evaluate_condition_detailed(ctx, c)
+                            evaluated_conditions.append(detail)
+                            if detail["matched"]:
+                                matched_conditions.append(detail)
+                                group_matched_any = True
+                            else:
+                                failed_conditions.append(detail)
+                    if not group_matched_any:
+                        all_passed = False
+                rule_matched = all_passed
+                if rule_matched:
+                    reason = f"Matched {len(matched_conditions)} condition(s)"
+                else:
+                    reason = f"Did not match ({len(failed_conditions)} of {len(evaluated_conditions)} condition(s) failed)"
+
+        checked_entry = {
+            "rule_id": rule_id,
+            "rule_name": rule_name,
+            "priority": rule_priority,
+            "enabled": True,
+            "entity_category": rule_cat,
+            "checked": True,
+            "matched": rule_matched,
+            "should_trigger": rule_matched,
+            "status": "matched" if rule_matched else "not_matched",
+            "reason": reason,
+            "incident": incident_info,
+            "evaluated_conditions": evaluated_conditions,
+            "matched_conditions": matched_conditions,
+            "failed_conditions": failed_conditions,
+            "configured_actions": rule.get("actions") or [],
+        }
+        rules_checked.append(checked_entry)
+
+        if rule_matched:
+            matches.append({
+                "rule": rule,
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "should_trigger": True,
+                "incident": incident_info,
+                "matched": matched_conditions,
+                "evaluated_conditions": evaluated_conditions,
+            })
+
+    return rules_checked, rules_skipped, matches
+
+
+def _parse_input_safely(raw, default=None):
+    if raw is None:
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s or s.startswith("$"):
+            return default
+        try:
+            val = json.loads(s)
+            if isinstance(val, str):
+                try:
+                    val = json.loads(val)
+                except Exception:
+                    pass
+            return val
+        except Exception:
+            return default
+    return default
+
+
+def _extract_rules(raw_rules_input):
+    parsed = _parse_input_safely(raw_rules_input, default=[])
+    if isinstance(parsed, dict):
+        if "values" in parsed and isinstance(parsed["values"], list):
+            parsed = parsed["values"]
+        elif "message" in parsed:
+            msg = _parse_input_safely(parsed["message"], default=[])
+            if isinstance(msg, list):
+                parsed = msg
+            elif isinstance(msg, dict) and isinstance(msg.get("values"), list):
+                parsed = msg["values"]
+            elif isinstance(msg, dict):
+                parsed = [msg]
+        elif "value" in parsed:
+            val = parsed["value"]
+            if isinstance(val, str):
+                val = _parse_input_safely(val, default=[])
+            if isinstance(val, list):
+                parsed = val
+            elif isinstance(val, dict):
+                parsed = [val]
+        elif "data" in parsed and isinstance(parsed["data"], list):
+            parsed = parsed["data"]
+        else:
+            parsed = [parsed]
+
+    rules = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, str):
+                item = _parse_input_safely(item)
+            if not isinstance(item, dict):
+                continue
+            if "value" in item and len(item) <= 4 and ("key" in item or "id" in item):
+                inner = item["value"]
+                if isinstance(inner, str):
+                    inner = _parse_input_safely(inner)
+                if isinstance(inner, dict):
+                    item = inner
+            resolved_cat = _resolve_rule_category(item)
+            item["entityCategory"] = resolved_cat
+            rules.append(item)
+    return rules
+
+
+def _infer_category_from_entity(entity: dict, fallback: str) -> str:
+    if not isinstance(entity, dict):
+        return normalize_category(fallback) or "shuffle-security_incidents"
+    explicit = entity.get("entityCategory") or entity.get("category_name")
+    if isinstance(explicit, str) and explicit.strip():
+        return normalize_category(explicit)
+    if entity.get("cve") or entity.get("vuln_id") or entity.get("osv_id") or isinstance(entity.get("affected"), list):
+        return "shuffle-security_vulns"
+    if entity.get("purl") or entity.get("ecosystem") or entity.get("package_manager"):
+        return "shuffle-security_packages"
+    if entity.get("vendor") and entity.get("version") and not entity.get("finding_uid"):
+        return "shuffle-security_software"
+    if entity.get("username") or (entity.get("email") and entity.get("role") and not entity.get("finding_uid")):
+        return "shuffle-security_users"
+    if entity.get("hostname") and entity.get("ip") and not entity.get("finding_uid"):
+        return "shuffle-security_assets"
+    return normalize_category(fallback) or "shuffle-security_incidents"
+
+
+# ── Validation Entrypoint ──────────────────────────────────────────────────
+
+raw_exec = r"""$exec"""
+raw_datastore_key = r"""$exec.shuffle_datastore.key"""
+raw_datastore_cat = r"""$exec.shuffle_datastore.category"""
+
+cur_exec = _parse_input_safely(raw_exec, default={})
+datastore_meta = {}
+if isinstance(cur_exec, dict):
+    if isinstance(cur_exec.get("shuffle_datastore"), dict):
+        datastore_meta = cur_exec.pop("shuffle_datastore", {})
+    for wrapper_key in ("incident", "vulnerability", "vuln", "asset", "infrastructure", "package", "software", "user", "entity", "item"):
+        if wrapper_key in cur_exec and isinstance(cur_exec[wrapper_key], dict) and len(cur_exec) == 1:
+            cur_exec = cur_exec[wrapper_key]
+            break
+
+if not isinstance(cur_exec, dict) or not cur_exec:
+    print(json.dumps({
+        "success": False,
+        "matched": False,
+        "matched_count": 0,
+        "reason": "No valid entity data found in execution argument",
+        "matches": [],
+    }))
+    exit()
+
+default_target_category = "__TARGET_CATEGORY__"
+item_key = raw_datastore_key.strip() if isinstance(raw_datastore_key, str) else ""
+if not item_key or item_key.startswith("$"):
+    item_key = str(datastore_meta.get("key") or "").strip()
+if not item_key or item_key.startswith("$"):
+    item_key = (
+        cur_exec.get("finding_uid")
+        or cur_exec.get("id")
+        or cur_exec.get("key")
+        or cur_exec.get("cve")
+        or cur_exec.get("purl")
+        or cur_exec.get("hostname")
+        or cur_exec.get("username")
+        or cur_exec.get("email")
+        or cur_exec.get("name")
+        or ""
+    )
+
+item_cat = normalize_category(raw_datastore_cat)
+if not item_cat:
+    item_cat = normalize_category(datastore_meta.get("category"))
+if not item_cat:
+    item_cat = _infer_category_from_entity(cur_exec, default_target_category)
+
+item_title = (
+    cur_exec.get("title")
+    or cur_exec.get("name")
+    or cur_exec.get("cve")
+    or cur_exec.get("hostname")
+    or cur_exec.get("username")
+    or cur_exec.get("email")
+    or cur_exec.get("purl")
+    or cur_exec.get("id")
+    or ""
+)
+incident_ref = {
+    "key": item_key,
+    "id": cur_exec.get("finding_uid") or cur_exec.get("id") or item_key,
+    "finding_uid": cur_exec.get("finding_uid") or "",
+    "title": item_title,
+    "category": item_cat,
+    "severity": cur_exec.get("severity") or "",
+    "status": cur_exec.get("status") or "",
+}
+
+raw_rules_input = r"""$get_all_rules_from_the_system"""
+rules = _extract_rules(raw_rules_input)
+
+if not rules:
+    print(json.dumps({
+        "matched": False,
+        "category": item_cat,
+        "key": item_key,
+        "matched_rules": [],
+        "unmatched_rules": [],
+        "reason": "No routing rules found in shuffle-security_routing",
+        "matches": [],
+    }))
+    exit()
+
+ctx = dict(cur_exec)
+ctx["category"] = item_cat
+if not ctx.get("title"):
+    ctx["title"] = item_title
+if not ctx.get("description"):
+    ctx["description"] = (
+        cur_exec.get("message")
+        or cur_exec.get("summary")
+        or cur_exec.get("details")
+        or ""
+    )
+if not ctx.get("rawOCSF") and isinstance(cur_exec.get("rawOCSF"), dict):
+    ctx["rawOCSF"] = cur_exec["rawOCSF"]
+
+rules_checked, rules_skipped, matches = inspect_and_evaluate_rules(ctx, rules, item_cat, incident_ref)
+
+def _summarize_cond(c):
+    if not isinstance(c, dict):
+        return str(c)
+    f = c.get("field") or ""
+    op = c.get("op") or ""
+    exp = c.get("expected")
+    act = c.get("actual_values")
+    act_str = act[0] if isinstance(act, list) and len(act) == 1 else act
+    return f"{f} {op} {json.dumps(exp)} (actual: {json.dumps(act_str)})"
+
+matched_summary = []
+unmatched_summary = []
+for rc in rules_checked:
+    entry = {
+        "rule_id": rc.get("rule_id") or "",
+        "rule_name": rc.get("rule_name") or "",
+        "priority": rc.get("priority", 100),
+    }
+    if rc.get("matched"):
+        entry["matched_on"] = [_summarize_cond(c) for c in (rc.get("matched_conditions") or [])]
+        matched_summary.append(entry)
+    else:
+        failed = [_summarize_cond(c) for c in (rc.get("failed_conditions") or [])]
+        entry["reason"] = "; ".join(failed) if failed else (rc.get("reason") or "Did not match")
+        unmatched_summary.append(entry)
+
+for rs in rules_skipped:
+    unmatched_summary.append({
+        "rule_id": rs.get("rule_id") or "",
+        "rule_name": rs.get("rule_name") or "",
+        "priority": rs.get("priority", 100),
+        "reason": rs.get("reason") or "Skipped",
+    })
+
+print(json.dumps({
+    "matched": len(matches) > 0,
+    "category": item_cat,
+    "key": item_key,
+    "matched_rules": matched_summary,
+    "unmatched_rules": unmatched_summary,
+    "matches": matches,
+}))`
+
+	return strings.ReplaceAll(script, "__TARGET_CATEGORY__", targetCategory)
+}
+
+func getRoutingExecutionScript(targetCategory string) string {
+	if targetCategory == "" {
+		targetCategory = "shuffle-security_incidents"
+	}
+
+	script := `import json
+import re
+import time
+
+# ── Action application helpers ─────────────────────────────────────────────
+
+BASELINE_CATEGORIES = {
+    "incidents": "shuffle-security_incidents",
+    "incident": "shuffle-security_incidents",
+    "vulns": "shuffle-security_vulns",
+    "vuln": "shuffle-security_vulns",
+    "vulnerabilities": "shuffle-security_vulns",
+    "vulnerability": "shuffle-security_vulns",
+    "infrastructure": "shuffle-security_infrastructure",
+    "assets": "shuffle-security_assets",
+    "asset": "shuffle-security_assets",
+    "packages": "shuffle-security_packages",
+    "package": "shuffle-security_packages",
+    "software": "shuffle-security_software",
+    "users": "shuffle-security_users",
+    "user": "shuffle-security_users",
+}
+
+
+def normalize_category(cat) -> str:
+    if not cat or not isinstance(cat, str):
+        return ""
+    s = cat.strip()
+    if not s or s.startswith("$"):
+        return ""
+    low = s.lower()
+    if low.startswith("shuffle-security_"):
+        suffix = low[len("shuffle-security_"):]
+        if suffix in BASELINE_CATEGORIES:
+            return BASELINE_CATEGORIES[suffix]
+        return s
+    if low in BASELINE_CATEGORIES:
+        return BASELINE_CATEGORIES[low]
+    return s
+
+
+def normalize_severity(v):
+    if not v:
+        return None
+    s = str(v).strip().lower()
+    mapping = {
+        "1": "Informational", "info": "Informational", "informational": "Informational",
+        "2": "Low", "low": "Low",
+        "3": "Medium", "medium": "Medium", "med": "Medium",
+        "4": "High", "high": "High",
+        "5": "Critical", "critical": "Critical", "crit": "Critical",
+    }
+    return mapping.get(s, str(v).capitalize())
+
+
+def normalize_status(v):
+    if not v:
+        return None
+    s = str(v).strip().lower()
+    mapping = {
+        "new": "New", "open": "New",
+        "in_progress": "In Progress", "in progress": "In Progress", "investigating": "In Progress",
+        "on_hold": "On Hold", "on hold": "On Hold",
+        "resolved": "Resolved",
+        "closed": "Closed",
+    }
+    return mapping.get(s, str(v).capitalize())
+
+
+def parse_action_value(val):
+    if val is None:
+        return ""
+    if isinstance(val, (int, float, bool, list, dict)):
+        return val
+    s = str(val).strip()
+    if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+    return s
+
+
+def _split_path(path: str) -> list:
+    if not path or not isinstance(path, str):
+        return []
+    s = path.strip()
+    if s.startswith("$."):
+        s = s[2:]
+    elif s.startswith("$"):
+        s = s[1:]
+    normalized = re.sub(r"\[['\"]?([^'\"\]]+)['\"]?\]", r".\1", s)
+    return [p for p in normalized.split(".") if p != ""]
+
+
+def get_deep(d, path):
+    parts = _split_path(path) if isinstance(path, str) else list(path or [])
+    cur = d
+    for p in parts:
+        if isinstance(cur, dict):
+            if p not in cur:
+                return None
+            cur = cur[p]
+        elif isinstance(cur, list) and p.isdigit():
+            idx = int(p)
+            if 0 <= idx < len(cur):
+                cur = cur[idx]
+            else:
+                return None
+        else:
+            return None
+    return cur
+
+
+def set_deep(d, path, value):
+    parts = _split_path(path) if isinstance(path, str) else list(path or [])
+    if not parts or not isinstance(d, dict):
+        return
+    cur = d
+    for i, p in enumerate(parts[:-1]):
+        next_p = parts[i + 1]
+        if isinstance(cur, dict):
+            if p not in cur or not isinstance(cur[p], (dict, list)):
+                cur[p] = [] if next_p.isdigit() else {}
+            cur = cur[p]
+        elif isinstance(cur, list) and p.isdigit():
+            idx = int(p)
+            while len(cur) <= idx:
+                cur.append({} if not next_p.isdigit() else [])
+            if not isinstance(cur[idx], (dict, list)):
+                cur[idx] = {} if not next_p.isdigit() else []
+            cur = cur[idx]
+        else:
+            return
+    last = parts[-1]
+    if isinstance(cur, dict):
+        cur[last] = value
+    elif isinstance(cur, list) and last.isdigit():
+        idx = int(last)
+        while len(cur) <= idx:
+            cur.append(None)
+        cur[idx] = value
+
+
+def _parse_input_safely(raw, default=None):
+    if raw is None:
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s or s.startswith("$"):
+            return default
+        try:
+            val = json.loads(s)
+            if isinstance(val, str):
+                try:
+                    val = json.loads(val)
+                except Exception:
+                    pass
+            return val
+        except Exception:
+            return default
+    return default
+
+
+def _infer_category_from_entity(entity: dict, fallback: str) -> str:
+    if not isinstance(entity, dict):
+        return normalize_category(fallback) or "shuffle-security_incidents"
+    explicit = entity.get("entityCategory") or entity.get("category_name")
+    if isinstance(explicit, str) and explicit.strip():
+        return normalize_category(explicit)
+    if entity.get("cve") or entity.get("vuln_id") or entity.get("osv_id") or isinstance(entity.get("affected"), list):
+        return "shuffle-security_vulns"
+    if entity.get("purl") or entity.get("ecosystem") or entity.get("package_manager"):
+        return "shuffle-security_packages"
+    if entity.get("vendor") and entity.get("version") and not entity.get("finding_uid"):
+        return "shuffle-security_software"
+    if entity.get("username") or (entity.get("email") and entity.get("role") and not entity.get("finding_uid")):
+        return "shuffle-security_users"
+    if entity.get("hostname") and entity.get("ip") and not entity.get("finding_uid"):
+        return "shuffle-security_assets"
+    return normalize_category(fallback) or "shuffle-security_incidents"
+
+
+def _summarize_cond(c):
+    if isinstance(c, str):
+        return c
+    if not isinstance(c, dict):
+        return str(c)
+    f = c.get("field") or ""
+    op = c.get("op") or ""
+    exp = c.get("expected")
+    act = c.get("actual_values")
+    act_str = act[0] if isinstance(act, list) and len(act) == 1 else act
+    return f"{f} {op} {json.dumps(exp)} (actual: {json.dumps(act_str)})"
+
+
+def _rule_priority(match_item):
+    if not isinstance(match_item, dict):
+        return 100
+    rule = match_item.get("rule")
+    raw_p = rule.get("priority", 100) if isinstance(rule, dict) else match_item.get("priority", 100)
+    try:
+        return int(raw_p)
+    except Exception:
+        return 100
+
+
+# ── Execution Entrypoint ───────────────────────────────────────────────────
+
+raw_exec = r"""$exec"""
+raw_datastore_key = r"""$exec.shuffle_datastore.key"""
+raw_datastore_cat = r"""$exec.shuffle_datastore.category"""
+raw_datastore_org = r"""$exec.shuffle_datastore.org_id"""
+raw_validation = r"""$find_relevant_rules_for_category"""
+
+cur_exec = _parse_input_safely(raw_exec, default={})
+datastore_meta = {}
+if isinstance(cur_exec, dict):
+    if isinstance(cur_exec.get("shuffle_datastore"), dict):
+        datastore_meta = cur_exec.pop("shuffle_datastore", {})
+    for wrapper_key in ("incident", "vulnerability", "vuln", "asset", "infrastructure", "package", "software", "user", "entity", "item"):
+        if wrapper_key in cur_exec and isinstance(cur_exec[wrapper_key], dict) and len(cur_exec) == 1:
+            cur_exec = cur_exec[wrapper_key]
+            break
+
+source_org_id = str(datastore_meta.get("org_id") or "").strip()
+if not source_org_id or source_org_id.startswith("$"):
+    if isinstance(raw_datastore_org, str) and not raw_datastore_org.strip().startswith("$"):
+        source_org_id = raw_datastore_org.strip()
+if not source_org_id and isinstance(cur_exec, dict):
+    source_org_id = str(cur_exec.get("org_id") or "").strip()
+
+if not isinstance(cur_exec, dict) or not cur_exec:
+    print(json.dumps({
+        "matched": False,
+        "matched_rules": [],
+        "unmatched_rules": [],
+        "modified_fields": {},
+        "what_happened": ["No valid entity data found in execution argument"],
+        "db_updated": False,
+        "move_to_org": False,
+        "target_org_id": "",
+        "stats_key": "routing_rules_matched",
+        "stats_value": 0,
+    }))
+    exit()
+
+validation_res = _parse_input_safely(raw_validation, default={})
+if isinstance(validation_res, dict) and "message" in validation_res:
+    inner_msg = _parse_input_safely(validation_res.get("message"), default=None)
+    if isinstance(inner_msg, dict):
+        validation_res = inner_msg
+if not isinstance(validation_res, dict):
+    validation_res = {}
+
+matches = validation_res.get("matches") or []
+if not isinstance(matches, list):
+    matches = []
+
+unmatched_rules = validation_res.get("unmatched_rules") or []
+if not isinstance(unmatched_rules, list):
+    unmatched_rules = []
+
+default_target_category = "__TARGET_CATEGORY__"
+item_key = str(validation_res.get("key") or "").strip()
+if not item_key or item_key.startswith("$"):
+    item_key = raw_datastore_key.strip() if isinstance(raw_datastore_key, str) else ""
+if not item_key or item_key.startswith("$"):
+    item_key = str(datastore_meta.get("key") or "").strip()
+if not item_key or item_key.startswith("$"):
+    item_key = (
+        cur_exec.get("finding_uid")
+        or cur_exec.get("id")
+        or cur_exec.get("key")
+        or cur_exec.get("cve")
+        or cur_exec.get("purl")
+        or cur_exec.get("hostname")
+        or cur_exec.get("username")
+        or cur_exec.get("email")
+        or cur_exec.get("name")
+        or ""
+    )
+
+item_cat = normalize_category(validation_res.get("category"))
+if not item_cat:
+    item_cat = normalize_category(raw_datastore_cat)
+if not item_cat:
+    item_cat = normalize_category(datastore_meta.get("category"))
+if not item_cat:
+    item_cat = _infer_category_from_entity(cur_exec, default_target_category)
+
+if not matches:
+    print(json.dumps({
+        "matched": False,
+        "matched_rules": [],
+        "unmatched_rules": unmatched_rules,
+        "modified_fields": {},
+        "what_happened": ["No rules matched"],
+        "db_updated": False,
+        "move_to_org": False,
+        "target_org_id": "",
+        "stats_key": "routing_rules_matched",
+        "stats_value": 0,
+    }))
+    exit()
+
+# Sort all matched rules strictly by priority ascending before running any actions
+matches_sorted = sorted(matches, key=_rule_priority)
+
+now_ms = int(time.time() * 1000)
+changed = False
+prev_status = str(cur_exec.get("status") or "").lower()
+
+modified_fields = {}
+what_happened = []
+rule_reports = {}
+rule_order = []
+
+def record_field_change(field_name, old_val, new_val, rule_name):
+    if field_name not in modified_fields:
+        modified_fields[field_name] = {
+            "from": old_val,
+            "to": new_val,
+            "by_rule": rule_name,
+        }
+    else:
+        modified_fields[field_name]["to"] = new_val
+        prev_by = modified_fields[field_name]["by_rule"]
+        if rule_name not in str(prev_by):
+            modified_fields[field_name]["by_rule"] = f"{prev_by} -> {rule_name}"
+
+# Prepare per-rule report entries in priority order
+for idx, m in enumerate(matches_sorted):
+    rule = m.get("rule") if isinstance(m, dict) else None
+    if not isinstance(rule, dict):
+        continue
+    rule_id = str(rule.get("id") or m.get("rule_id") or f"rule_{idx}")
+    rule_name = str(rule.get("name") or m.get("rule_name") or "Routing rule")
+    rule_priority = _rule_priority(m)
+    rk = f"{idx}:{rule_id}:{rule_name}"
+    rule_order.append((rk, m, rule, rule_id, rule_name, rule_priority))
+    rule_reports[rk] = {
+        "rule_id": rule_id,
+        "rule_name": rule_name,
+        "priority": rule_priority,
+        "matched_on": [_summarize_cond(c) for c in (m.get("matched") or [])],
+        "did": [],
+    }
+
+# ── PHASE 1: Apply all field & metadata modifications in priority order ────
+FIELD_ACTION_TYPES = {
+    "set_severity",
+    "set_status",
+    "set_priority",
+    "add_label",
+    "assign_to",
+    "set_field",
+    "add_comment",
+}
+
+for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
+    actions = rule.get("actions") or []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        atype = action.get("type")
+        if atype not in FIELD_ACTION_TYPES:
+            continue
+
+        if atype == "set_severity":
+            sev = normalize_severity(action.get("value"))
+            prev_val = cur_exec.get("severity")
+            if sev and prev_val != sev:
+                cur_exec["severity"] = sev
+                changed = True
+                record_field_change("severity", prev_val, sev, rule_name)
+                msg = f"severity: '{prev_val}' -> '{sev}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"severity already '{prev_val}' (no change)")
+
+        elif atype == "set_status":
+            st = normalize_status(action.get("value"))
+            prev_val = cur_exec.get("status")
+            if st and prev_val != st:
+                cur_exec["status"] = st
+                changed = True
+                record_field_change("status", prev_val, st, rule_name)
+                msg = f"status: '{prev_val}' -> '{st}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"status already '{prev_val}' (no change)")
+
+        elif atype == "set_priority":
+            pri = str(action.get("value") or "").strip()
+            prev_val = cur_exec.get("priority")
+            if pri and prev_val != pri:
+                cur_exec["priority"] = pri
+                cur_exec.setdefault("rawOCSF", {})["priority"] = pri
+                changed = True
+                record_field_change("priority", prev_val, pri, rule_name)
+                msg = f"priority: '{prev_val}' -> '{pri}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"priority already '{prev_val}' (no change)")
+
+        elif atype == "add_label":
+            lbl = str(action.get("value") or "").strip()
+            cur_labels = list(cur_exec.get("labels") or [])
+            if lbl and lbl not in cur_labels:
+                prev_labels = list(cur_labels)
+                cur_labels.append(lbl)
+                cur_exec["labels"] = cur_labels
+                changed = True
+                record_field_change("labels", prev_labels, list(cur_labels), rule_name)
+                msg = f"added label '{lbl}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"label '{lbl}' already present (no change)")
+
+        elif atype == "assign_to":
+            ass = str(action.get("value") or "").strip()
+            prev_val = cur_exec.get("assignee")
+            if ass and prev_val != ass:
+                cur_exec["assignee"] = ass
+                changed = True
+                record_field_change("assignee", prev_val, ass, rule_name)
+                msg = f"assignee: '{prev_val}' -> '{ass}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"assignee already '{prev_val}' (no change)")
+
+        elif atype == "add_comment":
+            txt = str(action.get("value") or "").strip()
+            if txt:
+                cur_act = cur_exec.setdefault("activity", [])
+                already = any(it.get("type") == "comment" and it.get("content", "").strip() == txt for it in cur_act if isinstance(it, dict))
+                if not already:
+                    cur_act.append({
+                        "id": f"routing-comment-{now_ms}-{len(cur_act)}",
+                        "type": "comment",
+                        "user": "Automated Routing Rules",
+                        "timestamp": now_ms,
+                        "content": txt,
+                        "details": {"source": "incident_routing_rule", "rule": rule_name},
+                        "attachments": [],
+                        "ai_handled": True,
+                    })
+                    changed = True
+                    record_field_change("activity", "existing activity", f"added comment: {txt}", rule_name)
+                    msg = f"added comment: '{txt}'"
+                    rule_reports[rk]["did"].append(msg)
+                    what_happened.append(f"[{rule_name}] {msg}")
+                else:
+                    rule_reports[rk]["did"].append("comment already present (no change)")
+
+        elif atype == "set_field":
+            field = str(action.get("field") or "").strip()
+            if field:
+                val = parse_action_value(action.get("value"))
+                canonical = field[len("rawOCSF."):] if field.startswith("rawOCSF.") else field
+                if canonical == "title":
+                    prev_val = cur_exec.get("title")
+                    new_val = str(val)
+                    cur_exec["title"] = new_val
+                    target_field = "title"
+                elif canonical in ("description", "desc", "message"):
+                    prev_val = cur_exec.get("description") or cur_exec.get("message")
+                    new_val = str(val)
+                    cur_exec["message"] = new_val
+                    cur_exec["description"] = new_val
+                    target_field = "description"
+                elif canonical == "severity":
+                    prev_val = cur_exec.get("severity")
+                    new_val = normalize_severity(val) or prev_val
+                    if new_val:
+                        cur_exec["severity"] = new_val
+                    target_field = "severity"
+                elif canonical == "status":
+                    prev_val = cur_exec.get("status")
+                    new_val = normalize_status(val) or prev_val
+                    if new_val:
+                        cur_exec["status"] = new_val
+                    target_field = "status"
+                elif canonical == "assignee":
+                    prev_val = cur_exec.get("assignee")
+                    new_val = str(val)
+                    cur_exec["assignee"] = new_val
+                    target_field = "assignee"
+                elif canonical == "priority":
+                    prev_val = cur_exec.get("priority")
+                    new_val = str(val)
+                    cur_exec["priority"] = new_val
+                    cur_exec.setdefault("rawOCSF", {})["priority"] = new_val
+                    target_field = "priority"
+                elif canonical in ("labels", "types"):
+                    lbl = str(val).strip()
+                    cur_labels = list(cur_exec.get("labels") or [])
+                    prev_val = list(cur_labels)
+                    if lbl and lbl not in cur_labels:
+                        cur_labels.append(lbl)
+                        cur_exec["labels"] = cur_labels
+                    new_val = list(cur_labels)
+                    target_field = "labels"
+                elif field.startswith("rawOCSF."):
+                    subpath = field[len("rawOCSF."):]
+                    prev_val = get_deep(cur_exec.get("rawOCSF") or {}, subpath)
+                    new_val = val
+                    set_deep(cur_exec.setdefault("rawOCSF", {}), subpath, val)
+                    target_field = field
+                elif field.startswith("customFields.") or field.startswith("custom_fields."):
+                    cf = cur_exec.setdefault("customFields", {})
+                    clean_k = re.sub(r"^(customFields\.|custom_fields\.)", "", field)
+                    prev_val = cf.get(clean_k) if clean_k in cf else get_deep(cf, clean_k)
+                    new_val = val
+                    cf[clean_k] = val
+                    if "." in clean_k or "[" in clean_k:
+                        set_deep(cf, clean_k, val)
+                    target_field = f"customFields.{clean_k}"
+                elif "." in field or "[" in field:
+                    top_key = _split_path(field)[0] if _split_path(field) else ""
+                    raw_ocsf = cur_exec.get("rawOCSF")
+                    if top_key and top_key in cur_exec:
+                        prev_val = get_deep(cur_exec, field)
+                        set_deep(cur_exec, field, val)
+                        if isinstance(raw_ocsf, dict) and top_key in raw_ocsf:
+                            set_deep(raw_ocsf, field, val)
+                        target_field = field
+                    elif isinstance(raw_ocsf, dict) and top_key and top_key in raw_ocsf:
+                        prev_val = get_deep(raw_ocsf, field)
+                        set_deep(raw_ocsf, field, val)
+                        target_field = f"rawOCSF.{field}"
+                    else:
+                        prev_val = get_deep(cur_exec, field)
+                        set_deep(cur_exec, field, val)
+                        cf = cur_exec.setdefault("customFields", {})
+                        cf[field] = val
+                        target_field = field
+                    new_val = val
+                else:
+                    cf = cur_exec.setdefault("customFields", {})
+                    clean_k = re.sub(r"^(customFields\.|custom_fields\.)", "", field)
+                    prev_val = cf.get(clean_k) if clean_k in cf else cur_exec.get(clean_k)
+                    new_val = val
+                    cf[clean_k] = val
+                    if clean_k in cur_exec:
+                        cur_exec[clean_k] = val
+                    target_field = f"customFields.{clean_k}"
+
+                if prev_val != new_val:
+                    changed = True
+                    record_field_change(target_field, prev_val, new_val, rule_name)
+                    msg = f"{target_field}: '{prev_val}' -> '{new_val}'"
+                    rule_reports[rk]["did"].append(msg)
+                    what_happened.append(f"[{rule_name}] {msg}")
+                else:
+                    rule_reports[rk]["did"].append(f"{target_field} already '{prev_val}' (no change)")
+
+# Auto-resolve audit comment after all status changes have been evaluated
+resolving = {"resolved", "closed"}
+now_status = str(cur_exec.get("status") or "").lower()
+if prev_status not in resolving and now_status in resolving:
+    status_lbl = "Resolved" if now_status == "resolved" else "Closed"
+    note = f"{status_lbl} automatically by routing rule."
+    cur_act = cur_exec.setdefault("activity", [])
+    cur_act.append({
+        "id": f"routing-autoresolve-{now_ms}-{len(cur_act)}",
+        "type": "comment",
+        "user": "Automated Routing Rules",
+        "timestamp": now_ms,
+        "content": note,
+        "details": {"source": "incident_routing_rule", "auto_resolved": True},
+        "attachments": [],
+        "ai_handled": True,
+    })
+    changed = True
+    what_happened.append(f"Added auto-{now_status} activity note")
+
+# ── PHASE 2: Apply forwarding / move / agent actions in priority order ─────
+move_to_org = False
+target_org_id = ""
+target_region = ""
+target_region_url = ""
+
+def normalize_cloud_region(raw_url, raw_reg):
+    reg = str(raw_reg or "").strip().lower()
+    url = str(raw_url or "").strip().rstrip("/")
+    if url:
+        low = url.lower()
+        host = low.split("://", 1)[-1].split("/", 1)[0]
+        if host.endswith(".shuffle.security"):
+            sub = host[:-len(".shuffle.security")]
+            if not reg and sub and sub != "www":
+                reg = sub
+            url = f"https://{sub}.shuffler.io" if (sub and sub != "www") else "https://shuffler.io"
+        elif host == "shuffle.security":
+            if not reg:
+                reg = "us"
+            url = "https://shuffler.io"
+        elif host.endswith(".shuffler.io"):
+            sub = host[:-len(".shuffler.io")]
+            if not reg and sub and sub != "www":
+                reg = sub
+            url = f"https://{host}"
+        elif host == "shuffler.io":
+            if not reg:
+                reg = "us"
+            url = "https://shuffler.io"
+    elif reg:
+        url = "https://shuffler.io" if reg in ("us", "default") else f"https://{reg}.shuffler.io"
+    if not url and ("self" in locals() or "self" in globals()):
+        fallback_url = str(getattr(self, "url", "") or "").strip().rstrip("/")
+        if fallback_url:
+            url = fallback_url
+    return reg, url
+
+for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
+    actions = rule.get("actions") or []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        atype = action.get("type")
+        if atype in FIELD_ACTION_TYPES:
+            continue
+
+        if atype in ("suggest_move", "move"):
+            target_org = str(action.get("targetOrgId") or "").strip()
+            target_org_name = str(action.get("targetOrgName") or "").strip()
+            raw_region_url = action.get("targetRegionUrl") or action.get("region_url") or ""
+            raw_region = action.get("targetRegion") or action.get("region") or ""
+            resolved_reg, resolved_reg_url = normalize_cloud_region(raw_region_url, raw_region)
+            if target_org:
+                raw_ocsf = cur_exec.setdefault("rawOCSF", {})
+                meta = raw_ocsf.setdefault("metadata", {})
+                ext = meta.setdefault("extensions", {})
+                custom_attrs = ext.setdefault("custom_attributes", {})
+
+                prev_tenants = [t for t in (custom_attrs.get("_tenants") or []) if isinstance(t, str) and t != target_org]
+                removed_tenants = list(custom_attrs.get("_tenants_removed") or [])
+                for pt in prev_tenants:
+                    if pt not in removed_tenants:
+                        removed_tenants.append(pt)
+                if source_org_id and source_org_id != target_org and source_org_id not in removed_tenants:
+                    removed_tenants.append(source_org_id)
+                custom_attrs["_tenants"] = [target_org]
+                custom_attrs["_tenants_removed"] = removed_tenants
+                custom_attrs["_tenants_updated_at"] = now_ms
+
+                suggs = custom_attrs.setdefault("routing_suggestions", [])
+                already = any(s.get("ruleId") == rule_id and s.get("status") in ("pending", "moved") for s in suggs if isinstance(s, dict))
+                target_label = target_org_name or target_org
+                if not already:
+                    sugg_entry = {
+                        "ruleId": rule_id,
+                        "ruleName": rule_name,
+                        "targetOrgId": target_org,
+                        "targetOrgName": target_org_name,
+                        "reason": action.get("reason", ""),
+                        "suggestedTs": now_ms,
+                        "status": "moved",
+                    }
+                    if resolved_reg:
+                        sugg_entry["targetRegion"] = resolved_reg
+                        sugg_entry["region"] = resolved_reg
+                    if resolved_reg_url:
+                        sugg_entry["targetRegionUrl"] = resolved_reg_url
+                        sugg_entry["region_url"] = resolved_reg_url
+                    suggs.append(sugg_entry)
+                move_to_org = True
+                target_org_id = target_org
+                target_region = resolved_reg
+                target_region_url = resolved_reg_url
+                changed = True
+                record_field_change("target_org_id", source_org_id or "current", target_label, rule_name)
+                reg_suffix = f" [region: {resolved_reg}]" if resolved_reg else ""
+                msg = f"move/forward to org '{target_label}' ({target_org}){reg_suffix}"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+
+        elif atype == "run_agent":
+            prompt = str(action.get("value") or "").strip()
+            if prompt:
+                cur_act = cur_exec.setdefault("activity", [])
+                content = f"@AIAgent {prompt}"
+                already = any(it.get("type") == "comment" and it.get("content", "").strip().startswith(f"@AIAgent {prompt}") for it in cur_act if isinstance(it, dict))
+                if not already:
+                    cur_act.append({
+                        "id": f"routing-agent-{now_ms}-{len(cur_act)}",
+                        "type": "comment",
+                        "user": "Automated Routing Rules",
+                        "timestamp": now_ms,
+                        "content": content,
+                        "details": {"source": "incident_routing_rule", "rule": rule_name, "run_agent": True},
+                        "attachments": [],
+                        "ai_handled": True,
+                    })
+                    changed = True
+                    record_field_change("agent_prompt", "none", prompt, rule_name)
+                    msg = f"queued @AIAgent: '{prompt}'"
+                    rule_reports[rk]["did"].append(msg)
+                    what_happened.append(f"[{rule_name}] {msg}")
+                else:
+                    rule_reports[rk]["did"].append("@AIAgent prompt already queued (no change)")
+
+# ── PHASE 3: Persist final entity state once at the very end ───────────────
+db_updated = False
+if changed and item_key and item_cat:
+    try:
+        if "self" in locals() or "self" in globals():
+            res = self.set_key(item_key, json.dumps(cur_exec), category=item_cat)
+            db_updated = isinstance(res, dict) and res.get("success", False)
+            if db_updated:
+                what_happened.append(f"Updated '{item_key}' in datastore category '{item_cat}'")
+            else:
+                what_happened.append(f"Attempted datastore update for '{item_key}' in '{item_cat}', but set_key returned {res}")
+    except Exception as e:
+        what_happened.append(f"Datastore update failed for '{item_key}': {str(e)}")
+elif not changed:
+    what_happened.append("Rules matched, but all target fields already had the configured values (no changes needed)")
+
+output_payload = {
+    "matched": len(rule_order) > 0,
+    "matched_rules": [rule_reports[rk] for rk, _, _, _, _, _ in rule_order],
+    "unmatched_rules": unmatched_rules,
+    "modified_fields": modified_fields,
+    "what_happened": what_happened,
+    "db_updated": db_updated,
+    "move_to_org": move_to_org,
+    "target_org_id": target_org_id,
+    "target_region": target_region,
+    "target_region_url": target_region_url,
+    "stats_key": f"routing_rule_{rule_order[0][3]}" if len(rule_order) > 0 else "routing_rules_matched",
+    "stats_value": 1 if len(rule_order) > 0 else 0,
+}
+if move_to_org:
+    output_payload["key"] = item_key
+    output_payload["category"] = item_cat
+    output_payload["updated_value"] = cur_exec
+
+print(json.dumps(output_payload))`
+
+	return strings.ReplaceAll(script, "__TARGET_CATEGORY__", targetCategory)
 }

@@ -918,30 +918,56 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		}
 	}
 
-	// Fix Me: Add daily stats update script to append daily stats immdediately after day change and reset monthly stats on month change
-	lastMonthlyReset := validationOrgStats.LastMonthlyResetMonth
-	currentMonth := time.Now().UTC().Month()
-	if int(lastMonthlyReset) != int(currentMonth) {
+	now := time.Now()
+	currentMonth := int(now.Month())
+	if currentMonth != validationOrgStats.LastMonthlyResetMonth {
 		validationOrgStats = handleDailyCacheUpdate(validationOrgStats)
-
-		err = SetOrgStatistics(ctx, *validationOrgStats, validationOrg.Id)
-		if err != nil {
-			log.Printf("[ERROR] Failed setting org statistics for monthly reset for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
+		validationOrgStats.LastMonthlyResetMonth = currentMonth
+		if err = SetOrgStatistics(ctx, *validationOrgStats, validationOrgStats.OrgId); err != nil {
+			log.Printf("[ERROR] Failed setting org statistics in validate execution usage for org %s (%s): %s", validationOrg.Name, validationOrg.Id, err)
 		}
 	}
 
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
-	if validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
-		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d) - Only Shuffle Support can control this metric.", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
+	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == false && validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
+		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
+	}
+	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == true && validationOrg.LeadInfo.Customer {
+		planStartDate := int64(0)
+		if planStartDate > 0 {
+			var annualAppRuns int64
+			for _, stat := range validationOrgStats.DailyStatistics {
+				if stat.Date.Unix() >= planStartDate {
+					annualAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+				}
+			}
+
+			// Set annual app runs limit as 200% of the monthly app runs limit to allow overage
+			annualAppRunsLimit := validationOrg.SyncFeatures.AppExecutions.Limit * 12
+			if validationOrg.Billing.InternalAppRunsHardLimit > 0 && validationOrg.Billing.InternalAppRunsHardLimit <= validationOrg.SyncFeatures.AppExecutions.Limit {
+				annualAppRunsLimit = validationOrg.Billing.InternalAppRunsHardLimit
+			} else {
+				annualAppRunsLimit *= 2
+			}
+
+			if annualAppRuns > annualAppRunsLimit {
+				return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the annual app runs limit (%d/%d)", validationOrg.Name, validationOrg.Id, annualAppRuns, annualAppRunsLimit))
+			}
+
+			return validationOrg, nil
+		}
 	}
 
 	// Allows partners and POV users to run workflows without limits
-	if validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.ChannelPartner || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.ServicePartner {
+	if validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.ChannelPartner || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.ServicePartner {
 		return validationOrg, nil
 	}
 
-	// If enterprise customer or pov then don't block them
-	if (validationOrg.LeadInfo.Customer || validationOrg.LeadInfo.POV) && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+	if validationOrg.LeadInfo.Customer && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+		extendedLimit := validationOrg.SyncFeatures.AppExecutions.Limit * 10
+		if totalAppExecutions >= extendedLimit {
+			return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, extendedLimit))
+		}
 		return validationOrg, nil
 	}
 
@@ -2250,6 +2276,32 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 	}
 }
 
+func getBackendBaseUrl() string {
+	backendUrl := ""
+	if len(os.Getenv("BASE_URL")) > 0 {
+		backendUrl = os.Getenv("BASE_URL")
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	if len(backendUrl) > 0 {
+		return backendUrl
+	}
+
+	if project.Environment == "cloud" {
+		return "https://uk.shuffler.io"
+	}
+
+	port := os.Getenv("PORT")
+	if len(port) == 0 {
+		port = "5001"
+	}
+
+	return fmt.Sprintf("http://localhost:%s", port)
+}
+
 // runAgentDecisionDirectAppCall bypasses Singul and runs the app directly.
 func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDecision) (rawResult []byte, debugUrl string, appName string, categoryLabels []string, actionName string, err error) {
 	ctx := context.Background()
@@ -2292,7 +2344,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		} else {
 			toolLower := strings.ToLower(decision.Tool)
 			for _, app := range allApps {
-				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != strings.ReplaceAll(toolLower, "_", "") {
 					continue
 				} 
 
@@ -2329,7 +2381,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		if err == nil {
 			toolLower := strings.ToLower(decision.Tool)
 			for _, app := range foundApps {
-				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != strings.ReplaceAll(toolLower, "_", "") {
 					continue
 				} 
 
@@ -2383,16 +2435,31 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed to parse Agent decision.Delay '%s' as int: %s", execution.ExecutionId, decision.Delay, err)
 	}
 
+	foundEnv := ""
+	for _, act := range execution.Workflow.Actions {
+		if (act.ID == execution.ExecutionSourceNode || act.ID == execution.Start || act.AppName == "AI Agent" || act.AppID == "agent") && len(act.Environment) > 0 {
+			foundEnv = act.Environment
+			break
+		}
+	}
+	if len(foundEnv) == 0 && len(execution.Workflow.Actions) > 0 {
+		foundEnv = execution.Workflow.Actions[0].Environment
+	}
+
 	action := Action{
 		AppID:            resolvedAppId,
 		AppName:          resolvedAppName,
 		Name:             decision.Action, // overwritten below if schema match found
 		//AuthenticationId: resolvedAuthId,
 		Parameters:       []WorkflowAppActionParameter{},
+		Environment:      foundEnv,
 
 		ExecutionDelay: selectedDelay,
-		SourceWorkflow: execution.Workflow.ID,
-		SourceExecution: execution.ExecutionId,
+	}
+
+	if selectedDelay > 0 {
+		action.SourceWorkflow = execution.Workflow.ID
+		action.SourceExecution = execution.ExecutionId
 	}
 
 	decisionActionLower := strings.ToLower(decision.Action)
@@ -2465,28 +2532,21 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	}
 
 
-	baseURL := os.Getenv("BASE_URL")
-	if len(baseURL) == 0 {
-		if v := os.Getenv("SHUFFLE_CLOUDRUN_URL"); len(v) > 0 {
-			baseURL = v
-		} else {
-			port := os.Getenv("PORT")
-			if len(port) == 0 {
-				port = "5001"
-			}
-			baseURL = fmt.Sprintf("http://localhost:%s", port)
-		}
-	}
+	baseURL := getBackendBaseUrl()
 
-	//ExecutionDelay: selectedDelay,
-	timeout := time.Duration(30) * time.Second
+	toolTimeout := 30
+	if project.Environment != "cloud" || (len(foundEnv) > 0 && strings.ToLower(foundEnv) != "cloud") {
+		toolTimeout = 120
+	}
+	
+	timeout := time.Duration(toolTimeout) * time.Second
 
 	// Immediate exits. 3 seconds due to body transfer worst case
 	if selectedDelay > 0 { 
 		timeout = time.Duration(2) * time.Second
 	}
 
-	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=%d&delay=%d&decision_id=%s", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg, (timeout/1000000000)-1, selectedDelay, decision.RunDetails.Id)
+	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=%d&delay=%d&decision_id=%s", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg, int(timeout.Seconds())-1, selectedDelay, decision.RunDetails.Id)
 
 	parentNode := ""
 	if len(parentNode) > 0 { 
@@ -2540,26 +2600,47 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	}
 
 	var singleResult SingleResult
-	if jsonErr := json.Unmarshal(respBody, &singleResult); jsonErr == nil && len(singleResult.Result) > 0 {
-		status := "SUCCESS"
-		if !singleResult.Success {
-			status = "FAILURE"
-		}
-
-		if status == "SUCCESS" {
-			var innerResult map[string]interface{}
-			if innerErr := json.Unmarshal([]byte(singleResult.Result), &innerResult); innerErr == nil {
-				if innerSuccess, ok := innerResult["success"].(bool); ok && !innerSuccess {
-					status = "FAILURE"
-				}
+	if jsonErr := json.Unmarshal(respBody, &singleResult); jsonErr == nil {
+		if strings.Contains(singleResult.Result, "Result too large to handle") {
+			subExec := WorkflowExecution{
+				ExecutionId:  singleResult.ExecutionId,
+				ExecutionOrg: execution.ExecutionOrg,
+			}
+			dummyRes := ActionResult{
+				Result: singleResult.Result,
+				Action: Action{ID: singleResult.Id},
+			}
+			if fullVal, fileErr := getExecutionFileValue(context.Background(), subExec, dummyRes); fileErr == nil && len(fullVal) > 0 {
+				singleResult.Result = fullVal
 			}
 		}
 
-		//if debug { 
-		//	log.Printf("[DEBUG][%s] DirectAppCall: result length %d, status %s", execution.ExecutionId, len(singleResult.Result), status)
-		//}
+		if len(singleResult.Result) > 0 {
+			status := "SUCCESS"
+			if !singleResult.Success {
+				status = "FAILURE"
+			}
 
-		return []byte(singleResult.Result), debugUrl, resolvedAppName, []string{}, action.Name, nil
+			if status == "SUCCESS" {
+				var innerResult map[string]interface{}
+				if innerErr := json.Unmarshal([]byte(singleResult.Result), &innerResult); innerErr == nil {
+					if innerSuccess, ok := innerResult["success"].(bool); ok && !innerSuccess {
+						status = "FAILURE"
+					}
+				}
+			}
+
+			//if debug { 
+			//	log.Printf("[DEBUG][%s] DirectAppCall: result length %d, status %s", execution.ExecutionId, len(singleResult.Result), status)
+			//}
+
+			return []byte(singleResult.Result), debugUrl, resolvedAppName, []string{}, action.Name, nil
+		}
+
+		if len(singleResult.Errors) > 0 {
+			errMsg := strings.Join(singleResult.Errors, "\n")
+			return []byte(errMsg), debugUrl, resolvedAppName, []string{}, action.Name, errors.New(errMsg)
+		}
 	}
 
 	// Fallback: return raw body when the response isn't a well-formed SingleResult
@@ -2590,14 +2671,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	_ = debugUrl
 	
-	baseUrl := "https://shuffler.io"
-	if os.Getenv("BASE_URL") != "" {
-		baseUrl = os.Getenv("BASE_URL")
-	}
-
-	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
-		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
+	baseUrl := getBackendBaseUrl()
 
 	requestUrl := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
@@ -2851,6 +2925,8 @@ func normalizeAgentToolName(tool string) string {
 
 	if len(tool) > 33 && tool[32] == ':' {
 		tool = tool[33:]
+	} else if len(tool) > 37 && tool[36] == ':' {
+		tool = tool[37:]
 	}
 
 	tool = strings.TrimSpace(tool)
@@ -3047,14 +3123,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	//     2. Send the result through AI again to check if it changes (?). Should there be a verdict here?
 	//     3: Start the next steps of decisions after updates
 
-	baseUrl := "https://shuffler.io"
-	if os.Getenv("BASE_URL") != "" {
-		baseUrl = os.Getenv("BASE_URL")
-	}
-
-	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
-		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
+	baseUrl := getBackendBaseUrl()
 
 	//url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 	url := fmt.Sprintf("%s/api/v1/streams", baseUrl)
@@ -3513,9 +3582,10 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 			software.OS = sensorDetails.OS
 			software.Hostnames = []HostDetails{
 				HostDetails{
-					Hostname: sensorDetails.Hostname,
-					Version: software.Version,
+					Hostname:  sensorDetails.Hostname,
+					Version:   software.Version,
 					UpdatedAt: time.Now().Unix(),
+					User:      sensorDetails.User,
 				},
 			}
 			if len(software.Version) > 0 {
@@ -3532,18 +3602,22 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 				if err == nil { 
 					hostExists := false
 					versionExists := false
-					for _, foundHost := range unmarshalledSoftware.Hostnames {
+					for foundHostIndex, foundHost := range unmarshalledSoftware.Hostnames {
 						if foundHost.Hostname == sensorDetails.Hostname && foundHost.Version == software.Version {
 							hostExists = true
+							if len(foundHost.User) == 0 && len(sensorDetails.User) > 0 {
+								unmarshalledSoftware.Hostnames[foundHostIndex].User = sensorDetails.User
+							}
 							break
 						}
 					}
 
 					if !hostExists {
 						unmarshalledSoftware.Hostnames = append(unmarshalledSoftware.Hostnames, HostDetails{
-							Hostname: sensorDetails.Hostname,
-							Version: software.Version,
+							Hostname:  sensorDetails.Hostname,
+							Version:   software.Version,
 							UpdatedAt: time.Now().Unix(),
+							User:      sensorDetails.User,
 						})
 					}
 
@@ -3650,10 +3724,11 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 				software.OS = curPackage.Type
 				software.Hostnames = []HostDetails{
 					HostDetails{
-						Hostname: sensorDetails.Hostname,
-						Version: software.Version,
+						Hostname:  sensorDetails.Hostname,
+						Version:   software.Version,
 						UpdatedAt: time.Now().Unix(),
-						Paths: []string{curPackage.Path},
+						Paths:     []string{curPackage.Path},
+						User:      sensorDetails.User,
 					},
 				}
 
@@ -3674,6 +3749,9 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 						for foundHostIndex, foundHost := range unmarshalledSoftware.Hostnames {
 							if foundHost.Hostname == sensorDetails.Hostname && foundHost.Version == software.Version {
 								unmarshalledSoftware.Hostnames[foundHostIndex].UpdatedAt = time.Now().Unix()
+								if len(foundHost.User) == 0 && len(sensorDetails.User) > 0 {
+									unmarshalledSoftware.Hostnames[foundHostIndex].User = sensorDetails.User
+								}
 
 								found := false
 								for _, path := range unmarshalledSoftware.Hostnames[foundHostIndex].Paths {
@@ -3694,10 +3772,11 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 
 						if !hostPathExists {
 							unmarshalledSoftware.Hostnames = append(unmarshalledSoftware.Hostnames, HostDetails{
-								Hostname: sensorDetails.Hostname,
-								Version: software.Version,
+								Hostname:  sensorDetails.Hostname,
+								Version:   software.Version,
 								UpdatedAt: time.Now().Unix(),
-								Paths: []string{curPackage.Path},
+								Paths:     []string{curPackage.Path},
+								User:      sensorDetails.User,
 							})
 						}
 
@@ -3877,7 +3956,7 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 
 	// Loading in historical info 
 	// Putting it here so we don't re-upload without a reason
-	if len(sensorDetails.CodeScanner) == 0 || len(sensorDetails.CodeScanner) == 0 {
+	if len(sensorDetails.CodeScanner) == 0 {
 
 
 		datastoreId := fmt.Sprintf("%s_%s_%s", orborusDetails.OrgId, parsedHostname, datastoreSensorIndex)

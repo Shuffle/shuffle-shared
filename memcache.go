@@ -182,6 +182,55 @@ func (client *shuffleMemcacheClient) Add(item *gomemcache.Item) (bool, error) {
 	return false, nil
 }
 
+func (client *shuffleMemcacheClient) CompareAndSwap(item *gomemcache.Item) error {
+	servers := client.availableServers(item.Key)
+	if len(servers) == 0 {
+		return gomemcache.ErrNoServers
+	}
+
+	var lastErr error
+	cacheMiss := false
+	for _, server := range servers {
+		err := server.client.CompareAndSwap(item)
+		if err == nil {
+			replicaItem := *item
+			replicaItem.CasID = 0
+			for _, replica := range servers {
+				if replica == server {
+					continue
+				}
+				if replicaErr := replica.client.Set(&replicaItem); replicaErr != nil {
+					client.disableServer(replica, replicaErr)
+				}
+			}
+
+			return nil
+		}
+		if err == gomemcache.ErrCASConflict {
+			return err
+		}
+		if err == gomemcache.ErrCacheMiss {
+			cacheMiss = true
+			continue
+		}
+		if err == gomemcache.ErrMalformedKey {
+			return err
+		}
+
+		lastErr = err
+		client.disableServer(server, err)
+	}
+
+	if cacheMiss {
+		return gomemcache.ErrCacheMiss
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+
+	return gomemcache.ErrNoServers
+}
+
 // Increment mirrors gomemcache's Increment across every available server, so
 // replicas stay in sync. The first successful value is returned.
 func (client *shuffleMemcacheClient) Increment(key string, delta uint64) (uint64, error) {
