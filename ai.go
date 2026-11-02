@@ -10,6 +10,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/draw"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
 	"io"
 	"io/ioutil"
 	"log"
@@ -16713,34 +16718,559 @@ func buildManualInputList(history []ConversationMessage, newPrompt string) []map
 	return items
 }
 
-func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (MCPInitResponse, error) {
-	if len(app.Name) == 0 || len(app.ID) == 0 {
-		return MCPInitResponse{}, errors.New("app not found")
+func sanitizeMCPIdentifier(raw string, fallback string) string {
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return fallback
 	}
 
-	foundServerVersion := "0.0.1"
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range trimmed {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+			lastUnderscore = false
+		} else {
+			if !lastUnderscore {
+				b.WriteRune('_')
+				lastUnderscore = true
+			}
+		}
+	}
+
+	cleaned := strings.Trim(b.String(), "_-")
+	if len(cleaned) == 0 {
+		return fallback
+	}
+
+	// Ensure identifier starts with a letter or underscore for strict schema validators (e.g. Gemini)
+	first := cleaned[0]
+	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+		cleaned = "action_" + cleaned
+	}
+
+	if len(cleaned) > 64 {
+		cleaned = strings.TrimRight(cleaned[:64], "_-")
+	}
+	if len(cleaned) == 0 {
+		return fallback
+	}
+
+	return cleaned
+}
+
+func scaleImageBilinear(src image.Image, targetW, targetH int) *image.NRGBA {
+	srcBounds := src.Bounds()
+	srcW := srcBounds.Dx()
+	srcH := srcBounds.Dy()
+	dst := image.NewNRGBA(image.Rect(0, 0, targetW, targetH))
+	if srcW <= 0 || srcH <= 0 || targetW <= 0 || targetH <= 0 {
+		return dst
+	}
+
+	// Maintain aspect ratio centered within targetW x targetH
+	scale := math.Min(float64(targetW)/float64(srcW), float64(targetH)/float64(srcH))
+	newW := int(math.Round(float64(srcW) * scale))
+	newH := int(math.Round(float64(srcH) * scale))
+	if newW < 1 {
+		newW = 1
+	}
+	if newH < 1 {
+		newH = 1
+	}
+	offsetX := (targetW - newW) / 2
+	offsetY := (targetH - newH) / 2
+
+	srcNRGBA := image.NewNRGBA(image.Rect(0, 0, srcW, srcH))
+	draw.Draw(srcNRGBA, srcNRGBA.Bounds(), src, srcBounds.Min, draw.Src)
+
+	for y := 0; y < newH; y++ {
+		gy := (float64(y)+0.5)*float64(srcH)/float64(newH) - 0.5
+		if gy < 0 {
+			gy = 0
+		}
+		y0 := int(math.Floor(gy))
+		y1 := y0 + 1
+		if y1 >= srcH {
+			y1 = srcH - 1
+		}
+		fy := gy - float64(y0)
+
+		for x := 0; x < newW; x++ {
+			gx := (float64(x)+0.5)*float64(srcW)/float64(newW) - 0.5
+			if gx < 0 {
+				gx = 0
+			}
+			x0 := int(math.Floor(gx))
+			x1 := x0 + 1
+			if x1 >= srcW {
+				x1 = srcW - 1
+			}
+			fx := gx - float64(x0)
+
+			i00 := y0*srcNRGBA.Stride + x0*4
+			i10 := y0*srcNRGBA.Stride + x1*4
+			i01 := y1*srcNRGBA.Stride + x0*4
+			i11 := y1*srcNRGBA.Stride + x1*4
+
+			dstIdx := (y+offsetY)*dst.Stride + (x+offsetX)*4
+			for c := 0; c < 4; c++ {
+				v00 := float64(srcNRGBA.Pix[i00+c])
+				v10 := float64(srcNRGBA.Pix[i10+c])
+				v01 := float64(srcNRGBA.Pix[i01+c])
+				v11 := float64(srcNRGBA.Pix[i11+c])
+
+				val := v00*(1-fx)*(1-fy) + v10*fx*(1-fy) + v01*(1-fx)*fy + v11*fx*fy
+				if val < 0 {
+					val = 0
+				} else if val > 255 {
+					val = 255
+				}
+				dst.Pix[dstIdx+c] = uint8(math.Round(val))
+			}
+		}
+	}
+
+	return dst
+}
+
+func normalizeMCPIcon(raw string) *MCPIcon {
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil
+	}
+
+	const targetDim = 64
+	targetSizeStr := fmt.Sprintf("%dx%d", targetDim, targetDim)
+
+	if strings.HasPrefix(strings.ToLower(trimmed), "data:") {
+		commaIdx := strings.Index(trimmed, ",")
+		if commaIdx == -1 {
+			return nil
+		}
+		header := strings.ToLower(trimmed[:commaIdx])
+		payload := strings.TrimSpace(trimmed[commaIdx+1:])
+
+		if strings.Contains(header, "image/svg+xml") {
+			return &MCPIcon{
+				Src:      trimmed,
+				MimeType: "image/svg+xml",
+				Sizes:    []string{"any"},
+			}
+		}
+
+		var rawBytes []byte
+		var err error
+		if strings.Contains(header, ";base64") {
+			rawBytes, err = base64.StdEncoding.DecodeString(payload)
+			if err != nil {
+				rawBytes, err = base64.RawStdEncoding.DecodeString(payload)
+			}
+		} else {
+			unescaped, uErr := url.QueryUnescape(payload)
+			if uErr == nil {
+				rawBytes = []byte(unescaped)
+			} else {
+				rawBytes = []byte(payload)
+			}
+		}
+
+		if err == nil && len(rawBytes) > 0 {
+			if bytes.Contains(bytes.ToLower(rawBytes[:int(math.Min(float64(len(rawBytes)), 256))]), []byte("<svg")) {
+				return &MCPIcon{
+					Src:      "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(rawBytes),
+					MimeType: "image/svg+xml",
+					Sizes:    []string{"any"},
+				}
+			}
+
+			img, _, decErr := image.Decode(bytes.NewReader(rawBytes))
+			if decErr == nil && img != nil {
+				resized := scaleImageBilinear(img, targetDim, targetDim)
+				var buf bytes.Buffer
+				if encErr := png.Encode(&buf, resized); encErr == nil {
+					return &MCPIcon{
+						Src:      "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()),
+						MimeType: "image/png",
+						Sizes:    []string{targetSizeStr},
+					}
+				}
+			}
+
+			// Fallback if decode failed (e.g. webp) but valid data URI
+			mimeType := "image/png"
+			if strings.Contains(header, "image/webp") {
+				mimeType = "image/webp"
+			} else if strings.Contains(header, "image/jpeg") || strings.Contains(header, "image/jpg") {
+				mimeType = "image/jpeg"
+			}
+			return &MCPIcon{
+				Src:      trimmed,
+				MimeType: mimeType,
+				Sizes:    []string{targetSizeStr},
+			}
+		}
+	}
+
+	if strings.HasPrefix(strings.ToLower(trimmed), "http://") || strings.HasPrefix(strings.ToLower(trimmed), "https://") {
+		lowerURL := strings.ToLower(trimmed)
+		mimeType := "image/png"
+		sizes := []string{targetSizeStr}
+		if strings.HasSuffix(lowerURL, ".svg") {
+			mimeType = "image/svg+xml"
+			sizes = []string{"any"}
+		} else if strings.HasSuffix(lowerURL, ".jpg") || strings.HasSuffix(lowerURL, ".jpeg") {
+			mimeType = "image/jpeg"
+		} else if strings.HasSuffix(lowerURL, ".webp") {
+			mimeType = "image/webp"
+		}
+		return &MCPIcon{
+			Src:      trimmed,
+			MimeType: mimeType,
+			Sizes:    sizes,
+		}
+	}
+
+	// Raw base64 without data: prefix
+	if rawBytes, err := base64.StdEncoding.DecodeString(trimmed); err == nil && len(rawBytes) > 0 {
+		if img, _, decErr := image.Decode(bytes.NewReader(rawBytes)); decErr == nil && img != nil {
+			resized := scaleImageBilinear(img, targetDim, targetDim)
+			var buf bytes.Buffer
+			if encErr := png.Encode(&buf, resized); encErr == nil {
+				return &MCPIcon{
+					Src:      "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()),
+					MimeType: "image/png",
+					Sizes:    []string{targetSizeStr},
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func sanitizeMCPDescription(desc string, fallback string) string {
+	parsed := strings.TrimSpace(desc)
+	if strings.HasPrefix(parsed, "Generated by") || len(parsed) == 0 {
+		parsed = strings.TrimSpace(fallback)
+	}
+	if len(parsed) == 0 {
+		parsed = "Execute Shuffle action"
+	}
+	if len(parsed) > 350 {
+		parsed = strings.TrimSpace(parsed[:347]) + "..."
+	}
+	return parsed
+}
+
+func formatMCPToolTitle(action WorkflowAppAction, fallbackName string) string {
+	raw := strings.TrimSpace(action.Label)
+	if len(raw) == 0 {
+		raw = strings.TrimSpace(action.Name)
+	}
+	if len(raw) == 0 {
+		raw = strings.TrimSpace(fallbackName)
+	}
+	raw = strings.ReplaceAll(raw, "_", " ")
+	raw = strings.ReplaceAll(raw, "-", " ")
+	words := strings.Fields(raw)
+	if len(words) == 0 {
+		return "Execute Action"
+	}
+	for i, w := range words {
+		lower := strings.ToLower(w)
+		switch lower {
+		case "id", "ids", "ip", "ips", "url", "urls", "uri", "uris", "api", "ssl", "tls", "dns", "cve", "cves", "ioc", "iocs", "edr", "siem", "soar", "iam", "mfa", "sso", "jwt", "json", "xml", "csv", "html", "http", "https", "ssh", "ftp", "smtp", "imap":
+			words[i] = strings.ToUpper(lower)
+		default:
+			runes := []rune(w)
+			if len(runes) > 0 && runes[0] >= 'a' && runes[0] <= 'z' {
+				runes[0] = runes[0] - 'a' + 'A'
+				words[i] = string(runes)
+			}
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+func isCustomMCPAction(action WorkflowAppAction) bool {
+	name := strings.ToLower(strings.TrimSpace(action.Name))
+	label := strings.ToLower(strings.TrimSpace(action.Label))
+	desc := strings.ToLower(strings.TrimSpace(action.Description))
+	if name == "custom_action" || name == "custom action" || label == "custom_action" || label == "custom action" {
+		return true
+	}
+	if desc == "add a custom action for your app" {
+		return true
+	}
+	return false
+}
+
+func inferMCPActionBehavior(action WorkflowAppAction) (readOnly bool, destructive bool, idempotent bool) {
+	tokens := []string{}
+	splitTokens := func(s string) {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if len(s) == 0 {
+			return
+		}
+		var b strings.Builder
+		for _, r := range s {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				b.WriteRune(r)
+			} else {
+				b.WriteRune(' ')
+			}
+		}
+		for _, f := range strings.Fields(b.String()) {
+			tokens = append(tokens, f)
+		}
+	}
+
+	splitTokens(action.Name)
+	splitTokens(action.Label)
+	for _, cat := range action.CategoryLabel {
+		splitTokens(cat)
+	}
+
+	if len(tokens) == 0 {
+		return false, false, false
+	}
+
+	destructiveKeywords := map[string]bool{
+		"delete": true, "remove": true, "destroy": true, "purge": true, "wipe": true,
+		"terminate": true, "kill": true, "drop": true, "revoke": true, "ban": true,
+		"block": true, "quarantine": true, "isolate": true, "uninstall": true,
+		"erase": true, "nuke": true, "clear": true,
+	}
+	writeKeywords := map[string]bool{
+		"post": true, "put": true, "patch": true, "create": true, "add": true,
+		"update": true, "edit": true, "modify": true, "set": true, "send": true,
+		"run": true, "execute": true, "trigger": true, "start": true, "stop": true,
+		"restart": true, "reboot": true, "enable": true, "disable": true, "assign": true,
+		"unassign": true, "attach": true, "detach": true, "upload": true, "submit": true,
+		"approve": true, "reject": true, "close": true, "reopen": true, "merge": true,
+		"insert": true, "upsert": true, "write": true, "push": true, "publish": true,
+		"deploy": true, " provision": true, "reset": true, "change": true,
+	}
+	readPrefixes := map[string]bool{
+		"get": true, "list": true, "search": true, "find": true, "fetch": true,
+		"read": true, "describe": true, "show": true, "view": true, "lookup": true,
+		"query": true, "check": true, "verify": true, "validate": true, "inspect": true,
+		"count": true, "head": true, "options": true, "export": true, "download": true,
+		"retrieve": true, "browse": true, "scan": true, "ping": true, "test": true,
+	}
+
+	for _, tok := range tokens {
+		if destructiveKeywords[tok] {
+			return false, true, true
+		}
+	}
+
+	first := tokens[0]
+	if first == "put" || first == "delete" {
+		idempotent = true
+	}
+
+	if writeKeywords[first] {
+		return false, false, idempotent
+	}
+
+	hasReadPrefix := readPrefixes[first]
+	if !hasReadPrefix && len(tokens) > 1 && readPrefixes[tokens[1]] {
+		hasReadPrefix = true
+	}
+
+	if hasReadPrefix {
+		// Ensure later tokens don't explicitly mutate state unless part of a read prefix like "get_list"
+		for i := 1; i < len(tokens); i++ {
+			tok := tokens[i]
+			if tok == "post" || tok == "put" || tok == "patch" || tok == "create" || tok == "update" || tok == "send" || tok == "execute" {
+				return false, false, idempotent
+			}
+		}
+		return true, false, true
+	}
+
+	return false, false, idempotent
+}
+
+func formatMCPActionDescription(action WorkflowAppAction, appLink string, appName string, title string, readOnly bool, destructive bool) string {
+	rawDesc := strings.TrimSpace(action.Description)
+
+	lines := strings.Split(rawDesc, "\n")
+	var endpointURL string
+	var descParts []string
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if len(trimmedLine) == 0 {
+			continue
+		}
+		if strings.HasPrefix(trimmedLine, "Generated by") {
+			continue
+		}
+		if (strings.HasPrefix(trimmedLine, "http://") || strings.HasPrefix(trimmedLine, "https://") || strings.HasPrefix(trimmedLine, "/")) && !strings.Contains(trimmedLine, " ") {
+			endpointURL = trimmedLine
+			continue
+		}
+		descParts = append(descParts, trimmedLine)
+	}
+
+	if strings.HasPrefix(endpointURL, "/") && len(strings.TrimSpace(appLink)) > 0 {
+		endpointURL = strings.TrimRight(strings.TrimSpace(appLink), "/") + endpointURL
+	}
+
+	cleanDesc := strings.Join(descParts, " ")
+	// Collapse multiple spaces
+	cleanDesc = strings.Join(strings.Fields(cleanDesc), " ")
+
+	if len(cleanDesc) == 0 {
+		verb := "Execute"
+		if readOnly {
+			verb = "Retrieve"
+		} else if destructive {
+			verb = "Delete or remove via"
+		}
+		if len(strings.TrimSpace(appName)) > 0 {
+			cleanDesc = fmt.Sprintf("%s %s in %s.", verb, title, strings.TrimSpace(appName))
+		} else {
+			cleanDesc = fmt.Sprintf("%s %s.", verb, title)
+		}
+	}
+
+	const maxTotalLen = 350
+	if len(endpointURL) > 0 && !strings.Contains(cleanDesc, endpointURL) {
+		suffix := fmt.Sprintf(" (%s)", endpointURL)
+		maxProseLen := maxTotalLen - len(suffix)
+		if maxProseLen < 60 {
+			maxProseLen = 60
+		}
+		if len(cleanDesc) > maxProseLen {
+			cleanDesc = strings.TrimSpace(cleanDesc[:maxProseLen-3]) + "..."
+		}
+		cleanDesc = strings.TrimRight(cleanDesc, " ") + suffix
+	} else if len(cleanDesc) > maxTotalLen {
+		cleanDesc = strings.TrimSpace(cleanDesc[:maxTotalLen-3]) + "..."
+	}
+
+	return cleanDesc
+}
+
+func mapMCPParameterType(rawType string) string {
+	switch strings.ToLower(strings.TrimSpace(rawType)) {
+	case "integer", "int", "int32", "int64":
+		return "integer"
+	case "number", "float", "float32", "float64", "double":
+		return "number"
+	case "boolean", "bool":
+		return "boolean"
+	case "array", "list":
+		return "array"
+	case "object", "map", "dict", "json":
+		return "object"
+	default:
+		return "string"
+	}
+}
+
+func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (MCPInitResponse, error) {
+	foundServerVersion := "1.0.0"
+	protocolVersion := "2024-11-05"
+	if len(strings.TrimSpace(request.Params.ProtocolVersion)) > 0 {
+		protocolVersion = strings.TrimSpace(request.Params.ProtocolVersion)
+	}
+
+	jsonrpcVersion := request.Jsonrpc
+	if len(jsonrpcVersion) == 0 {
+		jsonrpcVersion = "2.0"
+	}
+
+	reqID := request.ID
+	if reqID == nil {
+		reqID = 0
+	}
+
+	serverName := "shuffle"
+	if len(strings.TrimSpace(app.Name)) > 0 {
+		serverName = sanitizeMCPIdentifier("shuffle_"+strings.ToLower(app.Name), "shuffle")
+	}
+
+	var serverIcons []MCPIcon
+	iconSrc := strings.TrimSpace(app.LargeImage)
+	if len(iconSrc) == 0 && len(app.Actions) > 0 {
+		iconSrc = strings.TrimSpace(app.Actions[0].LargeImage)
+	}
+	if len(iconSrc) == 0 {
+		iconSrc = strings.TrimSpace(app.SmallImage)
+	}
+	if parsedIcon := normalizeMCPIcon(iconSrc); parsedIcon != nil {
+		serverIcons = []MCPIcon{*parsedIcon}
+	}
+
 	tools := MCPInitResponse{
-		Jsonrpc: request.Jsonrpc,
-		ID:      request.ID,
+		Jsonrpc: jsonrpcVersion,
+		ID:      reqID,
 		Result: MCPToolResult{
-			ProtocolVersion: "2024-11-05",
+			ProtocolVersion: protocolVersion,
 			Tools:           []MCPTool{},
-			Capabilities:    MCPCapabilities{},
+			Capabilities: MCPCapabilities{
+				Tools: MCPCapabilitiesTools{
+					ListChanged: false,
+				},
+			},
 			ServerInfo: MCPServerInfo{
-				Name:    "shuffle",
+				Name:    serverName,
 				Version: foundServerVersion,
+				Icons:   serverIcons,
 			},
 		},
 	}
 
+	seenToolNames := map[string]int{}
+	maxTools := 64
+
 	for cnt, action := range app.Actions {
+		if isCustomMCPAction(action) {
+			continue
+		}
+
+		rawName := strings.TrimSpace(action.Name)
+		if len(rawName) == 0 {
+			rawName = strings.TrimSpace(action.Label)
+		}
+		baseToolName := sanitizeMCPIdentifier(strings.ToLower(rawName), fmt.Sprintf("action_%d", cnt+1))
+		if baseToolName == "custom_action" {
+			continue
+		}
+		toolName := baseToolName
+		if count, exists := seenToolNames[baseToolName]; exists {
+			suffix := fmt.Sprintf("_%d", count+1)
+			if len(baseToolName)+len(suffix) > 64 {
+				toolName = strings.TrimRight(baseToolName[:64-len(suffix)], "_-") + suffix
+			} else {
+				toolName = baseToolName + suffix
+			}
+		}
+		seenToolNames[baseToolName]++
+
+		toolTitle := formatMCPToolTitle(action, toolName)
+		readOnly, destructive, idempotent := inferMCPActionBehavior(action)
+		openWorld := true
+		toolDesc := formatMCPActionDescription(action, app.Link, app.Name, toolTitle, readOnly, destructive)
+
 		tool := MCPTool{
-			Name:        action.Name,
-			Description: action.Description,
+			Name:        toolName,
+			Title:       toolTitle,
+			Description: toolDesc,
 			InputSchema: MCPToolInputSchema{
 				Type:       "object",
-				Required:   []string{},
 				Properties: map[string]MCPProperty{},
+			},
+			Annotations: &MCPToolAnnotations{
+				Title:           toolTitle,
+				ReadOnlyHint:    &readOnly,
+				DestructiveHint: &destructive,
+				IdempotentHint:  &idempotent,
+				OpenWorldHint:   &openWorld,
 			},
 		}
 
@@ -16748,64 +17278,106 @@ func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (
 		requiredParams := []string{}
 		for _, param := range action.Parameters {
 			// Skipping config items as they are auth-oriented
-			if param.Configuration {
-				//requiredParams = append(requiredParams, param.Name)
+			if param.Configuration || param.Hidden {
 				continue
 			}
 
-			if ArrayContains(handledName, param.Name) {
+			lowerParamName := strings.ToLower(strings.TrimSpace(param.Name))
+			if lowerParamName == "ssl_verify" || lowerParamName == "to_file" || lowerParamName == "url" || strings.HasPrefix(lowerParamName, "apikey") || strings.HasPrefix(lowerParamName, "username_") || strings.HasPrefix(lowerParamName, "password_") {
 				continue
 			}
 
-			handledName = append(handledName, param.Name)
+			paramName := sanitizeMCPIdentifier(param.Name, "")
+			if len(paramName) == 0 || ArrayContains(handledName, paramName) {
+				continue
+			}
+
+			handledName = append(handledName, paramName)
 
 			if param.Required {
-				requiredParams = append(requiredParams, param.Name)
+				requiredParams = append(requiredParams, paramName)
 			}
 
-			parsedDescription := param.Description
-			if strings.Contains(parsedDescription, "Generated by") {
-				parsedDescription = ""
+			paramFallbackDesc := fmt.Sprintf("Parameter %s", param.Name)
+			parsedDescription := sanitizeMCPDescription(param.Description, paramFallbackDesc)
+			if len(strings.TrimSpace(param.Example)) > 0 && !strings.Contains(parsedDescription, param.Example) && len(param.Example) <= 120 {
+				parsedDescription = fmt.Sprintf("%s (e.g. %s)", strings.TrimRight(parsedDescription, "."), strings.TrimSpace(param.Example))
 			}
 
-			tool.InputSchema.Properties[param.Name] = MCPProperty{
-				Type:        "string",
+			prop := MCPProperty{
+				Type:        mapMCPParameterType(param.Schema.Type),
 				Description: parsedDescription,
 			}
-		}
-
-		if len(tool.InputSchema.Properties) == 0 {
-			continue
-		}
-
-		// Make all required
-		if len(tool.InputSchema.Required) == 0 {
-			for _, param := range action.Parameters {
-				if param.Configuration {
-					continue
+			if len(param.Options) > 0 {
+				cleanOpts := []string{}
+				for _, opt := range param.Options {
+					if trimmedOpt := strings.TrimSpace(opt); len(trimmedOpt) > 0 {
+						cleanOpts = append(cleanOpts, trimmedOpt)
+					}
 				}
-
-				if ArrayContains(requiredParams, param.Name) {
-					continue
+				if len(cleanOpts) > 0 {
+					prop.Enum = cleanOpts
 				}
-
-				requiredParams = append(requiredParams, param.Name)
 			}
+
+			tool.InputSchema.Properties[paramName] = prop
 		}
 
-		if len(requiredParams) == 0 {
-			log.Printf("[WARNING] No required parameters found for tool %s. Defaulting to all non-configuration parameters as required.", tool.Name)
-			continue
+		if len(requiredParams) > 0 {
+			tool.InputSchema.Required = requiredParams
 		}
 
-		//tool.Capabilities.Tools.List = true
-		//tool.Capabilities.Tools.Call = true
-		tool.InputSchema.Required = requiredParams
 		tools.Result.Tools = append(tools.Result.Tools, tool)
 
-		if cnt > 10 {
+		if len(tools.Result.Tools) >= maxTools {
 			break
 		}
+	}
+
+	// Ensure at least one valid tool is always returned so discovery succeeds for /api/v1/mcp,
+	// agent skills (/api/v1/mcp/{skill}), or apps without explicit actions.
+	if len(tools.Result.Tools) == 0 {
+		fallbackToolName := "run_shuffle_agent"
+		fallbackToolTitle := "Run Shuffle Agent"
+		fallbackToolDesc := "Execute a task, workflow, or app action using the Shuffle AI Agent."
+		if len(strings.TrimSpace(request.Params.Template)) > 0 {
+			skill := strings.TrimSpace(request.Params.Template)
+			fallbackToolName = sanitizeMCPIdentifier("run_"+strings.ToLower(skill), "run_shuffle_agent")
+			fallbackToolTitle = formatMCPToolTitle(WorkflowAppAction{Name: fallbackToolName}, fallbackToolName)
+			fallbackToolDesc = sanitizeMCPDescription("", fmt.Sprintf("Run Shuffle agent skill '%s' with the provided instructions or input text.", skill))
+		} else if len(strings.TrimSpace(app.Name)) > 0 {
+			fallbackToolName = sanitizeMCPIdentifier("run_"+strings.ToLower(app.Name), "run_shuffle_app")
+			fallbackToolTitle = formatMCPToolTitle(WorkflowAppAction{Name: "Run " + app.Name}, fallbackToolName)
+			fallbackToolDesc = sanitizeMCPDescription(app.Description, fmt.Sprintf("Execute an action or query in %s via Shuffle.", app.Name))
+		}
+
+		readOnly := false
+		destructive := false
+		idempotent := false
+		openWorld := true
+
+		tools.Result.Tools = append(tools.Result.Tools, MCPTool{
+			Name:        fallbackToolName,
+			Title:       fallbackToolTitle,
+			Description: fallbackToolDesc,
+			InputSchema: MCPToolInputSchema{
+				Type: "object",
+				Properties: map[string]MCPProperty{
+					"text": {
+						Type:        "string",
+						Description: "The instruction, query, or parameters to execute.",
+					},
+				},
+				Required: []string{"text"},
+			},
+			Annotations: &MCPToolAnnotations{
+				Title:           fallbackToolTitle,
+				ReadOnlyHint:    &readOnly,
+				DestructiveHint: &destructive,
+				IdempotentHint:  &idempotent,
+				OpenWorldHint:   &openWorld,
+			},
+		})
 	}
 
 	return tools, nil
