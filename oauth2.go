@@ -4141,7 +4141,9 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			// Grace period check: if a client retried a refresh request due to a network blip or
 			// sent concurrent refresh requests within 60s of rotation, return the rotated token response
 			// so the handoff/refresh never fails with invalid_grant.
-			if graceData, gErr := GetCache(ctx, "oauth_refresh_grace_"+tokenReq.RefreshToken); gErr == nil && len(graceData) > 0 {
+			cachedGraceData, gErr := GetCache(ctx, "oauth_refresh_grace_"+tokenReq.RefreshToken)
+			graceData, ok := cachedGraceData.([]byte)
+			if gErr == nil && ok && len(graceData) > 0 {
 				if tokenReq.ClientID != "" && tokenReq.ClientSecret != "" {
 					if secretErr := validateOAuthClientSecret(ctx, tokenReq.ClientID, tokenReq.ClientSecret); secretErr != nil {
 						resp.Header().Set("Content-Type", "application/json")

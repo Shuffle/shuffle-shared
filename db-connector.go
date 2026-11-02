@@ -15353,6 +15353,8 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 		if err == nil {
 			parsedCache := []byte(cache.([]uint8))
 			err = json.Unmarshal(parsedCache, cacheData)
+			if err != nil {
+			}
 			if err == nil {
 				return cacheData, nil
 			}
@@ -15424,6 +15426,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 				//log.Printf("[WARNING] Error in datastore key loading for %s: %s", id, err)
 
 				if len(category) > 0 && category != "default" {
+
 				} else {
 					// Search for key by removing first uuid part
 					newId := id
