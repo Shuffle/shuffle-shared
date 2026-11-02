@@ -1489,11 +1489,15 @@ func HandleActionRanAsExpected(result ActionResult) (bool, string) {
 		return true, ""
 	}
 
-	if success, ok := resultObj["success"].(bool); ok && !success {
+	successValue := resultObj["success"]
+	success, successOk := successValue.(bool)
+	if successOk && !success {
 		return false, "action result reports success: false"
 	}
 
-	if status, ok := resultObj["status"].(float64); ok && status >= 300 {
+	statusValue := resultObj["status"]
+	status, statusOk := statusValue.(float64)
+	if statusOk && status >= 300 {
 		return false, fmt.Sprintf("action result reports HTTP status %d", int(status))
 	}
 
