@@ -141,6 +141,8 @@ func AllowedDomain(referer string) bool {
 	return false
 }
 
+var prPreviewOriginRegex = regexp.MustCompile(`^https://shuffler-pr-previews--pr-[0-9]+-[a-z0-9]+\.web\.app$`)
+
 func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	origin := request.Header["Origin"]
 	resp.Header().Set("Vary", "Origin")
@@ -206,6 +208,10 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 					allowed = true
 					break
 				}
+			}
+
+			if !allowed && prPreviewOriginRegex.MatchString(origin[0]) {
+				allowed = true
 			}
 
 			// Since we are becoming more and more of a platform
