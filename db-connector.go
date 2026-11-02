@@ -3989,18 +3989,6 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 		return curOrg, errors.New(fmt.Sprintf("Couldn't find creator org with ID %s", curOrg.Id))
 	}
 
-	newUsers := []User{}
-	for _, user := range curOrg.Users {
-		user.Password = ""
-		user.Session = ""
-		user.ResetReference = ""
-		user.PrivateApps = []WorkflowApp{}
-		user.VerificationToken = ""
-		user.ApiKey = ""
-		newUsers = append(newUsers, user)
-	}
-
-	curOrg.Users = newUsers
 	if len(curOrg.Tutorials) == 0 {
 		curOrg = GetTutorials(ctx, *curOrg, true)
 	}
@@ -4264,18 +4252,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		//return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID '%s'", curOrg.Id))
 	}
 
-	newUsers := []User{}
-	for _, user := range curOrg.Users {
-		user.Password = ""
-		user.Session = ""
-		user.ResetReference = ""
-		user.PrivateApps = []WorkflowApp{}
-		user.VerificationToken = ""
-		user.ApiKey = ""
-		newUsers = append(newUsers, user)
-	}
-
-	curOrg.Users = newUsers
 	if len(curOrg.Tutorials) == 0 {
 		curOrg = GetTutorials(ctx, *curOrg, true)
 	}
@@ -4903,25 +4879,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	data.Edited = timeNow
-	newUsers := []User{}
-	for _, user := range data.Users {
-		user.Password = ""
-		user.Session = ""
-		user.ApiKey = ""
-		user.PrivateApps = []WorkflowApp{}
-		user.MFA = MFAInfo{}
-		user.Authentication = []UserAuth{}
-
-		user.PublicProfile = PublicProfile{}
-		user.LoginInfo = []LoginInfo{}
-		user.PersonalInfo = PersonalInfo{}
-
-		//user.Orgs = []string{}
-
-		newUsers = append(newUsers, user)
-	}
-
-	data.Users = newUsers
+	data.Users = SanitizeOrgUsers(data.Users)
 	if len(data.Tutorials) == 0 {
 		data = *GetTutorials(ctx, data, false)
 	}
@@ -4964,18 +4922,6 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	if project.CacheDb {
-		newUsers := []User{}
-		for _, user := range data.Users {
-			user.Password = ""
-			user.Session = ""
-			user.ResetReference = ""
-			user.PrivateApps = []WorkflowApp{}
-			user.VerificationToken = ""
-			newUsers = append(newUsers, user)
-		}
-
-		data.Users = newUsers
-
 		neworg, err := json.Marshal(data)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in setorg: %s", err)
@@ -6521,6 +6467,40 @@ func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client
 	return *client, nil
 }
 
+// SanitizeOrgUser returns a strictly whitelisted copy of a User suitable for embedding
+// inside Org.Users. User-specific or nested structs (Devices, PersonalInfo, MFA,
+// Authentication, PrivateApps, LoginInfo, PublicProfile, SSOInfos, tokens, etc.) are
+// stripped so Org records never leak personal/device secrets or break Datastore loading
+// when User sub-structs evolve.
+func SanitizeOrgUser(user User) User {
+	return User{
+		Id:                user.Id,
+		Username:          user.Username,
+		GeneratedUsername: user.GeneratedUsername,
+		Role:              user.Role,
+		Roles:             user.Roles,
+		Active:            user.Active,
+		Verified:          user.Verified,
+		SupportAccess:     user.SupportAccess,
+		CreationTime:      user.CreationTime,
+		LoginType:         user.LoginType,
+		ProvisionedByOrg:  user.ProvisionedByOrg,
+		ActiveOrg: OrgMini{
+			Id:   user.ActiveOrg.Id,
+			Name: user.ActiveOrg.Name,
+			Role: user.ActiveOrg.Role,
+		},
+	}
+}
+
+func SanitizeOrgUsers(users []User) []User {
+	newUsers := make([]User, 0, len(users))
+	for _, user := range users {
+		newUsers = append(newUsers, SanitizeOrgUser(user))
+	}
+	return newUsers
+}
+
 func fixUserOrg(ctx context.Context, user *User) *User {
 	// Made it background due to potential timeouts if this is
 	// used in API calls
@@ -6538,11 +6518,7 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 		user.Orgs = append(user.Orgs, user.ActiveOrg.Id)
 	}
 
-	innerUser := *user
-	innerUser.PrivateApps = []WorkflowApp{}
-	innerUser.Authentication = []UserAuth{}
-	innerUser.Password = ""
-	innerUser.Session = ""
+	innerUser := SanitizeOrgUser(*user)
 
 	// Might be vulnerable to timing attacks.
 	for _, orgId := range user.Orgs {
@@ -6570,10 +6546,16 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 				}
 			}
 
+			sanitizedForOrg := innerUser
 			if userFound {
-				org.Users[orgIndex] = innerUser
+				// Preserve per-org role if this org is not the user's currently active org
+				if orgId != user.ActiveOrg.Id && len(org.Users[orgIndex].Role) > 0 {
+					sanitizedForOrg.Role = org.Users[orgIndex].Role
+					sanitizedForOrg.Roles = org.Users[orgIndex].Roles
+				}
+				org.Users[orgIndex] = sanitizedForOrg
 			} else if !user.SupportAccess {
-				org.Users = append(org.Users, innerUser)
+				org.Users = append(org.Users, sanitizedForOrg)
 			} else {
 				log.Printf("[DEBUG] Skipping org.Users update for support user %s (%s) in org %s — not an official member", user.Username, user.Id, orgId)
 				return
