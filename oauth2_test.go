@@ -1166,16 +1166,16 @@ func TestGetSupportedOAuthScopes(t *testing.T) {
 }
 
 func TestParseOAuthScopes(t *testing.T) {
-	// 1. Default fallback
+	// 1. Default fallback (should default to least-privilege mcp:execute instead of workflow:edit)
 	scopes := ParseOAuthScopes("")
-	if len(scopes) != 1 || scopes[0].Scope != "workflow:edit" {
-		t.Errorf("Expected default to workflow:edit, got: %#v", scopes)
+	if len(scopes) != 1 || scopes[0].Scope != "mcp:execute" {
+		t.Errorf("Expected default to mcp:execute, got: %#v", scopes)
 	}
 
-	// 2. Multiple scopes with custom scope fallback
-	scopes = ParseOAuthScopes("workflow:edit workflow:run custom:action")
-	if len(scopes) != 3 {
-		t.Fatalf("Expected 3 scopes, got %d", len(scopes))
+	// 2. Multiple scopes with app scope and custom scope fallback
+	scopes = ParseOAuthScopes("workflow:edit workflow:run app:jira custom:action")
+	if len(scopes) != 4 {
+		t.Fatalf("Expected 4 scopes, got %d", len(scopes))
 	}
 	if scopes[0].Scope != "workflow:edit" || scopes[0].Category != "Workflows" {
 		t.Errorf("Unexpected scope[0]: %#v", scopes[0])
@@ -1183,8 +1183,11 @@ func TestParseOAuthScopes(t *testing.T) {
 	if scopes[1].Scope != "workflow:run" || scopes[1].Category != "Workflows" {
 		t.Errorf("Unexpected scope[1]: %#v", scopes[1])
 	}
-	if scopes[2].Scope != "custom:action" || scopes[2].Category != "Custom" {
+	if scopes[2].Scope != "app:jira" || scopes[2].Category != "Apps" {
 		t.Errorf("Unexpected scope[2]: %#v", scopes[2])
+	}
+	if scopes[3].Scope != "custom:action" || scopes[3].Category != "Custom" {
+		t.Errorf("Unexpected scope[3]: %#v", scopes[3])
 	}
 }
 
@@ -1277,6 +1280,16 @@ func TestDynamicShuffleClientLoopback(t *testing.T) {
 func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testing.T) {
 	ctx := context.Background()
 	project.CacheDb = true
+	newReq := func(method, target string, body *strings.Reader) *http.Request {
+		var r *http.Request
+		if body == nil {
+			r = httptest.NewRequest(method, target, nil)
+		} else {
+			r = httptest.NewRequest(method, target, body)
+		}
+		r.RemoteAddr = "198.51.100.10:4000"
+		return r
+	}
 
 	// Setup authenticated admin user and org in cache
 	testOrg := Org{
@@ -1317,7 +1330,7 @@ func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testin
 		"response_types": ["code"],
 		"token_endpoint_auth_method": "none"
 	}`
-	reqReg := httptest.NewRequest("POST", "/api/v1/oauth2/register", strings.NewReader(regPayload))
+	reqReg := newReq("POST", "/api/v1/oauth2/register", strings.NewReader(regPayload))
 	reqReg.Header.Set("Content-Type", "application/json")
 	recReg := httptest.NewRecorder()
 	HandleOAuthRegister(recReg, reqReg)
@@ -1343,7 +1356,7 @@ func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testin
 		url.QueryEscape("https://chatgpt.com/connector_platform_oauth_redirect"),
 		url.QueryEscape(challenge),
 	)
-	reqGetDyn := httptest.NewRequest("GET", authGetURL, nil)
+	reqGetDyn := newReq("GET", authGetURL, nil)
 	reqGetDyn.Host = "tunnel.schemaless.org"
 	recGetDyn := httptest.NewRecorder()
 	HandleOAuthAuthorize(recGetDyn, reqGetDyn)
@@ -1366,7 +1379,7 @@ func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testin
 		url.QueryEscape(configuredClientID),
 		url.QueryEscape(configuredRedirectURI),
 	)
-	reqGetCfg := httptest.NewRequest("GET", cfgGetURL, nil)
+	reqGetCfg := newReq("GET", cfgGetURL, nil)
 	recGetCfg := httptest.NewRecorder()
 	HandleOAuthAuthorize(recGetCfg, reqGetCfg)
 	if recGetCfg.Code != http.StatusFound {
@@ -1382,7 +1395,7 @@ func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testin
 		"state": "cfg_state_2",
 		"approved": true
 	}`, configuredClientID, configuredRedirectURI)
-	reqPostCfg := httptest.NewRequest("POST", "/api/v1/oauth2/authorize", strings.NewReader(cfgPostBody))
+	reqPostCfg := newReq("POST", "/api/v1/oauth2/authorize", strings.NewReader(cfgPostBody))
 	reqPostCfg.Header.Set("Content-Type", "application/json")
 	reqPostCfg.AddCookie(&http.Cookie{Name: "session_token", Value: "sess_all_oauth_admin"})
 	recPostCfg := httptest.NewRecorder()
@@ -1402,7 +1415,7 @@ func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testin
 	cfgTokenForm.Set("code", cfgAuthResp.Code)
 	cfgTokenForm.Set("client_id", configuredClientID)
 	cfgTokenForm.Set("redirect_uri", configuredRedirectURI)
-	reqTokCfg := httptest.NewRequest("POST", "/oauth2/token", strings.NewReader(cfgTokenForm.Encode()))
+	reqTokCfg := newReq("POST", "/oauth2/token", strings.NewReader(cfgTokenForm.Encode()))
 	reqTokCfg.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	recTokCfg := httptest.NewRecorder()
 	HandleOAuthToken(recTokCfg, reqTokCfg)
@@ -1434,7 +1447,7 @@ func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testin
 		"state": "srv_state_3",
 		"approved": true
 	}`, serverClient.ClientID, serverClient.RedirectUris[0])
-	reqPostSrv := httptest.NewRequest("POST", "/api/v1/oauth2/authorize", strings.NewReader(srvPostBody))
+	reqPostSrv := newReq("POST", "/api/v1/oauth2/authorize", strings.NewReader(srvPostBody))
 	reqPostSrv.Header.Set("Content-Type", "application/json")
 	reqPostSrv.AddCookie(&http.Cookie{Name: "session_token", Value: "sess_all_oauth_admin"})
 	recPostSrv := httptest.NewRecorder()
@@ -1452,7 +1465,7 @@ func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testin
 	badSrvForm.Set("client_id", serverClient.ClientID)
 	badSrvForm.Set("client_secret", "wrong_secret_value")
 	badSrvForm.Set("redirect_uri", serverClient.RedirectUris[0])
-	reqBadSrv := httptest.NewRequest("POST", "/oauth2/token", strings.NewReader(badSrvForm.Encode()))
+	reqBadSrv := newReq("POST", "/oauth2/token", strings.NewReader(badSrvForm.Encode()))
 	reqBadSrv.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	recBadSrv := httptest.NewRecorder()
 	HandleOAuthToken(recBadSrv, reqBadSrv)
@@ -1466,7 +1479,7 @@ func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testin
 	goodSrvForm.Set("code", srvAuthResp.Code)
 	goodSrvForm.Set("client_id", serverClient.ClientID)
 	goodSrvForm.Set("redirect_uri", serverClient.RedirectUris[0])
-	reqGoodSrv := httptest.NewRequest("POST", "/oauth2/token", strings.NewReader(goodSrvForm.Encode()))
+	reqGoodSrv := newReq("POST", "/oauth2/token", strings.NewReader(goodSrvForm.Encode()))
 	reqGoodSrv.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	reqGoodSrv.SetBasicAuth(serverClient.ClientID, serverClient.ClientSecret)
 	recGoodSrv := httptest.NewRecorder()
@@ -1487,7 +1500,7 @@ func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testin
 	refreshNoSecretForm.Set("grant_type", "refresh_token")
 	refreshNoSecretForm.Set("refresh_token", srvTokenResp.RefreshToken)
 	refreshNoSecretForm.Set("client_id", serverClient.ClientID)
-	reqRefNoSec := httptest.NewRequest("POST", "/oauth2/token", strings.NewReader(refreshNoSecretForm.Encode()))
+	reqRefNoSec := newReq("POST", "/oauth2/token", strings.NewReader(refreshNoSecretForm.Encode()))
 	reqRefNoSec.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	recRefNoSec := httptest.NewRecorder()
 	HandleOAuthToken(recRefNoSec, reqRefNoSec)
@@ -1501,7 +1514,7 @@ func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testin
 	}
 
 	// Step 3e: Concurrent / Retried refresh using the JUST-ROTATED refresh token within 60s grace period -> MUST NOT fail
-	reqRefRetry := httptest.NewRequest("POST", "/oauth2/token", strings.NewReader(refreshNoSecretForm.Encode()))
+	reqRefRetry := newReq("POST", "/oauth2/token", strings.NewReader(refreshNoSecretForm.Encode()))
 	reqRefRetry.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	recRefRetry := httptest.NewRecorder()
 	HandleOAuthToken(recRefRetry, reqRefRetry)
@@ -1520,11 +1533,567 @@ func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testin
 	refreshWithSecretForm.Set("refresh_token", refreshedResp1.RefreshToken)
 	refreshWithSecretForm.Set("client_id", serverClient.ClientID)
 	refreshWithSecretForm.Set("client_secret", serverClient.ClientSecret)
-	reqRefSec := httptest.NewRequest("POST", "/oauth2/token", strings.NewReader(refreshWithSecretForm.Encode()))
+	reqRefSec := newReq("POST", "/oauth2/token", strings.NewReader(refreshWithSecretForm.Encode()))
 	reqRefSec.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	recRefSec := httptest.NewRecorder()
 	HandleOAuthToken(recRefSec, reqRefSec)
 	if recRefSec.Code != http.StatusOK {
 		t.Fatalf("Flow 3f (Refresh token with client_secret): expected 200 OK, got %d: %s", recRefSec.Code, recRefSec.Body.String())
 	}
+
+	// =========================================================================
+	// FLOW 4: List OAuth Tokens & Revoke by Connection ID (User Settings UI)
+	// =========================================================================
+	reqList := newReq("GET", "/api/v1/oauth2/tokens", nil)
+	reqList.AddCookie(&http.Cookie{Name: "session_token", Value: "sess_all_oauth_admin"})
+	recList := httptest.NewRecorder()
+	HandleListOAuthTokens(recList, reqList)
+	if recList.Code != http.StatusOK {
+		t.Fatalf("Flow 4 (List OAuth tokens): expected 200 OK, got %d: %s", recList.Code, recList.Body.String())
+	}
+	var listedTokens []OAuthTokenView
+	if err := json.Unmarshal(recList.Body.Bytes(), &listedTokens); err != nil {
+		t.Fatalf("Flow 4: failed to parse listed tokens: %v", err)
+	}
+	if len(listedTokens) == 0 {
+		t.Fatalf("Flow 4: expected at least 1 active token in list, got 0")
+	}
+
+	// Revoke the first token by its Connection ID (mcp_conn_...)
+	targetConnID := listedTokens[0].ID
+	revokeBody := fmt.Sprintf(`{"token": "%s"}`, targetConnID)
+	reqRevoke := newReq("POST", "/api/v1/oauth2/revoke", strings.NewReader(revokeBody))
+	reqRevoke.Header.Set("Content-Type", "application/json")
+	reqRevoke.AddCookie(&http.Cookie{Name: "session_token", Value: "sess_all_oauth_admin"})
+	recRevoke := httptest.NewRecorder()
+	HandleOAuthRevoke(recRevoke, reqRevoke)
+	if recRevoke.Code != http.StatusOK {
+		t.Fatalf("Flow 4 (Revoke OAuth token by connection ID): expected 200 OK, got %d: %s", recRevoke.Code, recRevoke.Body.String())
+	}
+
+	// Re-list tokens and verify the revoked connection is removed
+	reqListAfter := newReq("GET", "/api/v1/oauth2/tokens", nil)
+	reqListAfter.AddCookie(&http.Cookie{Name: "session_token", Value: "sess_all_oauth_admin"})
+	recListAfter := httptest.NewRecorder()
+	HandleListOAuthTokens(recListAfter, reqListAfter)
+	var listedAfter []OAuthTokenView
+	_ = json.Unmarshal(recListAfter.Body.Bytes(), &listedAfter)
+	for _, tv := range listedAfter {
+		if tv.ID == targetConnID {
+			t.Errorf("Flow 4: expected revoked connection %s to be absent from token list, but it still appeared", targetConnID)
+		}
+	}
 }
+
+func TestDynamicOAuth2SecurityHardening(t *testing.T) {
+	ctx := context.Background()
+	project.CacheDb = true
+	newSecReq := func(method, target string, body *strings.Reader) *http.Request {
+		var r *http.Request
+		if body == nil {
+			r = httptest.NewRequest(method, target, nil)
+		} else {
+			r = httptest.NewRequest(method, target, body)
+		}
+		r.RemoteAddr = "198.51.100.20:5000"
+		return r
+	}
+
+	// Setup admin user & org
+	secOrg := Org{
+		Id:   "org_dyn_sec_test",
+		Name: "Dynamic Security Test Org",
+		Users: []User{
+			{
+				Id:       "usr_dyn_sec_admin",
+				Username: "secadmin@shuffler.io",
+				Role:     "admin",
+			},
+		},
+	}
+	orgBytes, _ := json.Marshal(secOrg)
+	_ = SetCache(ctx, "Organizations_org_dyn_sec_test", orgBytes, 300)
+
+	adminUser := User{
+		Id:        "usr_dyn_sec_admin",
+		Username:  "secadmin@shuffler.io",
+		Role:      "admin",
+		Active:    true,
+		ActiveOrg: OrgMini{Id: "org_dyn_sec_test"},
+		Orgs:      []string{"org_dyn_sec_test"},
+	}
+	adminBytes, _ := json.Marshal(adminUser)
+	_ = SetCache(ctx, "Users_usr_dyn_sec_admin", adminBytes, 300)
+	_ = SetCache(ctx, "user_usr_dyn_sec_admin", adminBytes, 300)
+	_ = SetCache(ctx, "session_sess_dyn_sec_admin", adminBytes, 300)
+
+	// 1. Dynamic Registration: Register a legitimate ChatGPT client
+	regChatGPT := `{
+		"client_name": "ChatGPT",
+		"redirect_uris": ["https://chatgpt.com/connector_platform_oauth_redirect"],
+		"grant_types": ["authorization_code", "refresh_token"],
+		"response_types": ["code"],
+		"token_endpoint_auth_method": "none",
+		"scope": "workflow:edit admin *"
+	}`
+	reqReg := newSecReq("POST", "/api/v1/oauth2/register", strings.NewReader(regChatGPT))
+	reqReg.Header.Set("Content-Type", "application/json")
+	// Unauthenticated User-Id / Org-Id headers must NOT be trusted on /oauth2/register
+	reqReg.Header.Set("User-Id", "victim_user_id")
+	reqReg.Header.Set("Org-Id", "victim_org_id")
+	recReg := httptest.NewRecorder()
+	HandleOAuthRegister(recReg, reqReg)
+	if recReg.Code != http.StatusCreated {
+		t.Fatalf("Expected 201 Created for ChatGPT dynamic registration, got %d: %s", recReg.Code, recReg.Body.String())
+	}
+	var regResp OAuthClientRegistrationResponse
+	_ = json.Unmarshal(recReg.Body.Bytes(), &regResp)
+
+	savedClient, err := GetOAuthClient(ctx, regResp.ClientID)
+	if err != nil || savedClient == nil {
+		t.Fatalf("Expected saved OAuthClient for %s, got err: %v", regResp.ClientID, err)
+	}
+	if savedClient.UserId != "" || savedClient.OrgId != "" {
+		t.Errorf("Expected unauthenticated User-Id/Org-Id headers to be ignored on /oauth2/register, got UserId=%q OrgId=%q", savedClient.UserId, savedClient.OrgId)
+	}
+	if strings.Contains(savedClient.Scope, "admin") || strings.Contains(savedClient.Scope, "*") {
+		t.Errorf("Expected superuser scopes (admin, *) to be stripped on dynamic registration, got Scope=%q", savedClient.Scope)
+	}
+
+	// 2. Dynamic Registration Overwrite Protection:
+	// Attempting to re-register the same client_id with an attacker's redirect_uri MUST be rejected with 400
+	overwritePayload := fmt.Sprintf(`{
+		"client_id": %q,
+		"client_name": "ChatGPT",
+		"redirect_uris": ["https://evil.example.com/steal-code"]
+	}`, regResp.ClientID)
+	reqOverwrite := newSecReq("POST", "/api/v1/oauth2/register", strings.NewReader(overwritePayload))
+	reqOverwrite.Header.Set("Content-Type", "application/json")
+	recOverwrite := httptest.NewRecorder()
+	HandleOAuthRegister(recOverwrite, reqOverwrite)
+	if recOverwrite.Code != http.StatusBadRequest {
+		t.Fatalf("Expected 400 Bad Request when attempting to overwrite existing client_id %s, got %d: %s", regResp.ClientID, recOverwrite.Code, recOverwrite.Body.String())
+	}
+
+	// 3. Redirect URI Hijacking Protection on Authorize (GET & POST):
+	// Attacker tries to authorize using ChatGPT's client_id but redirect_uri=https://evil.example.com/callback -> MUST be rejected!
+	evilGetURL := fmt.Sprintf("/oauth2/authorize?client_id=%s&redirect_uri=%s&response_type=code",
+		url.QueryEscape(regResp.ClientID),
+		url.QueryEscape("https://evil.example.com/callback"),
+	)
+	reqEvilGet := newSecReq("GET", evilGetURL, nil)
+	recEvilGet := httptest.NewRecorder()
+	HandleOAuthAuthorize(recEvilGet, reqEvilGet)
+	if recEvilGet.Code != http.StatusBadRequest {
+		t.Fatalf("Expected 400 Bad Request for cross-domain redirect_uri injection on GET /oauth2/authorize, got %d: %s", recEvilGet.Code, recEvilGet.Body.String())
+	}
+
+	evilPostBody := fmt.Sprintf(`{
+		"client_id": %q,
+		"redirect_uri": "https://evil.example.com/callback",
+		"org_id": "org_dyn_sec_test",
+		"scope": "workflow:edit",
+		"approved": true
+	}`, regResp.ClientID)
+	reqEvilPost := newSecReq("POST", "/api/v1/oauth2/authorize", strings.NewReader(evilPostBody))
+	reqEvilPost.Header.Set("Content-Type", "application/json")
+	reqEvilPost.AddCookie(&http.Cookie{Name: "session_token", Value: "sess_dyn_sec_admin"})
+	recEvilPost := httptest.NewRecorder()
+	HandleOAuthAuthorize(recEvilPost, reqEvilPost)
+	if recEvilPost.Code != http.StatusBadRequest {
+		t.Fatalf("Expected 400 Bad Request for cross-domain redirect_uri injection on POST /oauth2/authorize, got %d: %s", recEvilPost.Code, recEvilPost.Body.String())
+	}
+
+	// Legitimate alternate OpenAI callback domain (e.g. chat.openai.com) for verified ChatGPT client MUST still be allowed
+	altOpenAIBody := fmt.Sprintf(`{
+		"client_id": %q,
+		"redirect_uri": "https://chat.openai.com/aip/g-9999/oauth/callback",
+		"org_id": "org_dyn_sec_test",
+		"scope": "workflow:read admin *",
+		"code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+		"code_challenge_method": "S256",
+		"approved": true
+	}`, regResp.ClientID)
+	reqAltOpenAI := newSecReq("POST", "/api/v1/oauth2/authorize", strings.NewReader(altOpenAIBody))
+	reqAltOpenAI.Header.Set("Content-Type", "application/json")
+	reqAltOpenAI.AddCookie(&http.Cookie{Name: "session_token", Value: "sess_dyn_sec_admin"})
+	recAltOpenAI := httptest.NewRecorder()
+	HandleOAuthAuthorize(recAltOpenAI, reqAltOpenAI)
+	if recAltOpenAI.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for official alternate OpenAI domain on verified ChatGPT client, got %d: %s", recAltOpenAI.Code, recAltOpenAI.Body.String())
+	}
+	var altAuthResp OAuthAuthorizeResponse
+	_ = json.Unmarshal(recAltOpenAI.Body.Bytes(), &altAuthResp)
+	if altAuthResp.Code == "" {
+		t.Fatalf("Expected authorization code to be issued for official OpenAI callback")
+	}
+
+	// Verify wildcard/admin scopes were stripped from the issued authorization code
+	issuedCodeObj, _ := GetOAuthAuthCode(ctx, altAuthResp.Code)
+	if issuedCodeObj == nil || strings.Contains(issuedCodeObj.Scope, "admin") || strings.Contains(issuedCodeObj.Scope, "*") {
+		t.Errorf("Expected superuser scopes (admin, *) to be stripped from dynamic authCode, got: %+v", issuedCodeObj)
+	}
+
+	// 4. Single-Use Code Invalidation on Failed PKCE Verification:
+	// Attacker tries to exchange altAuthResp.Code with a wrong PKCE code_verifier -> fails AND burns the code
+	badPKCEForm := url.Values{}
+	badPKCEForm.Set("grant_type", "authorization_code")
+	badPKCEForm.Set("code", altAuthResp.Code)
+	badPKCEForm.Set("client_id", regResp.ClientID)
+	badPKCEForm.Set("redirect_uri", "https://chat.openai.com/aip/g-9999/oauth/callback")
+	badPKCEForm.Set("code_verifier", "attacker_guessed_wrong_code_verifier_value_000")
+	reqBadPKCE := newSecReq("POST", "/oauth2/token", strings.NewReader(badPKCEForm.Encode()))
+	reqBadPKCE.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recBadPKCE := httptest.NewRecorder()
+	HandleOAuthToken(recBadPKCE, reqBadPKCE)
+	if recBadPKCE.Code != http.StatusBadRequest {
+		t.Fatalf("Expected 400 Bad Request for wrong PKCE verifier, got %d", recBadPKCE.Code)
+	}
+
+	// Subsequent attempt with the real verifier must now fail because the code was invalidated on the failed PKCE attempt
+	goodPKCEForm := url.Values{}
+	goodPKCEForm.Set("grant_type", "authorization_code")
+	goodPKCEForm.Set("code", altAuthResp.Code)
+	goodPKCEForm.Set("client_id", regResp.ClientID)
+	goodPKCEForm.Set("redirect_uri", "https://chat.openai.com/aip/g-9999/oauth/callback")
+	goodPKCEForm.Set("code_verifier", "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+	reqReplayAfterPKCE := newSecReq("POST", "/oauth2/token", strings.NewReader(goodPKCEForm.Encode()))
+	reqReplayAfterPKCE.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recReplayAfterPKCE := httptest.NewRecorder()
+	HandleOAuthToken(recReplayAfterPKCE, reqReplayAfterPKCE)
+	if recReplayAfterPKCE.Code != http.StatusBadRequest {
+		t.Fatalf("Expected auth code to be invalidated after failed PKCE attempt, got %d: %s", recReplayAfterPKCE.Code, recReplayAfterPKCE.Body.String())
+	}
+
+	// 5. Refresh Token Non-App Scope Escalation Protection:
+	// Issue a token with scope="workflow:read" and verify refreshing with scope="workflow:edit" or "admin" is rejected!
+	readOnlyTok := OAuthToken{
+		ID:           "mcp_conn_readonly_sec",
+		AccessToken:  "shfl_mcp_readonly_sec_tok",
+		RefreshToken: "shfl_mcp_refresh_readonly_sec_tok",
+		ClientID:     regResp.ClientID,
+		OrgId:        "org_dyn_sec_test",
+		UserId:       "usr_dyn_sec_admin",
+		Scope:        "workflow:read",
+		ExpiresIn:    3600,
+		ExpiresAt:    time.Now().Add(1 * time.Hour),
+	}
+	_ = SetOAuthToken(ctx, readOnlyTok)
+
+	escalateForm := url.Values{}
+	escalateForm.Set("grant_type", "refresh_token")
+	escalateForm.Set("refresh_token", readOnlyTok.RefreshToken)
+	escalateForm.Set("client_id", regResp.ClientID)
+	escalateForm.Set("scope", "workflow:read workflow:edit")
+	reqEscalate := newSecReq("POST", "/oauth2/token", strings.NewReader(escalateForm.Encode()))
+	reqEscalate.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recEscalate := httptest.NewRecorder()
+	HandleOAuthToken(recEscalate, reqEscalate)
+	if recEscalate.Code != http.StatusBadRequest || !strings.Contains(recEscalate.Body.String(), "invalid_scope") {
+		t.Fatalf("Expected 400 invalid_scope when escalating workflow:read to workflow:edit on refresh, got %d: %s", recEscalate.Code, recEscalate.Body.String())
+	}
+}
+
+func TestHandleMCPMethodInitialize_AnnotationsAndExcludeCustomAction(t *testing.T) {
+	longText := strings.Repeat("Detailed API endpoint documentation for querying agent status and configuration settings across distributed clusters. ", 5)
+	app := WorkflowApp{
+		ID:   "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+		Name: "Wazuh Zoho test 3",
+		Link: "https://desk.zoho.com",
+		Actions: []WorkflowAppAction{
+			{
+				Name:        "custom_action",
+				Description: "add a custom action for your app",
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "method", Options: []string{"GET", "POST"}, Required: true},
+					{Name: "url", Required: true},
+				},
+			},
+			{
+				Name:        "delete_webhook",
+				Label:       "Delete Webhook",
+				Description: "\n\nhttps://desk.zoho.com/api/v1/webhooks/{webhook_id}",
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "url", Configuration: true, Required: true},
+					{Name: "webhook_id", Description: "ID of the webhook", Required: true, Schema: SchemaDefinition{Type: "string"}},
+					{Name: "ssl_verify", Required: false},
+				},
+			},
+			{
+				Name:        "get_departments",
+				Label:       "Get Departments",
+				Description: "List all configured departments\n\nhttps://desk.zoho.com/api/v1/departments",
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "limit", Description: "Max items", Required: false, Example: "50", Schema: SchemaDefinition{Type: "integer"}},
+				},
+			},
+			{
+				Name:        "get_list_tickets",
+				Label:       "List Tickets",
+				Description: "\n\nhttps://desk.zoho.com/api/v1/tickets",
+			},
+			{
+				Name:        "get_agents",
+				Label:       "Get Agents",
+				Description: longText + "\n\n/api/v1/agents",
+			},
+			{
+				Name:        "post_create_ticket",
+				Label:       "Create Ticket",
+				Description: "Create a new support ticket\n\nhttps://desk.zoho.com/api/v1/tickets",
+			},
+		},
+	}
+
+	req := MCPRequest{
+		Jsonrpc: "2.0",
+		ID:      1,
+		Method:  "tools/list",
+	}
+
+	resp, err := HandleMCPMethodInitialize(req, User{}, app)
+	if err != nil {
+		t.Fatalf("Unexpected error in HandleMCPMethodInitialize: %v", err)
+	}
+
+	if len(resp.Result.Tools) != 5 {
+		t.Fatalf("Expected 5 tools (custom_action excluded), got %d", len(resp.Result.Tools))
+	}
+
+	byName := map[string]MCPTool{}
+	for _, tool := range resp.Result.Tools {
+		if tool.Name == "custom_action" {
+			t.Fatalf("custom_action must never be returned in MCP tools/list")
+		}
+		byName[tool.Name] = tool
+	}
+
+	// Verify read-only classification for get_departments, get_list_tickets, and get_agents
+	for _, readToolName := range []string{"get_departments", "get_list_tickets", "get_agents"} {
+		tool, ok := byName[readToolName]
+		if !ok {
+			t.Fatalf("Expected tool %s to be present", readToolName)
+		}
+		if tool.Annotations == nil || tool.Annotations.ReadOnlyHint == nil || !*tool.Annotations.ReadOnlyHint {
+			t.Errorf("Expected %s to have readOnlyHint=true, got %+v", readToolName, tool.Annotations)
+		}
+		if tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
+			t.Errorf("Expected %s to have destructiveHint=false, got %+v", readToolName, tool.Annotations)
+		}
+		if strings.HasPrefix(tool.Description, "https://") {
+			t.Errorf("Expected %s description not to be a bare URL, got %q", readToolName, tool.Description)
+		}
+	}
+
+	// Verify both prose description and URL are included when present
+	deptTool := byName["get_departments"]
+	if !strings.Contains(deptTool.Description, "List all configured departments") || !strings.Contains(deptTool.Description, "https://desk.zoho.com/api/v1/departments") {
+		t.Errorf("Expected get_departments description to contain both prose description and URL, got %q", deptTool.Description)
+	}
+
+	// Verify long description is capped at <= 350 chars while preserving the resolved endpoint URL at the end
+	agentsTool := byName["get_agents"]
+	if len(agentsTool.Description) > 350 {
+		t.Errorf("Expected get_agents description length <= 350, got %d (%q)", len(agentsTool.Description), agentsTool.Description)
+	}
+	if !strings.Contains(agentsTool.Description, "https://desk.zoho.com/api/v1/agents") {
+		t.Errorf("Expected get_agents description to preserve the resolved URL at the end, got %q", agentsTool.Description)
+	}
+	if !strings.Contains(agentsTool.Description, "Detailed API endpoint documentation") {
+		t.Errorf("Expected get_agents description to preserve the prose prefix, got %q", agentsTool.Description)
+	}
+
+	// Verify integer type and example enrichment on get_departments.limit
+	if limitProp, ok := deptTool.InputSchema.Properties["limit"]; !ok || limitProp.Type != "integer" || !strings.Contains(limitProp.Description, "50") {
+		t.Errorf("Expected get_departments.limit to have type=integer and example in description, got %+v", limitProp)
+	}
+
+	// Verify destructive write classification for delete_webhook
+	delTool, ok := byName["delete_webhook"]
+	if !ok {
+		t.Fatalf("Expected delete_webhook to be present")
+	}
+	if delTool.Annotations == nil || delTool.Annotations.ReadOnlyHint == nil || *delTool.Annotations.ReadOnlyHint {
+		t.Errorf("Expected delete_webhook to have readOnlyHint=false, got %+v", delTool.Annotations)
+	}
+	if delTool.Annotations.DestructiveHint == nil || !*delTool.Annotations.DestructiveHint {
+		t.Errorf("Expected delete_webhook to have destructiveHint=true, got %+v", delTool.Annotations)
+	}
+	if _, hasSSL := delTool.InputSchema.Properties["ssl_verify"]; hasSSL {
+		t.Errorf("Expected internal ssl_verify parameter to be excluded from MCP inputSchema")
+	}
+
+	// Verify non-destructive write classification for post_create_ticket
+	createTool, ok := byName["post_create_ticket"]
+	if !ok {
+		t.Fatalf("Expected post_create_ticket to be present")
+	}
+	if createTool.Annotations == nil || createTool.Annotations.ReadOnlyHint == nil || *createTool.Annotations.ReadOnlyHint {
+		t.Errorf("Expected post_create_ticket to have readOnlyHint=false, got %+v", createTool.Annotations)
+	}
+	if createTool.Annotations.DestructiveHint == nil || *createTool.Annotations.DestructiveHint {
+		t.Errorf("Expected post_create_ticket to have destructiveHint=false, got %+v", createTool.Annotations)
+	}
+}
+
+func TestSmartOAuthScopesAndProtectedResourceDiscovery(t *testing.T) {
+	type protectedResourceResp struct {
+		Resource        string   `json:"resource"`
+		ScopesSupported []string `json:"scopes_supported"`
+	}
+
+	// 1. App-scoped MCP protected resource should advertise app:<app> and mcp:execute, NOT workflow:edit
+	reqApp := httptest.NewRequest("GET", "https://shuffler.io/.well-known/oauth-protected-resource/api/v1/apps/jira_cloud/mcp", nil)
+	recApp := httptest.NewRecorder()
+	HandleOAuthProtectedResource(recApp, reqApp)
+	if recApp.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for app MCP protected resource, got %d", recApp.Code)
+	}
+	var metaApp protectedResourceResp
+	if err := json.Unmarshal(recApp.Body.Bytes(), &metaApp); err != nil {
+		t.Fatalf("Failed to decode metadata: %v", err)
+	}
+	if len(metaApp.ScopesSupported) != 2 || metaApp.ScopesSupported[0] != "app:jira_cloud" || metaApp.ScopesSupported[1] != "mcp:execute" {
+		t.Fatalf("Expected scopes_supported=[app:jira_cloud mcp:execute], got %v", metaApp.ScopesSupported)
+	}
+
+	// 2. General MCP protected resource should advertise mcp:execute, NOT workflow:edit
+	reqMCP := httptest.NewRequest("GET", "https://shuffler.io/.well-known/oauth-protected-resource/api/v1/mcp", nil)
+	recMCP := httptest.NewRecorder()
+	HandleOAuthProtectedResource(recMCP, reqMCP)
+	var metaMCP protectedResourceResp
+	_ = json.Unmarshal(recMCP.Body.Bytes(), &metaMCP)
+	if len(metaMCP.ScopesSupported) != 1 || metaMCP.ScopesSupported[0] != "mcp:execute" {
+		t.Fatalf("Expected scopes_supported=[mcp:execute] for /api/v1/mcp, got %v", metaMCP.ScopesSupported)
+	}
+
+	// 3. Token with mcp:execute can access MCP and App Run/Read endpoints, but CANNOT modify/delete workflows
+	ctx := context.Background()
+	mcpToken := &OAuthToken{
+		AccessToken: "shfl_test_mcp_exec_token",
+		Scope:       "app:jira_cloud mcp:execute",
+		AllowedApps: []string{"jira_cloud"},
+		OrgId:       "org_smart_scope",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+	}
+
+	// Allowed: App MCP endpoint for jira_cloud
+	reqJiraMCP := httptest.NewRequest("POST", "https://shuffler.io/api/v1/apps/jira_cloud/mcp", nil)
+	if err := ValidateOAuthTokenAccess(ctx, mcpToken, reqJiraMCP); err != nil {
+		t.Errorf("Expected mcpToken to be allowed on /api/v1/apps/jira_cloud/mcp, got error: %v", err)
+	}
+
+	// Blocked: App MCP endpoint for another app (slack)
+	reqSlackMCP := httptest.NewRequest("POST", "https://shuffler.io/api/v1/apps/slack/mcp", nil)
+	if err := ValidateOAuthTokenAccess(ctx, mcpToken, reqSlackMCP); err == nil {
+		t.Errorf("Expected mcpToken scoped to jira_cloud to be rejected on /api/v1/apps/slack/mcp")
+	}
+
+	// Allowed: App Run endpoint for jira_cloud
+	reqJiraRun := httptest.NewRequest("POST", "https://shuffler.io/api/v1/apps/jira_cloud/run", nil)
+	if err := ValidateOAuthTokenAccess(ctx, mcpToken, reqJiraRun); err != nil {
+		t.Errorf("Expected mcpToken to be allowed on /api/v1/apps/jira_cloud/run, got error: %v", err)
+	}
+
+	// Blocked: Destructive workflow modification without workflow:edit
+	reqDeleteWf := httptest.NewRequest("DELETE", "https://shuffler.io/api/v1/workflows/wf_123", nil)
+	if err := ValidateOAuthTokenAccess(ctx, mcpToken, reqDeleteWf); err == nil {
+		t.Errorf("Expected mcpToken without workflow:edit to be rejected on DELETE /api/v1/workflows/wf_123")
+	}
+}
+
+func TestOAuthChosenToolsConsentAndSettingsPermeation(t *testing.T) {
+	ctx := context.Background()
+
+	// Seed a test app in cache so GetApp resolves it with real actions
+	testAppID := "abcdef1234567890abcdef1234567890"
+	testApp := WorkflowApp{
+		ID:          testAppID,
+		Name:        "Jira Cloud",
+		Description: "Atlassian Jira issue tracking and incident management.",
+		Link:        "https://your-domain.atlassian.net",
+		Public:      true,
+		Actions: []WorkflowAppAction{
+			{
+				Name:        "list_issues",
+				Label:       "List Issues",
+				Description: "Search and list issues using JQL.\n/rest/api/3/search",
+			},
+			{
+				Name:        "create_issue",
+				Label:       "Create Issue",
+				Description: "Create a new Jira ticket.\n/rest/api/3/issue",
+			},
+			{
+				Name:        "delete_issue",
+				Label:       "Delete Issue",
+				Description: "Permanently delete a Jira issue.\n/rest/api/3/issue/{issueIdOrKey}",
+			},
+		},
+	}
+	if appBytes, err := json.Marshal(testApp); err == nil {
+		_ = SetCache(ctx, fmt.Sprintf("workflowapp_%s", testAppID), appBytes, 10)
+	}
+
+	// 1. ResolveOAuthAppsAndTools should resolve Jira Cloud and its 3 tools (Read, Write, Destructive)
+	appPerms, scopes := ResolveOAuthAppsAndTools(ctx, User{}, fmt.Sprintf("app:%s mcp:execute", testAppID), nil, nil, "")
+	if len(appPerms) != 1 {
+		t.Fatalf("Expected 1 resolved app permission, got %d", len(appPerms))
+	}
+	if appPerms[0].Name != "Jira Cloud" {
+		t.Errorf("Expected resolved app name 'Jira Cloud', got '%s'", appPerms[0].Name)
+	}
+	if len(appPerms[0].Tools) != 3 {
+		t.Fatalf("Expected 3 resolved tools for Jira Cloud, got %d", len(appPerms[0].Tools))
+	}
+	if !appPerms[0].Tools[0].ReadOnly || appPerms[0].Tools[0].Destructive {
+		t.Errorf("Expected list_issues to be ReadOnly=true, Destructive=false, got %+v", appPerms[0].Tools[0])
+	}
+	if appPerms[0].Tools[1].ReadOnly || appPerms[0].Tools[1].Destructive {
+		t.Errorf("Expected create_issue to be ReadOnly=false, Destructive=false, got %+v", appPerms[0].Tools[1])
+	}
+	if !appPerms[0].Tools[2].Destructive {
+		t.Errorf("Expected delete_issue to be Destructive=true, got %+v", appPerms[0].Tools[2])
+	}
+	if len(scopes) == 0 || !strings.Contains(scopes[0].Name, "Jira Cloud (3 tools)") {
+		t.Errorf("Expected enriched scope name to include 'Jira Cloud (3 tools)', got %+v", scopes)
+	}
+
+	// 2. When user deselects delete_issue during OAuth consent (AllowedTools=["list_issues", "create_issue"]),
+	// ResolveOAuthAppsAndTools and IsToolAllowedForOAuth should only include the chosen tools
+	filteredPerms, _ := ResolveOAuthAppsAndTools(ctx, User{}, fmt.Sprintf("app:%s mcp:execute", testAppID), []string{testAppID}, []string{"list_issues", "create_issue"}, "")
+	if len(filteredPerms) != 1 || len(filteredPerms[0].Tools) != 2 {
+		t.Fatalf("Expected 2 filtered tools when delete_issue is deselected, got %+v", filteredPerms)
+	}
+	if !IsToolAllowedForOAuth([]string{"list_issues", "create_issue"}, "list_issues", testAppID, "Jira Cloud") {
+		t.Errorf("Expected list_issues to be allowed")
+	}
+	if IsToolAllowedForOAuth([]string{"list_issues", "create_issue"}, "delete_issue", testAppID, "Jira Cloud") {
+		t.Errorf("Expected delete_issue to be blocked when not in AllowedTools")
+	}
+
+	// 3. RecordMCPTokenAppAndTools should enrich an existing OAuth token so /settings displays the exact tools
+	tok := OAuthToken{
+		ID:          "mcp_conn_test_tools",
+		AccessToken: "shfl_mcp_test_tools_token",
+		TokenType:   "Bearer",
+		Scope:       "mcp:execute",
+		OrgId:       "org_tools_test",
+		UserId:      "user_tools_test",
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+	}
+	_ = SetOAuthToken(ctx, tok)
+
+	initResp, _ := HandleMCPMethodInitialize(MCPRequest{}, User{}, testApp)
+	RecordMCPTokenAppAndTools(ctx, tok.AccessToken, testApp, initResp.Result.Tools)
+
+	updatedTok, err := GetOAuthToken(ctx, tok.AccessToken)
+	if err != nil || updatedTok == nil {
+		t.Fatalf("Failed to retrieve updated token: %v", err)
+	}
+	if len(updatedTok.AppPermissions) != 1 || updatedTok.AppPermissions[0].Name != "Jira Cloud" || len(updatedTok.AppPermissions[0].Tools) != 3 {
+		t.Fatalf("Expected updated token to have Jira Cloud with 3 tools in AppPermissions, got %+v", updatedTok.AppPermissions)
+	}
+}
+
+
