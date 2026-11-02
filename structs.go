@@ -784,22 +784,22 @@ type UserGeoInfo struct {
 }
 
 type DeviceNotificationPreferences struct {
-	CriticalPager bool `json:"critical_pager"` // Critical downtime siren alerts
-	AgentRequests bool `json:"agent_requests"` // AI agent human-in-the-loop approvals
-	GeneralAlerts bool `json:"general_alerts"` // General FYI updates & reports
+	CriticalPager bool `datastore:"critical_pager" json:"critical_pager"` // Critical downtime siren alerts
+	AgentRequests bool `datastore:"agent_requests" json:"agent_requests"` // AI agent human-in-the-loop approvals
+	GeneralAlerts bool `datastore:"general_alerts" json:"general_alerts"` // General FYI updates & reports
 }
 
 type Device struct {
-	ID          string                        `json:"id"`                    // Unique device identifier
-	Token       string                        `json:"token"`                 // FCM registration token
-	Platform    string                        `json:"platform"`              // "ios", "android", "web", "desktop"
-	DeviceName  string                        `json:"device_name,omitempty"` // e.g., "iPhone 16 Pro", "Chrome macOS"
-	AppVersion  string                        `json:"app_version,omitempty"` // App version
-	Preferences DeviceNotificationPreferences `json:"preferences"`           // Granular notification settings
+	ID          string                        `datastore:"id" json:"id"`                                       // Unique device identifier
+	Token       string                        `datastore:"token,noindex" json:"token"`                         // FCM registration token
+	Platform    string                        `datastore:"platform" json:"platform"`                           // "ios", "android", "web", "desktop"
+	DeviceName  string                        `datastore:"device_name,omitempty" json:"device_name,omitempty"` // e.g., "iPhone 16 Pro", "Chrome macOS"
+	AppVersion  string                        `datastore:"app_version,omitempty" json:"app_version,omitempty"` // App version
+	Preferences DeviceNotificationPreferences `datastore:"preferences" json:"preferences"`                     // Granular notification settings
 
-	CreatedAt  int64 `json:"created_at"`   // Registration timestamp
-	EditedAt   int64 `json:"edited_at"`    // Last updated timestamp
-	LastSeenAt int64 `json:"last_seen_at"` // Last active timestamp
+	CreatedAt  int64 `datastore:"created_at" json:"created_at"`     // Registration timestamp
+	EditedAt   int64 `datastore:"edited_at" json:"edited_at"`       // Last updated timestamp
+	LastSeenAt int64 `datastore:"last_seen_at" json:"last_seen_at"` // Last active timestamp
 }
 
 type User struct {
@@ -845,8 +845,9 @@ type User struct {
 	EthInfo  EthInfo   `datastore:"eth_info" json:"eth_info"`
 	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
 
-	ProvisionedByOrg string `datastore:"provisioned_by_org" json:"provisioned_by_org"`
+	ProvisionedByOrg string   `datastore:"provisioned_by_org" json:"provisioned_by_org"`
 	AllowedApps      []string `json:"allowed_apps,omitempty" datastore:"allowed_apps,omitempty"`
+	AllowedTools     []string `json:"allowed_tools,omitempty" datastore:"allowed_tools,omitempty"`
 	OAuthScope       string   `json:"oauth_scope,omitempty" datastore:"oauth_scope,omitempty"`
 }
 
@@ -3133,6 +3134,29 @@ type FileWrapper struct {
 	Source      File   `json:"_source"`
 }
 
+type OAuthRawSource struct {
+	ClientID         string   `json:"client_id,omitempty"`
+	RawClientName    string   `json:"raw_client_name,omitempty"`
+	RawRedirectURI   string   `json:"raw_redirect_uri,omitempty"`
+	RawRedirectURIs  []string `json:"raw_redirect_uris,omitempty"`
+	RegisteredURIs   []string `json:"registered_uris,omitempty"`
+	RawClientURI     string   `json:"raw_client_uri,omitempty"`
+	RawLogoURI       string   `json:"raw_logo_uri,omitempty"`
+	SoftwareID       string   `json:"software_id,omitempty"`
+	SoftwareVersion  string   `json:"software_version,omitempty"`
+	UserAgent        string   `json:"user_agent,omitempty"`
+	TokenUserAgent   string   `json:"token_user_agent,omitempty"`
+	Origin           string   `json:"origin,omitempty"`
+	RemoteAddr       string   `json:"remote_addr,omitempty"`
+	TokenRemoteAddr  string   `json:"token_remote_addr,omitempty"`
+	MCPClientName    string   `json:"mcp_client_name,omitempty"`
+	MCPClientVersion string   `json:"mcp_client_version,omitempty"`
+	MCPClientVer     string   `json:"mcp_client_ver,omitempty"`
+	MCPUserAgent     string   `json:"mcp_user_agent,omitempty"`
+	IsDynamic        bool     `json:"is_dynamic,omitempty"`
+	AuthMethod       string   `json:"auth_method,omitempty"`
+}
+
 type OAuthClient struct {
 	ID                      string   `json:"id" datastore:"id"`
 	ClientID                string   `json:"client_id" datastore:"client_id"`
@@ -3151,6 +3175,27 @@ type OAuthClient struct {
 	UserId                  string   `json:"user_id,omitempty" datastore:"user_id"`
 	CreatedAt               int64    `json:"created_at" datastore:"created_at"`
 	IsDynamic               bool     `json:"is_dynamic" datastore:"is_dynamic"`
+	VendorID                string   `json:"vendor_id,omitempty" datastore:"vendor_id"`
+	VendorName              string   `json:"vendor_name,omitempty" datastore:"vendor_name"`
+	ImageID                 string   `json:"image_id,omitempty" datastore:"image_id"`
+	VendorVerified          bool     `json:"vendor_verified" datastore:"vendor_verified"`
+	VerificationStatus      string   `json:"verification_status,omitempty" datastore:"verification_status"`
+	VerificationReason      string   `json:"verification_reason,omitempty" datastore:"verification_reason,noindex"`
+	VerifiedDomain          string   `json:"verified_domain,omitempty" datastore:"verified_domain"`
+	ClaimedVendorID         string   `json:"claimed_vendor_id,omitempty" datastore:"claimed_vendor_id"`
+	ClaimedVendorName       string   `json:"claimed_vendor_name,omitempty" datastore:"claimed_vendor_name"`
+	VendorSpoofWarning      string   `json:"vendor_spoof_warning,omitempty" datastore:"vendor_spoof_warning,noindex"`
+	RawClientName           string   `json:"raw_client_name,omitempty" datastore:"raw_client_name"`
+	RawRedirectURI          string   `json:"raw_redirect_uri,omitempty" datastore:"raw_redirect_uri"`
+	RawClientURI            string   `json:"raw_client_uri,omitempty" datastore:"raw_client_uri"`
+	RawLogoURI              string   `json:"raw_logo_uri,omitempty" datastore:"raw_logo_uri"`
+	UserAgent               string   `json:"user_agent,omitempty" datastore:"user_agent,noindex"`
+	Origin                  string   `json:"origin,omitempty" datastore:"origin"`
+	Issuer                  string   `json:"issuer,omitempty" datastore:"issuer"`
+	RemoteAddr              string   `json:"remote_addr,omitempty" datastore:"remote_addr"`
+	MCPClientName           string   `json:"mcp_client_name,omitempty" datastore:"mcp_client_name"`
+	MCPClientVersion        string   `json:"mcp_client_version,omitempty" datastore:"mcp_client_version"`
+	MCPUserAgent            string   `json:"mcp_user_agent,omitempty" datastore:"mcp_user_agent,noindex"`
 }
 
 type OAuthClientWrapper struct {
@@ -3164,19 +3209,64 @@ type OAuthClientWrapper struct {
 	Source      OAuthClient `json:"_source"`
 }
 
+type OAuthToolPermission struct {
+	Name        string `json:"name" datastore:"name"`
+	Title       string `json:"title,omitempty" datastore:"title"`
+	Description string `json:"description,omitempty" datastore:"description,noindex"`
+	AppID       string `json:"app_id,omitempty" datastore:"app_id"`
+	AppName     string `json:"app_name,omitempty" datastore:"app_name"`
+	ReadOnly    bool   `json:"read_only" datastore:"read_only"`
+	Destructive bool   `json:"destructive" datastore:"destructive"`
+}
+
+type OAuthAppPermission struct {
+	ID          string                `json:"id" datastore:"id"`
+	Name        string                `json:"name" datastore:"name"`
+	Image       string                `json:"image,omitempty" datastore:"image,noindex"`
+	Description string                `json:"description,omitempty" datastore:"description,noindex"`
+	Tools       []OAuthToolPermission `json:"tools,omitempty" datastore:"tools,noindex"`
+}
+
 type OAuthToken struct {
-	ID           string    `json:"id" datastore:"id"`
-	AccessToken  string    `json:"access_token" datastore:"access_token"`
-	RefreshToken string    `json:"refresh_token,omitempty" datastore:"refresh_token"`
-	TokenType    string    `json:"token_type" datastore:"token_type"`
-	Scope        string    `json:"scope" datastore:"scope"`
-	AllowedApps  []string  `json:"allowed_apps,omitempty" datastore:"allowed_apps,omitempty"`
-	ExpiresIn    int64     `json:"expires_in" datastore:"expires_in"`
-	ExpiresAt    time.Time `json:"expires_at" datastore:"expires_at"`
-	ClientID     string    `json:"client_id" datastore:"client_id"`
-	OrgId        string    `json:"org_id" datastore:"org_id"`
-	UserId       string    `json:"user_id" datastore:"user_id"`
-	CreatedAt    int64     `json:"created_at" datastore:"created_at"`
+	ID                 string               `json:"id" datastore:"id"`
+	AccessToken        string               `json:"access_token" datastore:"access_token"`
+	RefreshToken       string               `json:"refresh_token,omitempty" datastore:"refresh_token"`
+	TokenType          string               `json:"token_type" datastore:"token_type"`
+	Scope              string               `json:"scope" datastore:"scope"`
+	AllowedApps        []string             `json:"allowed_apps,omitempty" datastore:"allowed_apps,omitempty"`
+	AllowedTools       []string             `json:"allowed_tools,omitempty" datastore:"allowed_tools,omitempty"`
+	AppPermissions     []OAuthAppPermission `json:"app_permissions,omitempty" datastore:"app_permissions,noindex"`
+	ExpiresIn          int64                `json:"expires_in" datastore:"expires_in"`
+	ExpiresAt          time.Time `json:"expires_at" datastore:"expires_at"`
+	ClientID           string    `json:"client_id" datastore:"client_id"`
+	OrgId              string    `json:"org_id" datastore:"org_id"`
+	UserId             string    `json:"user_id" datastore:"user_id"`
+	CreatedAt          int64     `json:"created_at" datastore:"created_at"`
+	RedirectURI        string    `json:"redirect_uri,omitempty" datastore:"redirect_uri"`
+	VendorID           string    `json:"vendor_id,omitempty" datastore:"vendor_id"`
+	VendorName         string    `json:"vendor_name,omitempty" datastore:"vendor_name"`
+	ImageID            string    `json:"image_id,omitempty" datastore:"image_id"`
+	VendorVerified     bool      `json:"vendor_verified" datastore:"vendor_verified"`
+	VerificationStatus string    `json:"verification_status,omitempty" datastore:"verification_status"`
+	VerificationReason string    `json:"verification_reason,omitempty" datastore:"verification_reason,noindex"`
+	VerifiedDomain     string    `json:"verified_domain,omitempty" datastore:"verified_domain"`
+	ClaimedVendorID    string    `json:"claimed_vendor_id,omitempty" datastore:"claimed_vendor_id"`
+	ClaimedVendorName  string    `json:"claimed_vendor_name,omitempty" datastore:"claimed_vendor_name"`
+	VendorSpoofWarning string    `json:"vendor_spoof_warning,omitempty" datastore:"vendor_spoof_warning,noindex"`
+	RawClientName      string    `json:"raw_client_name,omitempty" datastore:"raw_client_name"`
+	RawRedirectURI     string    `json:"raw_redirect_uri,omitempty" datastore:"raw_redirect_uri"`
+	RawClientURI       string    `json:"raw_client_uri,omitempty" datastore:"raw_client_uri"`
+	RawLogoURI         string    `json:"raw_logo_uri,omitempty" datastore:"raw_logo_uri"`
+	SoftwareID         string    `json:"software_id,omitempty" datastore:"software_id"`
+	SoftwareVersion    string    `json:"software_version,omitempty" datastore:"software_version"`
+	UserAgent          string    `json:"user_agent,omitempty" datastore:"user_agent,noindex"`
+	TokenUserAgent     string    `json:"token_user_agent,omitempty" datastore:"token_user_agent,noindex"`
+	Origin             string    `json:"origin,omitempty" datastore:"origin"`
+	RemoteAddr         string    `json:"remote_addr,omitempty" datastore:"remote_addr"`
+	TokenRemoteAddr    string    `json:"token_remote_addr,omitempty" datastore:"token_remote_addr"`
+	MCPClientName      string    `json:"mcp_client_name,omitempty" datastore:"mcp_client_name"`
+	MCPClientVersion   string    `json:"mcp_client_version,omitempty" datastore:"mcp_client_version"`
+	MCPUserAgent       string    `json:"mcp_user_agent,omitempty" datastore:"mcp_user_agent,noindex"`
 }
 
 type OAuthTokenWrapper struct {
@@ -3197,13 +3287,21 @@ type OAuthAuthCode struct {
 	RedirectURI         string    `json:"redirect_uri" datastore:"redirect_uri"`
 	CodeChallenge       string    `json:"code_challenge" datastore:"code_challenge"`
 	CodeChallengeMethod string    `json:"code_challenge_method" datastore:"code_challenge_method"`
-	Scope               string    `json:"scope" datastore:"scope"`
-	AllowedApps         []string  `json:"allowed_apps,omitempty" datastore:"allowed_apps,omitempty"`
-	OrgId               string    `json:"org_id" datastore:"org_id"`
+	Scope               string               `json:"scope" datastore:"scope"`
+	AllowedApps         []string             `json:"allowed_apps,omitempty" datastore:"allowed_apps,omitempty"`
+	AllowedTools        []string             `json:"allowed_tools,omitempty" datastore:"allowed_tools,omitempty"`
+	AppPermissions      []OAuthAppPermission `json:"app_permissions,omitempty" datastore:"app_permissions,noindex"`
+	OrgId               string               `json:"org_id" datastore:"org_id"`
 	UserId              string    `json:"user_id" datastore:"user_id"`
 	ExpiresAt           time.Time `json:"expires_at" datastore:"expires_at"`
 	Used                bool      `json:"used" datastore:"used"`
 	CreatedAt           int64     `json:"created_at" datastore:"created_at"`
+	RawClientName       string    `json:"raw_client_name,omitempty" datastore:"raw_client_name"`
+	RawClientURI        string    `json:"raw_client_uri,omitempty" datastore:"raw_client_uri"`
+	RawLogoURI          string    `json:"raw_logo_uri,omitempty" datastore:"raw_logo_uri"`
+	UserAgent           string    `json:"user_agent,omitempty" datastore:"user_agent,noindex"`
+	Origin              string    `json:"origin,omitempty" datastore:"origin"`
+	RemoteAddr          string    `json:"remote_addr,omitempty" datastore:"remote_addr"`
 }
 
 type OAuthAuthCodeWrapper struct {
@@ -3234,17 +3332,29 @@ type OAuthUserInfo struct {
 
 // OAuthConsentInfoResponse is returned by GET /api/v1/oauth2/authorize to render the consent UI.
 type OAuthConsentInfoResponse struct {
-	ClientID      string           `json:"client_id"`
-	ClientName    string           `json:"client_name"`
-	ClientURI     string           `json:"client_uri,omitempty"`
-	LogoURI       string           `json:"logo_uri,omitempty"`
-	Issuer        string           `json:"issuer,omitempty"`
-	Scopes        []OAuthScopeInfo `json:"scopes"`
-	User          OAuthUserInfo    `json:"user"`
-	AvailableOrgs []OrgMini        `json:"available_orgs"`
-	SelectedOrgId string           `json:"selected_org_id"`
-	RedirectURI   string           `json:"redirect_uri"`
-	State         string           `json:"state"`
+	ClientID           string               `json:"client_id"`
+	ClientName         string               `json:"client_name"`
+	ClientURI          string               `json:"client_uri,omitempty"`
+	LogoURI            string               `json:"logo_uri,omitempty"`
+	Issuer             string               `json:"issuer,omitempty"`
+	Scopes             []OAuthScopeInfo     `json:"scopes"`
+	AppPermissions     []OAuthAppPermission `json:"app_permissions,omitempty"`
+	User               OAuthUserInfo        `json:"user"`
+	AvailableOrgs      []OrgMini            `json:"available_orgs"`
+	SelectedOrgId      string               `json:"selected_org_id"`
+	RedirectURI        string               `json:"redirect_uri"`
+	State              string               `json:"state"`
+	VendorID           string               `json:"vendor_id,omitempty"`
+	VendorName         string               `json:"vendor_name,omitempty"`
+	ImageID            string               `json:"image_id,omitempty"`
+	VendorVerified     bool                 `json:"vendor_verified"`
+	VerificationStatus string               `json:"verification_status,omitempty"`
+	VerificationReason string               `json:"verification_reason,omitempty"`
+	VerifiedDomain     string               `json:"verified_domain,omitempty"`
+	ClaimedVendorID    string               `json:"claimed_vendor_id,omitempty"`
+	ClaimedVendorName  string               `json:"claimed_vendor_name,omitempty"`
+	VendorSpoofWarning string               `json:"vendor_spoof_warning,omitempty"`
+	RawSource          *OAuthRawSource      `json:"raw_source,omitempty"`
 }
 
 // OAuthAuthorizeRequest represents the decision sent by the consent UI or client to POST /oauth2/authorize.
@@ -3253,10 +3363,12 @@ type OAuthAuthorizeRequest struct {
 	ClientName          string   `json:"client_name,omitempty"`
 	ClientURI           string   `json:"client_uri,omitempty"`
 	LogoURI             string   `json:"logo_uri,omitempty"`
+	Issuer              string   `json:"issuer,omitempty"`
 	RedirectURI         string   `json:"redirect_uri"`
 	ResponseType        string   `json:"response_type"`
 	Scope               string   `json:"scope"`
 	AllowedApps         []string `json:"allowed_apps,omitempty"`
+	AllowedTools        []string `json:"allowed_tools,omitempty"`
 	State               string   `json:"state"`
 	CodeChallenge       string   `json:"code_challenge"`
 	CodeChallengeMethod string   `json:"code_challenge_method"`
@@ -3269,6 +3381,7 @@ type OAuthAuthorizeResponse struct {
 	RedirectURL string `json:"redirect_url"`
 	Code        string `json:"code,omitempty"`
 	State       string `json:"state,omitempty"`
+	Issuer      string `json:"issuer,omitempty"`
 }
 
 // OAuthTokenRequest represents incoming parameters to POST /oauth2/token
@@ -3290,6 +3403,20 @@ type OAuthTokenResponse struct {
 	ExpiresIn    int64  `json:"expires_in"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	Scope        string `json:"scope,omitempty"`
+	Email        string `json:"email,omitempty"`
+	Username     string `json:"username,omitempty"`
+}
+
+// OAuthUserInfoResponse represents the OpenID Connect Core 1.0 Section 5.3 UserInfo response.
+type OAuthUserInfoResponse struct {
+	Sub               string `json:"sub"`
+	Email             string `json:"email,omitempty"`
+	EmailVerified     bool   `json:"email_verified,omitempty"`
+	Name              string `json:"name,omitempty"`
+	PreferredUsername string `json:"preferred_username,omitempty"`
+	Username          string `json:"username,omitempty"`
+	OrgId             string `json:"org_id,omitempty"`
+	OrgName           string `json:"org_name,omitempty"`
 }
 
 // OAuthRevokeRequest represents the RFC 7009 token revocation request
@@ -3302,19 +3429,33 @@ type OAuthRevokeRequest struct {
 
 // OAuthTokenView represents a safe view of an active OAuth token for the frontend UI
 type OAuthTokenView struct {
-	ID          string    `json:"id"`
-	ClientID    string    `json:"client_id"`
-	ClientName  string    `json:"client_name,omitempty"`
-	ClientURI   string    `json:"client_uri,omitempty"`
-	LogoURI     string    `json:"logo_uri,omitempty"`
-	TokenType   string    `json:"token_type"`
-	Scope       string    `json:"scope"`
-	AllowedApps []string  `json:"allowed_apps,omitempty"`
-	OrgId       string    `json:"org_id"`
-	UserId      string    `json:"user_id"`
-	CreatedAt   int64     `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	TokenMasked string    `json:"token_masked"`
+	ID                 string          `json:"id"`
+	ClientID           string          `json:"client_id"`
+	ClientName         string          `json:"client_name,omitempty"`
+	ClientURI          string          `json:"client_uri,omitempty"`
+	LogoURI            string          `json:"logo_uri,omitempty"`
+	TokenType          string               `json:"token_type"`
+	Scope              string               `json:"scope"`
+	AllowedApps        []string             `json:"allowed_apps,omitempty"`
+	AllowedTools       []string             `json:"allowed_tools,omitempty"`
+	AppPermissions     []OAuthAppPermission `json:"app_permissions,omitempty"`
+	OrgId              string               `json:"org_id"`
+	UserId             string          `json:"user_id"`
+	CreatedAt          int64           `json:"created_at"`
+	ExpiresAt          time.Time       `json:"expires_at"`
+	TokenMasked        string          `json:"token_masked"`
+	RedirectURI        string          `json:"redirect_uri,omitempty"`
+	VendorID           string          `json:"vendor_id,omitempty"`
+	VendorName         string          `json:"vendor_name,omitempty"`
+	ImageID            string          `json:"image_id,omitempty"`
+	VendorVerified     bool            `json:"vendor_verified"`
+	VerificationStatus string          `json:"verification_status,omitempty"`
+	VerificationReason string          `json:"verification_reason,omitempty"`
+	VerifiedDomain     string          `json:"verified_domain,omitempty"`
+	ClaimedVendorID    string          `json:"claimed_vendor_id,omitempty"`
+	ClaimedVendorName  string          `json:"claimed_vendor_name,omitempty"`
+	VendorSpoofWarning string          `json:"vendor_spoof_warning,omitempty"`
+	RawSource          *OAuthRawSource `json:"raw_source,omitempty"`
 }
 
 
@@ -5548,9 +5689,11 @@ type MCPRequestInput struct {
 }
 
 type MCPRequestParams struct {
-	ToolName string          `json:"tool_name"`
-	Input    MCPRequestInput `json:"input"`
-	Context  struct {
+	ToolName  string                 `json:"tool_name"`
+	Name      string                 `json:"name,omitempty"`
+	Arguments map[string]interface{} `json:"arguments,omitempty"`
+	Input     MCPRequestInput        `json:"input"`
+	Context   struct {
 		SessionID string `json:"session_id"`
 	} `json:"context"`
 	ToolID string `json:"tool_id"`
@@ -5594,59 +5737,79 @@ type MCPRequestParams struct {
 // Standard used for MCP
 type MCPRequest struct {
 	Jsonrpc string           `json:"jsonrpc"`
-	ID      int              `json:"id"`
+	ID      interface{}      `json:"id"`
 	Method  string           `json:"method"`
 	Params  MCPRequestParams `json:"params"`
 }
 
 type MCPResponse struct {
 	Jsonrpc string                 `json:"jsonrpc"`
-	ID      int                    `json:"id"`
+	ID      interface{}            `json:"id"`
 	Result  map[string]interface{} `json:"result,omitempty"`
 }
 
 type MCPInitResponse struct {
 	Jsonrpc string        `json:"jsonrpc"`
-	ID      int           `json:"id"`
+	ID      interface{}   `json:"id"`
 	Result  MCPToolResult `json:"result,omitempty"`
 }
 
 type MCPCapabilitiesTools struct {
-	List bool `json:"list"`
-	Call bool `json:"call"`
+	ListChanged bool `json:"listChanged,omitempty"`
 }
 
 type MCPCapabilities struct {
 	Tools MCPCapabilitiesTools `json:"tools"`
 }
 
+type MCPIcon struct {
+	Src      string   `json:"src"`
+	MimeType string   `json:"mimeType,omitempty"`
+	Sizes    []string `json:"sizes,omitempty"`
+	Theme    string   `json:"theme,omitempty"`
+}
+
 type MCPServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name    string    `json:"name"`
+	Version string    `json:"version"`
+	Icons   []MCPIcon `json:"icons,omitempty"`
 }
 
 type MCPToolResult struct {
-	ProtocolVersion string          `json:"protocolVersion"`
-	Capabilities    MCPCapabilities `json:"capabilities"`
-	ServerInfo      MCPServerInfo   `json:"serverInfo"`
+	ProtocolVersion string          `json:"protocolVersion,omitempty"`
+	Capabilities    MCPCapabilities `json:"capabilities,omitempty"`
+	ServerInfo      MCPServerInfo   `json:"serverInfo,omitempty"`
 	Tools           []MCPTool       `json:"tools"`
 }
 
+type MCPToolAnnotations struct {
+	Title           string `json:"title,omitempty"`
+	ReadOnlyHint    *bool  `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool  `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool  `json:"idempotentHint,omitempty"`
+	OpenWorldHint   *bool  `json:"openWorldHint,omitempty"`
+}
+
 type MCPTool struct {
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	InputSchema MCPToolInputSchema `json:"inputSchema"`
+	Name        string              `json:"name"`
+	Title       string              `json:"title,omitempty"`
+	Description string              `json:"description"`
+	InputSchema MCPToolInputSchema  `json:"inputSchema"`
+	Annotations *MCPToolAnnotations `json:"annotations,omitempty"`
 }
 
 type MCPProperty struct {
-	Type        string `json:"type"`
-	Description string `json:"description,omitempty"`
+	Type        string   `json:"type"`
+	Description string   `json:"description,omitempty"`
+	Enum        []string `json:"enum,omitempty"`
+	Default     string   `json:"default,omitempty"`
 }
 
 type MCPToolInputSchema struct {
-	Type       string                 `json:"type"`
-	Properties map[string]MCPProperty `json:"properties"`
-	Required   []string               `json:"required"`
+	Type                 string                 `json:"type"`
+	Properties           map[string]MCPProperty `json:"properties"`
+	Required             []string               `json:"required,omitempty"`
+	AdditionalProperties *bool                  `json:"additionalProperties,omitempty"`
 }
 
 type OpensearchPrefixFixResult struct {
@@ -6249,6 +6412,14 @@ type Point struct {
 	Y float64 `json:"y"`
 }
 
+type TokenResult struct {
+	Token          string `json:"token"`
+	Success        bool   `json:"success"`
+	MessageID      string `json:"message_id,omitempty"`
+	Error          string `json:"error,omitempty"`
+	IsUnregistered bool   `json:"is_unregistered,omitempty"`
+}
+
 // NotificationRequest defines the incoming JSON structure.
 type NotificationRequest struct {
 	Type        string `json:"type"` // "critical", "agent_request", or "general"
@@ -6256,6 +6427,10 @@ type NotificationRequest struct {
 	Body        string `json:"body"`
 	Description string `json:"description,omitempty"`
 	Source      string `json:"source,omitempty"`
+	Origin      string `json:"origin,omitempty"`
+	// User & Org Routing
+	UserID string `json:"user_id,omitempty"`
+	OrgID  string `json:"org_id,omitempty"`
 	// Device Routing
 	TargetTokens []string `json:"target_tokens"`
 	TargetToken  string   `json:"target_token,omitempty"`
