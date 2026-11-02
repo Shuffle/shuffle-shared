@@ -179,11 +179,12 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"http://localhost:3002",
 			"http://localhost:3000",
 
-			// Shuffle security 
+			// Shuffle security - test instances
 			"https://cases.shuffler.io",
 			"https://security.shuffler.io",
 			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
 			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
+			"https://preview--shuffle-security.lovable.app",
 
 			// tbd
 			"https://preview--shuffle-cases.lovable.app",
@@ -258,8 +259,9 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	}
 
 	//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:8000")
-	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me, Org-Id, Org, Authorization, X-Debug-Url")
-	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, PATCH")
+	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me, Org-Id, Org, Authorization, X-Debug-Url, Mcp-Session-Id, MCP-Protocol-Version")
+	resp.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version, X-Debug-Url")
+	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, PATCH, OPTIONS")
 	resp.Header().Set("Access-Control-Allow-Credentials", "true")
 
 	if request.Method == "OPTIONS" {
@@ -3826,6 +3828,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			userdata.ApiKey = newApikey
 			}
 			userdata.AllowedApps = oauthTok.AllowedApps
+			userdata.AllowedTools = oauthTok.AllowedTools
 			userdata.OAuthScope = oauthTok.Scope
 			if oauthTok.OrgId != "" {
 				userdata.ActiveOrg.Id = oauthTok.OrgId
@@ -3930,6 +3933,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 					userdata.ApiKey = newApikey
 					}
 					userdata.AllowedApps = oauthTok.AllowedApps
+					userdata.AllowedTools = oauthTok.AllowedTools
 					userdata.OAuthScope = oauthTok.Scope
 					if oauthTok.OrgId != "" {
 						userdata.ActiveOrg.Id = oauthTok.OrgId
@@ -34898,7 +34902,7 @@ func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request, am
 	// 4. If yes, continue and add the request to the list
 	// Use the GetCache() and SetCache() functions to store the request count
 
-	maxAmount := 4
+	maxAmount := 5
 	if len(amount) > 0 {
 		maxAmount = amount[0]
 	}
