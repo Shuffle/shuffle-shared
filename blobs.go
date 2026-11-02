@@ -7747,6 +7747,7 @@ func getRoutingExecutionScript(targetCategory string) string {
 	}
 
 	script := `import json
+import os
 import re
 import time
 
@@ -8337,32 +8338,91 @@ target_org_id = ""
 target_region = ""
 target_region_url = ""
 
-def normalize_cloud_region(raw_url, raw_reg):
-    reg = str(raw_reg or "").strip().lower()
+SHUFFLE_CANONICAL_REGIONS = {
+    "uk": "uk",
+    "gb": "uk",
+    "eu": "uk",
+    "default": "uk",
+    "europe-west2": "uk",
+    "frankfurt": "frankfurt",
+    "eu-2": "frankfurt",
+    "eu2": "frankfurt",
+    "europe-west3": "frankfurt",
+    "california": "california",
+    "us": "california",
+    "us-west2": "california",
+    "ca": "ca",
+    "northamerica-northeast1": "ca",
+    "au": "au",
+    "aus": "au",
+    "australia": "au",
+    "australia-southeast1": "au",
+    "shuffle-australia-southeast1": "au",
+}
+
+def _detect_cloud_domain_family(candidate_url):
+    u = str(candidate_url or "").strip().lower()
+    if not u:
+        return ""
+    host = u.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+    if host == "shuffle.security" or host.endswith(".shuffle.security") or host == "security.shuffler.io":
+        return "shuffle.security"
+    if host == "shuffler.io" or host.endswith(".shuffler.io"):
+        return "shuffler.io"
+    return ""
+
+def normalize_cloud_region(raw_url, raw_reg, current_url=None):
+    reg_raw = str(raw_reg or "").strip().lower()
+    reg = SHUFFLE_CANONICAL_REGIONS.get(reg_raw, reg_raw)
     url = str(raw_url or "").strip().rstrip("/")
+
+    explicit_uk_sub = False
+    url_domain_family = ""
     if url:
         low = url.lower()
-        host = low.split("://", 1)[-1].split("/", 1)[0]
+        host = low.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
         if host.endswith(".shuffle.security"):
+            url_domain_family = "shuffle.security"
             sub = host[:-len(".shuffle.security")]
-            if not reg and sub and sub != "www":
-                reg = sub
-            url = f"https://{sub}.shuffler.io" if (sub and sub != "www") else "https://shuffler.io"
-        elif host == "shuffle.security":
-            if not reg:
-                reg = "us"
-            url = "https://shuffler.io"
+            if sub in ("", "www"):
+                sub = "uk"
+            reg = reg or SHUFFLE_CANONICAL_REGIONS.get(sub, sub)
+        elif host in ("shuffle.security", "security.shuffler.io"):
+            url_domain_family = "shuffle.security"
+            reg = reg or "uk"
         elif host.endswith(".shuffler.io"):
+            url_domain_family = "shuffler.io"
             sub = host[:-len(".shuffler.io")]
-            if not reg and sub and sub != "www":
-                reg = sub
-            url = f"https://{host}"
+            if sub == "uk":
+                explicit_uk_sub = True
+            if sub in ("", "www"):
+                sub = "uk"
+            reg = reg or SHUFFLE_CANONICAL_REGIONS.get(sub, sub)
         elif host == "shuffler.io":
-            if not reg:
-                reg = "us"
-            url = "https://shuffler.io"
-    elif reg:
-        url = "https://shuffler.io" if reg in ("us", "default") else f"https://{reg}.shuffler.io"
+            url_domain_family = "shuffler.io"
+            reg = reg or "uk"
+
+    active_domain_family = _detect_cloud_domain_family(current_url)
+    if not active_domain_family and ("self" in locals() or "self" in globals()):
+        active_domain_family = _detect_cloud_domain_family(getattr(self, "url", ""))
+    if not active_domain_family:
+        active_domain_family = _detect_cloud_domain_family(os.environ.get("SHUFFLE_CLOUD_DOMAIN") or os.environ.get("BASE_URL") or "")
+    if not active_domain_family:
+        active_domain_family = url_domain_family
+
+    if reg and (active_domain_family or not url):
+        canonical_reg = SHUFFLE_CANONICAL_REGIONS.get(reg, reg)
+        reg = canonical_reg
+        domain_family = active_domain_family or "shuffler.io"
+        if domain_family == "shuffle.security":
+            sub = canonical_reg if canonical_reg else "uk"
+            url = f"https://{sub}.shuffle.security"
+        else:
+            if canonical_reg in ("", "uk"):
+                url = "https://uk.shuffler.io" if explicit_uk_sub else "https://shuffler.io"
+            else:
+                url = f"https://{canonical_reg}.shuffler.io"
+
     if not url and ("self" in locals() or "self" in globals()):
         fallback_url = str(getattr(self, "url", "") or "").strip().rstrip("/")
         if fallback_url:
