@@ -11,6 +11,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -2144,10 +2145,10 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		go RedirectUserRequest(resp, request)
-		return
-
-		// Just to ensure org propagation across regions occurs in time
+		// Just to ensure org propagation across regions occurs in time.
+		// The background copy must not touch resp: it's released once this handler returns,
+		// and writing to it then crashed the whole backend.
+		go RedirectUserRequest(httptest.NewRecorder(), request.Clone(context.Background()))
 	}
 
 	resp.WriteHeader(200)
@@ -2658,6 +2659,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		log.Printf("[DEBUG][%s] AGENT_TEST_MODE enabled - using mock tool execution", execution.ExecutionId)
 		body, debugUrl, appName, err := RunAgentDecisionMockHandler(execution, decision)
 		return body, debugUrl, appName, []string{}, "", err
+	}
+
+	if builderRequest, ok := getWorkflowBuilderRequest(decision); ok {
+		return runWorkflowBuilderDecisionInProcess(execution, decision, builderRequest)
 	}
 
 	skipSingul := executionMode == "direct" || os.Getenv("AGENT_SKIP_SINGUL") != "false"
