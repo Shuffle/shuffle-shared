@@ -6270,18 +6270,41 @@ func GetFCMClient(ctx context.Context) (*messaging.Client, error) {
 	return client, nil
 }
 
-func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, error) { 
+func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, error) {
 	if project.Environment != "cloud" {
 		log.Printf("[ERROR] Device upsert attempted in non-cloud environment")
 		return user, errors.New("Device upsert is only allowed in cloud environment (for now). Cloud Sync required")
 	}
 
-	if len(device.ID) == 0 { 
+	if len(device.ID) == 0 {
 		log.Printf("[ERROR] No ID in device upsert")
 		return user, errors.New("No device ID provided")
 	}
 
-	if len(device.Token) == 0 { 
+	foundIndex := -1
+	for deviceIndex, curDevices := range user.Devices {
+		if curDevices.ID != device.ID {
+			continue
+		}
+
+		foundIndex = deviceIndex
+		break
+	}
+
+	device.Token = strings.TrimSpace(device.Token)
+	now := time.Now().Unix()
+	device.EditedAt = now
+
+	// Allow disconnecting an existing registered device by clearing its token
+	if len(device.Token) == 0 {
+		if foundIndex >= 0 {
+			if user.Devices[foundIndex].CreatedAt > 0 {
+				device.CreatedAt = user.Devices[foundIndex].CreatedAt
+			}
+			user.Devices[foundIndex] = device
+			return user, nil
+		}
+
 		log.Printf("[ERROR] No token in device upsert for %s", device.ID)
 		return user, errors.New("No device token provided")
 	}
@@ -6303,27 +6326,19 @@ func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, er
 		return user, errors.New("Invalid device token provided")
 	}
 
-
-	device.EditedAt = time.Now().Unix()
-
-	foundIndex := -1
-	for deviceIndex, curDevices := range user.Devices {
-		if curDevices.ID != device.ID {
-			continue
-		}
-
-		foundIndex = deviceIndex
-		break
-	}
-
 	if foundIndex >= 0 {
-		device.CreatedAt = user.Devices[foundIndex].CreatedAt
+		if user.Devices[foundIndex].CreatedAt > 0 {
+			device.CreatedAt = user.Devices[foundIndex].CreatedAt
+		}
 		user.Devices[foundIndex] = device
 	} else {
+		if device.CreatedAt == 0 {
+			device.CreatedAt = now
+		}
 		user.Devices = append(user.Devices, device)
 	}
 
-	return user, nil 
+	return user, nil
 }
 
 func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
@@ -6434,7 +6449,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	orgUpdater := true
+	orgUpdater := false
+	if len(t.Username) > 0 || len(t.Suborgs) > 0 {
+		orgUpdater = true
+	}
 	if len(t.Role) > 0 && (t.Role != "admin" && t.Role != "user" && t.Role != "org-reader") {
 
 		log.Printf("[WARNING] %s tried and failed to update user %s", userInfo.Username, t.UserId)
@@ -35077,7 +35095,7 @@ func fixOrgUsers(ctx context.Context, foundOrg Org) error {
 
 		log.Printf("[DEBUG] Re-adding user %s (%s) to org %s (%s)", user.Username, user.Id, foundOrg.Name, foundOrg.Id)
 		user.Role = "admin"
-		foundOrg.Users = append(foundOrg.Users, user)
+		foundOrg.Users = append(foundOrg.Users, SanitizeOrgUser(user))
 	}
 
 	// Save the org
