@@ -9360,6 +9360,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		}
 	}
 
+	// Backend notes (e.g. failed app lookups) go in a system message so they never show up as the user's own text
+	systemNote := ""
 	imagesIncluded := []string{}
 	imageDetail := openai.ImageURLDetailAuto // low, high, original, auto (let the model decide)
 	for _, param := range startNode.Parameters {
@@ -9371,6 +9373,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			userMessage = param.Value
 
 			parsedAgentInput = userMessage
+		}
+
+		if param.Name == "system_note" {
+			systemNote = strings.TrimSpace(param.Value)
 		}
 
 		if param.Name == "enable_questions" && strings.ToLower(param.Value) == "true" {
@@ -10476,6 +10482,13 @@ data_filter:
 		primaryMessages = append(primaryMessages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
 			Content: templateSystemRule,
+		})
+	}
+
+	if len(systemNote) > 0 {
+		primaryMessages = append(primaryMessages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: systemNote,
 		})
 	}
 
