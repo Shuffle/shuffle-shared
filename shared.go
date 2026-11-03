@@ -24311,7 +24311,7 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_50", execution.WorkflowId))
 	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_100", execution.WorkflowId))
 
-	return nil
+	return err
 }
 
 // Only returning error as the point is for the current workflow to update the parent workflow

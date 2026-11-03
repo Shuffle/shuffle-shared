@@ -756,6 +756,20 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(memcached) > 0 {
+		claimKey := "ops-health-check-run"
+		claimed, claimErr := ClaimCacheKey(claimKey, 900)
+		if claimErr != nil {
+			log.Printf("[WARNING] Failed claiming ops health check: %s", claimErr)
+		} else if !claimed {
+			resp.WriteHeader(http.StatusConflict)
+			resp.Write([]byte(`{"success": false, "reason": "Health check already running"}`))
+			return
+		} else {
+			defer DeleteCache(ctx, claimKey)
+		}
+	}
+
 	//log.Printf("[DEBUG] Does user who is running health check have support access? %t", userInfo.SupportAccess)
 	//log.Printf("[DEBUG] Is user api key same as ops dashboard api key? %t", userInfo.ApiKey == os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
 
@@ -2230,7 +2244,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	datastoreHealth.Create = true
 
 	//read datastore entry
-	PAYLOAD = fmt.Sprintf(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK"}`, orgId)
+	PAYLOAD = fmt.Sprintf(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK", "category": "SHUFFLE_HEALTH_CHECK"}`, orgId)
 	url = fmt.Sprintf("%s/api/v1/orgs/%s/get_cache", baseUrl, orgId)
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {

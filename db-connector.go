@@ -211,6 +211,15 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 
 // Cache handlers
 func DeleteCache(ctx context.Context, name string) error {
+	if len(name) == 0 {
+		return nil
+	}
+
+	name = strings.Replace(name, " ", "_", -1)
+	if len(name) > maxCacheKeyLength || !regexp.MustCompile(`^[a-zA-Z0-9_.:-]+$`).MatchString(name) {
+		name = md5sum([]byte(name))
+	}
+
 	if len(memcached) > 0 {
 		return mc.Delete(name)
 	}
@@ -13479,7 +13488,19 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			}
 		}
 
-		//return executions, nil
+		// OpenSearch search results can briefly lag behind a completed execution.
+		// Use the direct execution read for active entries so callers do not see an
+		// older EXECUTING state after the terminal state has already been saved.
+		for execIndex, execution := range executions {
+			if execution.Status != "EXECUTING" {
+				continue
+			}
+
+			newExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)
+			if err == nil {
+				executions[execIndex] = *newExecution
+			}
+		}
 	} else {
 		// FIXME: Sorting doesn't seem to work...
 		//StartedAt          int64          `json:"started_at" datastore:"started_at"`

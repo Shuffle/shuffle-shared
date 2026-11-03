@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"hash/crc32"
 	"log"
@@ -75,17 +76,35 @@ func (client *shuffleMemcacheClient) disableServer(server *shuffleMemcacheServer
 }
 
 func (client *shuffleMemcacheClient) Get(key string) (*gomemcache.Item, error) {
+	client.mutex.RLock()
+	serverCount := len(client.servers)
+	client.mutex.RUnlock()
+	quorum := serverCount/2 + 1
+
 	servers := client.availableServers(key)
-	if len(servers) == 0 {
+	if len(servers) < quorum {
 		return nil, gomemcache.ErrNoServers
 	}
 
+	type cacheValue struct {
+		item  *gomemcache.Item
+		count int
+	}
+	values := map[[sha256.Size]byte]cacheValue{}
 	var lastErr error
 	cacheMiss := false
 	for _, server := range servers {
 		item, err := server.client.Get(key)
 		if err == nil {
-			return item, nil
+			hash := sha256.Sum256(item.Value)
+			value := values[hash]
+			value.item = item
+			value.count++
+			values[hash] = value
+			if value.count >= quorum {
+				return item, nil
+			}
+			continue
 		}
 		if err == gomemcache.ErrCacheMiss {
 			cacheMiss = true
@@ -99,6 +118,9 @@ func (client *shuffleMemcacheClient) Get(key string) (*gomemcache.Item, error) {
 		client.disableServer(server, err)
 	}
 
+	if len(values) > 0 {
+		return nil, fmt.Errorf("memcached read quorum unavailable for key %s", key)
+	}
 	if cacheMiss {
 		return nil, gomemcache.ErrCacheMiss
 	}
@@ -110,8 +132,13 @@ func (client *shuffleMemcacheClient) Get(key string) (*gomemcache.Item, error) {
 }
 
 func (client *shuffleMemcacheClient) Set(item *gomemcache.Item) error {
+	client.mutex.RLock()
+	serverCount := len(client.servers)
+	client.mutex.RUnlock()
+	quorum := serverCount/2 + 1
+
 	servers := client.availableServers(item.Key)
-	if len(servers) == 0 {
+	if len(servers) < quorum {
 		return gomemcache.ErrNoServers
 	}
 
@@ -131,14 +158,14 @@ func (client *shuffleMemcacheClient) Set(item *gomemcache.Item) error {
 		client.disableServer(server, err)
 	}
 
-	if successfulWrites > 0 {
+	if successfulWrites >= quorum {
 		return nil
 	}
 	if lastErr != nil {
-		return lastErr
+		return fmt.Errorf("memcached write quorum unavailable: got %d of %d: %w", successfulWrites, quorum, lastErr)
 	}
 
-	return gomemcache.ErrNoServers
+	return fmt.Errorf("memcached write quorum unavailable: got %d of %d", successfulWrites, quorum)
 }
 
 func (client *shuffleMemcacheClient) Add(item *gomemcache.Item) (bool, error) {
@@ -153,6 +180,14 @@ func (client *shuffleMemcacheClient) Add(item *gomemcache.Item) (bool, error) {
 
 	quorum := serverCount/2 + 1
 	successes := 0
+	successfulServers := []*shuffleMemcacheServer{}
+	cleanupPartialClaim := func() {
+		for _, server := range successfulServers {
+			if err := server.client.Delete(item.Key); err != nil && err != gomemcache.ErrCacheMiss {
+				client.disableServer(server, err)
+			}
+		}
+	}
 	start := int(crc32.ChecksumIEEE([]byte(item.Key)) % uint32(serverCount))
 	var lastErr error
 	for offset := 0; offset < serverCount; offset++ {
@@ -160,12 +195,14 @@ func (client *shuffleMemcacheClient) Add(item *gomemcache.Item) (bool, error) {
 		err := server.client.Add(item)
 		if err == nil {
 			successes++
+			successfulServers = append(successfulServers, server)
 			if successes >= quorum {
 				return true, nil
 			}
 			continue
 		}
 		if err == gomemcache.ErrNotStored {
+			cleanupPartialClaim()
 			return false, nil
 		}
 		if err == gomemcache.ErrMalformedKey {
@@ -175,6 +212,9 @@ func (client *shuffleMemcacheClient) Add(item *gomemcache.Item) (bool, error) {
 		lastErr = err
 		client.disableServer(server, err)
 	}
+
+	// A failed partial claim must not poison a replica until the TTL expires.
+	cleanupPartialClaim()
 
 	if lastErr != nil {
 		return false, fmt.Errorf("memcached claim quorum unavailable: got %d of %d: %w", successes, quorum, lastErr)
@@ -320,22 +360,28 @@ func (client *shuffleMemcacheClient) Touch(key string, seconds int32) error {
 }
 
 func (client *shuffleMemcacheClient) Delete(key string) error {
+	client.mutex.RLock()
+	serverCount := len(client.servers)
+	client.mutex.RUnlock()
+	quorum := serverCount/2 + 1
+
 	servers := client.availableServers(key)
-	if len(servers) == 0 {
+	if len(servers) < quorum {
 		return gomemcache.ErrNoServers
 	}
 
 	var lastErr error
 	cacheMiss := false
-	deleted := false
+	confirmedAbsent := 0
 	for _, server := range servers {
 		err := server.client.Delete(key)
 		if err == nil {
-			deleted = true
+			confirmedAbsent++
 			continue
 		}
 		if err == gomemcache.ErrCacheMiss {
 			cacheMiss = true
+			confirmedAbsent++
 			continue
 		}
 		if err == gomemcache.ErrMalformedKey {
@@ -346,15 +392,15 @@ func (client *shuffleMemcacheClient) Delete(key string) error {
 		client.disableServer(server, err)
 	}
 
-	if deleted {
+	if confirmedAbsent >= quorum {
 		return nil
+	}
+	if lastErr != nil {
+		return fmt.Errorf("memcached delete quorum unavailable: %w", lastErr)
 	}
 	if cacheMiss {
 		return gomemcache.ErrCacheMiss
 	}
-	if lastErr != nil {
-		return lastErr
-	}
 
-	return gomemcache.ErrNoServers
+	return fmt.Errorf("memcached delete quorum unavailable")
 }
