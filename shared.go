@@ -6942,6 +6942,15 @@ func PromoteRolloverApikey(ctx context.Context, userInfo User) (User, error) {
 	if len(oldApiKey) > 0 {
 		DeleteCache(ctx, oldApiKey)
 		DeleteCache(ctx, fmt.Sprintf("Users_%s", oldApiKey))
+
+		seenOrgs := map[string]bool{}
+		for _, orgId := range append([]string{userInfo.ActiveOrg.Id}, userInfo.Orgs...) {
+			if len(orgId) == 0 || seenOrgs[orgId] {
+				continue
+			}
+			seenOrgs[orgId] = true
+			DeleteCache(ctx, fmt.Sprintf("%s%s", oldApiKey, orgId))
+		}
 	}
 
 	if err := SetApikey(ctx, userInfo); err != nil {
