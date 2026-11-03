@@ -76,52 +76,24 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 			// Special cleanup for agents
 			if innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent" {
-				if strings.Contains(innerresult.Result, "Result too large to handle") {
-					fileValue, fileErr := getExecutionFileValue(ctx, workflowExecution, innerresult)
-					if fileErr == nil && len(fileValue) > 0 {
-						innerresult.Result = cleanAgentResultString(fileValue)
-						workflowExecution.Results[resultIndex].Result = innerresult.Result
-					}
-				}
-
 				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, innerresult.Action.ID)
-				cachedData, cacheErr := GetCache(ctx, actionCacheId)
-				if cacheErr == nil && cachedData != nil {
+				if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil && cachedData != nil {
 					var cachedBytes []byte
-					switch cachedValue := cachedData.(type) {
+					switch v := cachedData.(type) {
 					case []byte:
-						cachedBytes = cachedValue
+						cachedBytes = v
 					case string:
-						cachedBytes = []byte(cachedValue)
+						cachedBytes = []byte(v)
 					}
 
-					cleanedCached := cleanAgentResultString(string(cachedBytes))
 					var cachedOutput AgentOutput
-					unmarshalErr := json.Unmarshal([]byte(cleanedCached), &cachedOutput)
-					if unmarshalErr == nil && len(cachedOutput.Decisions) > 0 {
+					if err := json.Unmarshal(cachedBytes, &cachedOutput); err == nil && len(cachedOutput.Decisions) > 0 {
 						var currentOutput AgentOutput
-						_ = json.Unmarshal([]byte(cleanAgentResultString(innerresult.Result)), &currentOutput)
-
-						currentHasFinish := currentOutput.Status == "FINISHED" || currentOutput.Status == "ABORTED"
-						for _, decision := range currentOutput.Decisions {
-							if decision.Action == "finish" || decision.Category == "finish" {
-								currentHasFinish = true
-								break
-							}
-						}
-
-						cachedHasFinish := cachedOutput.Status == "FINISHED" || cachedOutput.Status == "ABORTED"
-						for _, decision := range cachedOutput.Decisions {
-							if decision.Action == "finish" || decision.Category == "finish" {
-								cachedHasFinish = true
-								break
-							}
-						}
-
-						if (!currentHasFinish || cachedHasFinish) && (len(cachedOutput.Decisions) >= len(currentOutput.Decisions) || strings.Contains(innerresult.Result, "Result too large to handle")) {
-							innerresult.Result = cleanedCached
-							workflowExecution.Results[resultIndex].Result = cleanedCached
-							if (cachedOutput.Status == "FINISHED" || cachedOutput.Status == "ABORTED") && innerresult.Status != "SUCCESS" {
+						_ = json.Unmarshal([]byte(innerresult.Result), &currentOutput)
+						if len(cachedOutput.Decisions) >= len(currentOutput.Decisions) || strings.Contains(innerresult.Result, "Result too large to handle") {
+							innerresult.Result = string(cachedBytes)
+							workflowExecution.Results[resultIndex].Result = string(cachedBytes)
+							if cachedOutput.Status == "FINISHED" && innerresult.Status != "SUCCESS" {
 								innerresult.Status = "SUCCESS"
 								workflowExecution.Results[resultIndex].Status = "SUCCESS"
 							}
@@ -188,18 +160,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				}
 
 				if finishFound { 
-					if mappedOutput.Status != "FINISHED" && mappedOutput.Status != "ABORTED" {
-						mappedOutput.Status = "FINISHED"
-						decisionsUpdated = true
-					}
-
-					if decisionsUpdated {
-						marshalledData, marshalErr := json.Marshal(mappedOutput)
-						if marshalErr == nil {
-							innerresult.Result = string(marshalledData)
-							workflowExecution.Results[resultIndex].Result = string(marshalledData)
-						}
-					}
+					mappedOutput.Status = "FINISHED"
 
 					result.Status = "SUCCESS"
 					innerresult.Status = "SUCCESS"
@@ -471,10 +432,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				}
 			}
 
-			continue
-		}
-
-		if isAgentAction(action) {
 			continue
 		}
 
