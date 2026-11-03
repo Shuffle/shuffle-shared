@@ -12718,16 +12718,17 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 				return "", errors.New(fmt.Sprintf("Request from org %s with model '%s' exceeds the maximum number of tokens. %s", org, currentModel, err))
 			}
+            // Commented out the potential fix for now as we don't know what the actual reason that's causing "timeout awaiting response headers"
 
-			if strings.Contains(err.Error(), "timeout awaiting response headers") {
-				http.DefaultClient.CloseIdleConnections()
-				if baseTransport, ok := http.DefaultTransport.(*http.Transport); ok {
-					config.HTTPClient = &http.Client{
-						Transport: baseTransport.Clone(),
-					}
-					openaiClient = openai.NewClientWithConfig(config)
-				}
-			}
+			// if strings.Contains(err.Error(), "timeout awaiting response headers") {
+			// 	http.DefaultClient.CloseIdleConnections()
+			// 	if baseTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+			// 		config.HTTPClient = &http.Client{
+			// 			Transport: baseTransport.Clone(),
+			// 		}
+			// 		openaiClient = openai.NewClientWithConfig(config)
+			// 	}
+			// }
 
 			// Some AI Providers might return multi-line error bodies. Flatten them so the whole error stays in ONE log entry instead of being split per line.
 			lastError = errors.New(strings.Join(strings.Fields(err.Error()), " "))
