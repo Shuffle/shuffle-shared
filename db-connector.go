@@ -2470,6 +2470,14 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 			} else {
 				//log.Printf("[DEBUG] Returning %s (%s) normally", workflowApp.Name, id)
 			}
+
+			// Other regions only get a public app's actions when someone activates it there
+			if len(workflowApp.Actions) == 0 && workflowApp.Public && project.Environment == "cloud" && gceProject != "shuffler" {
+				mainApp, err := getPublicAppFromMain(ctx, id)
+				if err == nil {
+					workflowApp = &mainApp
+				}
+			}
 		}
 	}
 
@@ -4300,18 +4308,6 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 		return curOrg, errors.New(fmt.Sprintf("Couldn't find creator org with ID %s", curOrg.Id))
 	}
 
-	newUsers := []User{}
-	for _, user := range curOrg.Users {
-		user.Password = ""
-		user.Session = ""
-		user.ResetReference = ""
-		user.PrivateApps = []WorkflowApp{}
-		user.VerificationToken = ""
-		user.ApiKey = ""
-		newUsers = append(newUsers, user)
-	}
-
-	curOrg.Users = newUsers
 	if len(curOrg.Tutorials) == 0 {
 		curOrg = GetTutorials(ctx, *curOrg, true)
 	}
@@ -4575,18 +4571,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		//return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID '%s'", curOrg.Id))
 	}
 
-	newUsers := []User{}
-	for _, user := range curOrg.Users {
-		user.Password = ""
-		user.Session = ""
-		user.ResetReference = ""
-		user.PrivateApps = []WorkflowApp{}
-		user.VerificationToken = ""
-		user.ApiKey = ""
-		newUsers = append(newUsers, user)
-	}
-
-	curOrg.Users = newUsers
 	if len(curOrg.Tutorials) == 0 {
 		curOrg = GetTutorials(ctx, *curOrg, true)
 	}
@@ -5212,25 +5196,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	data.Edited = timeNow
-	newUsers := []User{}
-	for _, user := range data.Users {
-		user.Password = ""
-		user.Session = ""
-		user.ApiKey = ""
-		user.PrivateApps = []WorkflowApp{}
-		user.MFA = MFAInfo{}
-		user.Authentication = []UserAuth{}
-
-		user.PublicProfile = PublicProfile{}
-		user.LoginInfo = []LoginInfo{}
-		user.PersonalInfo = PersonalInfo{}
-
-		//user.Orgs = []string{}
-
-		newUsers = append(newUsers, user)
-	}
-
-	data.Users = newUsers
+	data.Users = SanitizeOrgUsers(data.Users)
 	if len(data.Tutorials) == 0 {
 		data = *GetTutorials(ctx, data, false)
 	}
@@ -5273,18 +5239,6 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	if project.CacheDb {
-		newUsers := []User{}
-		for _, user := range data.Users {
-			user.Password = ""
-			user.Session = ""
-			user.ResetReference = ""
-			user.PrivateApps = []WorkflowApp{}
-			user.VerificationToken = ""
-			newUsers = append(newUsers, user)
-		}
-
-		data.Users = newUsers
-
 		neworg, err := json.Marshal(data)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in setorg: %s", err)
@@ -6830,6 +6784,40 @@ func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client
 	return *client, nil
 }
 
+// SanitizeOrgUser returns a strictly whitelisted copy of a User suitable for embedding
+// inside Org.Users. User-specific or nested structs (Devices, PersonalInfo, MFA,
+// Authentication, PrivateApps, LoginInfo, PublicProfile, SSOInfos, tokens, etc.) are
+// stripped so Org records never leak personal/device secrets or break Datastore loading
+// when User sub-structs evolve.
+func SanitizeOrgUser(user User) User {
+	return User{
+		Id:                user.Id,
+		Username:          user.Username,
+		GeneratedUsername: user.GeneratedUsername,
+		Role:              user.Role,
+		Roles:             user.Roles,
+		Active:            user.Active,
+		Verified:          user.Verified,
+		SupportAccess:     user.SupportAccess,
+		CreationTime:      user.CreationTime,
+		LoginType:         user.LoginType,
+		ProvisionedByOrg:  user.ProvisionedByOrg,
+		ActiveOrg: OrgMini{
+			Id:   user.ActiveOrg.Id,
+			Name: user.ActiveOrg.Name,
+			Role: user.ActiveOrg.Role,
+		},
+	}
+}
+
+func SanitizeOrgUsers(users []User) []User {
+	newUsers := make([]User, 0, len(users))
+	for _, user := range users {
+		newUsers = append(newUsers, SanitizeOrgUser(user))
+	}
+	return newUsers
+}
+
 func fixUserOrg(ctx context.Context, user *User) *User {
 	// Made it background due to potential timeouts if this is
 	// used in API calls
@@ -6847,11 +6835,7 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 		user.Orgs = append(user.Orgs, user.ActiveOrg.Id)
 	}
 
-	innerUser := *user
-	innerUser.PrivateApps = []WorkflowApp{}
-	innerUser.Authentication = []UserAuth{}
-	innerUser.Password = ""
-	innerUser.Session = ""
+	innerUser := SanitizeOrgUser(*user)
 
 	// Might be vulnerable to timing attacks.
 	for _, orgId := range user.Orgs {
@@ -6879,10 +6863,16 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 				}
 			}
 
+			sanitizedForOrg := innerUser
 			if userFound {
-				org.Users[orgIndex] = innerUser
+				// Preserve per-org role if this org is not the user's currently active org
+				if orgId != user.ActiveOrg.Id && len(org.Users[orgIndex].Role) > 0 {
+					sanitizedForOrg.Role = org.Users[orgIndex].Role
+					sanitizedForOrg.Roles = org.Users[orgIndex].Roles
+				}
+				org.Users[orgIndex] = sanitizedForOrg
 			} else if !user.SupportAccess {
-				org.Users = append(org.Users, innerUser)
+				org.Users = append(org.Users, sanitizedForOrg)
 			} else {
 				log.Printf("[DEBUG] Skipping org.Users update for support user %s (%s) in org %s — not an official member", user.Username, user.Id, orgId)
 				return
@@ -11709,7 +11699,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 
 		notifications = []Notification{}
 		for _, hit := range wrapped.Hits.Hits {
-			if hit.Source.Personal {
+			if hit.Source.Personal || len(hit.Source.UserId) > 0 {
 				continue
 			}
 
@@ -11757,6 +11747,15 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 				return notifications, err
 			}
 		}
+
+		filtered := []Notification{}
+		for _, notification := range notifications {
+			if notification.Personal || len(notification.UserId) > 0 {
+				continue
+			}
+			filtered = append(filtered, notification)
+		}
+		notifications = filtered
 	}
 
 	if project.CacheDb {
@@ -11782,25 +11781,32 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 	var notifications []Notification
 
 	nameKey := "notifications"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, userId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &notifications)
+			if err == nil {
+				return notifications, nil
+			}
+		}
+	}
+
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
 			"size": 1000,
+			"sort": map[string]interface{}{
+				"updated_at": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
 			"query": map[string]interface{}{
-				"bool": map[string]interface{}{
-					"must": []map[string]interface{}{
-						map[string]interface{}{
-							"match": map[string]interface{}{
-								"user_id": userId,
-							},
-						},
-						map[string]interface{}{
-							"match": map[string]interface{}{
-								"read": false,
-							},
-						},
-					},
+				"match": map[string]interface{}{
+					"user_id": userId,
 				},
 			},
 		}
@@ -11847,14 +11853,17 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 			}
 		}
 
-		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return notifications, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
-
-		}
-
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return notifications, err
+		}
+
+		if res.StatusCode == 400 {
+			return notifications, nil
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return notifications, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
 		wrapped := NotificationSearchWrapper{}
@@ -11873,12 +11882,12 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(25)
+		q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(250)
 
 		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 		if err != nil && len(notifications) == 0 {
 			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
-				q = q.Limit(10)
+				q = q.Limit(50)
 				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 				if err != nil && len(notifications) == 0 {
 					return notifications, err
@@ -11887,6 +11896,16 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 				log.Printf("[INFO] Failed loading SOME notifications - skipping: %s", err)
 			} else {
 				return notifications, err
+			}
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(notifications)
+		if err == nil {
+			err = SetCache(ctx, cacheKey, data, 5)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating user notification cache: %s", err)
 			}
 		}
 	}
@@ -20338,8 +20357,141 @@ func DeleteOAuthClient(ctx context.Context, id string) error {
 	return DeleteKey(ctx, "oauth_clients", id)
 }
 
+func getOAuthTokenRotation(ctx context.Context, key string) (rotation *oauthTokenRotation, err error) {
+	defer func() {
+		if recover() != nil {
+			rotation, err = nil, errors.New("OAuth rotation storage is not initialized")
+		}
+	}()
+	rotation = &oauthTokenRotation{}
+	if project.DbType == "opensearch" {
+		response, getErr := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index: strings.ToLower(GetESIndexPrefix("oauth_token_rotations")), DocumentID: key,
+		})
+		if response != nil && response.Inspect().Response != nil {
+			if response.Inspect().Response.Body != nil {
+				defer response.Inspect().Response.Body.Close()
+			}
+			if response.Inspect().Response.StatusCode == http.StatusNotFound {
+				return nil, nil
+			}
+		}
+		if getErr != nil {
+			return nil, getErr
+		}
+		if err := json.Unmarshal(response.Source, rotation); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := project.Dbclient.Get(ctx, datastore.NameKey("oauth_token_rotations", key, nil), rotation); err != nil {
+			if err == datastore.ErrNoSuchEntity {
+				return nil, nil
+			}
+			return nil, err
+		}
+	}
+	return rotation, nil
+}
+
+// Create chooses a single replacement. Later updates only advance completion/revocation.
+func saveOAuthTokenRotation(ctx context.Context, key string, proposed oauthTokenRotation, create bool) (rotation *oauthTokenRotation, err error) {
+	defer func() {
+		if recover() != nil {
+			rotation, err = nil, errors.New("OAuth rotation storage is not initialized")
+		}
+	}()
+	if project.DbType == "opensearch" {
+		index := strings.ToLower(GetESIndexPrefix("oauth_token_rotations"))
+		if create {
+			data, marshalErr := json.Marshal(proposed)
+			if marshalErr != nil {
+				return nil, marshalErr
+			}
+			response, writeErr := project.Es.Index(ctx, opensearchapi.IndexReq{
+				Index: index, DocumentID: key, Body: bytes.NewReader(data),
+				Params: opensearchapi.IndexParams{OpType: "create", Refresh: "true"},
+			})
+			if response != nil && response.Inspect().Response != nil {
+				if response.Inspect().Response.Body != nil {
+					defer response.Inspect().Response.Body.Close()
+				}
+				if response.Inspect().Response.StatusCode == http.StatusConflict {
+					return getOAuthTokenRotation(ctx, key)
+				}
+			}
+			if writeErr != nil {
+				// A timed-out write may have committed. Read the decision before retrying.
+				if saved, readErr := getOAuthTokenRotation(ctx, key); readErr == nil && saved != nil {
+					return saved, nil
+				}
+				return nil, writeErr
+			}
+			return &proposed, nil
+		}
+		data, _ := json.Marshal(map[string]interface{}{"script": map[string]interface{}{
+			"source": "if (params.revoked) { ctx._source.revoked = true; } if (params.completed_at > 0 && ctx._source.completed_at == 0) { ctx._source.completed_at = params.completed_at; }",
+			"params": map[string]interface{}{"revoked": proposed.Revoked, "completed_at": proposed.CompletedAt},
+		}})
+		retries := 5
+		response, writeErr := project.Es.Update(ctx, opensearchapi.UpdateReq{
+			Index: index, DocumentID: key, Body: bytes.NewReader(data),
+			Params: opensearchapi.UpdateParams{Refresh: "true", RetryOnConflict: &retries},
+		})
+		if response != nil && response.Inspect().Response != nil {
+			if response.Inspect().Response.Body != nil {
+				defer response.Inspect().Response.Body.Close()
+			}
+		}
+		if writeErr != nil {
+			if saved, readErr := getOAuthTokenRotation(ctx, key); readErr == nil && saved != nil &&
+				(!proposed.Revoked || saved.Revoked) && (proposed.CompletedAt == 0 || saved.CompletedAt != 0) {
+				return saved, nil
+			}
+			return nil, writeErr
+		}
+		return getOAuthTokenRotation(ctx, key)
+	}
+	keyRef := datastore.NameKey("oauth_token_rotations", key, nil)
+	_, err = project.Dbclient.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+		current := &oauthTokenRotation{}
+		if readErr := tx.Get(keyRef, current); readErr != nil {
+			if readErr != datastore.ErrNoSuchEntity || !create {
+				return readErr
+			}
+			current = &proposed
+		} else if !create {
+			if (!proposed.Revoked || current.Revoked) && (proposed.CompletedAt == 0 || current.CompletedAt != 0) {
+				rotation = current
+				return nil
+			}
+			current.Revoked = current.Revoked || proposed.Revoked
+			if current.CompletedAt == 0 {
+				current.CompletedAt = proposed.CompletedAt
+			}
+		} else {
+			rotation = current
+			return nil
+		}
+		if _, writeErr := tx.Put(keyRef, current); writeErr != nil {
+			return writeErr
+		}
+		rotation = current
+		return nil
+	})
+	if err != nil {
+		if saved, readErr := getOAuthTokenRotation(ctx, key); readErr == nil && saved != nil {
+			if create || ((!proposed.Revoked || saved.Revoked) && (proposed.CompletedAt == 0 || saved.CompletedAt != 0)) {
+				return saved, nil
+			}
+		}
+		return nil, err
+	}
+	return rotation, nil
+}
+
 // SetOAuthToken persists an OAuthToken in OpenSearch (onprem) or Datastore (cloud).
-func SetOAuthToken(ctx context.Context, token OAuthToken) error {
+// createOnly is used by refresh recovery to preserve an already-issued replacement.
+func SetOAuthToken(ctx context.Context, token OAuthToken, createOnly ...bool) error {
 	nameKey := "oauth_tokens"
 	if len(token.AccessToken) == 0 {
 		return errors.New("access token cannot be empty")
@@ -20354,6 +20506,39 @@ func SetOAuthToken(ctx context.Context, token OAuthToken) error {
 	data, err := json.Marshal(token)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshalling OAuth token: %s", err)
+		return err
+	}
+	if len(createOnly) > 0 && createOnly[0] {
+		// Crash recovery may race a completed request. Never overwrite its token or cache.
+		if project.DbType == "opensearch" {
+			response, writeErr := project.Es.Index(ctx, opensearchapi.IndexReq{
+				Index: strings.ToLower(GetESIndexPrefix(nameKey)), DocumentID: token.AccessToken, Body: bytes.NewReader(data),
+				Params: opensearchapi.IndexParams{OpType: "create", Refresh: "true"},
+			})
+			if response != nil && response.Inspect().Response != nil {
+				if response.Inspect().Response.Body != nil {
+					defer response.Inspect().Response.Body.Close()
+				}
+				if response.Inspect().Response.StatusCode == http.StatusConflict {
+					return nil
+				}
+			}
+			return writeErr
+		}
+		key := datastore.NameKey(nameKey, token.AccessToken, nil)
+		_, err := project.Dbclient.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+			var existing OAuthToken
+			if err := tx.Get(key, &existing); err != datastore.ErrNoSuchEntity {
+				return err
+			}
+			_, err := tx.Put(key, &token)
+			return err
+		})
+		if err != nil {
+			if existing, readErr := GetOAuthToken(ctx, token.AccessToken); readErr == nil && existing != nil {
+				return nil
+			}
+		}
 		return err
 	}
 
@@ -20378,7 +20563,7 @@ func SetOAuthToken(ctx context.Context, token OAuthToken) error {
 				putErr = err
 			}
 		}()
-		if putErr != nil && !project.CacheDb {
+		if putErr != nil && (!project.CacheDb || token.RotationKey != "") {
 			return putErr
 		}
 	}
@@ -20393,6 +20578,45 @@ func SetOAuthToken(ctx context.Context, token OAuthToken) error {
 		if len(token.RefreshToken) > 0 {
 			refreshCacheKey := fmt.Sprintf("oauth_refresh_%s", token.RefreshToken)
 			_ = SetCache(ctx, refreshCacheKey, []byte(token.AccessToken), int32(token.ExpiresIn))
+		}
+
+		// Maintain cache-backed index lists for org and user lookups
+		if len(token.OrgId) > 0 {
+			orgIndexKey := fmt.Sprintf("oauth_tokens_org_%s", token.OrgId)
+			var orgTokenIds []string
+			if raw, cErr := GetCache(ctx, orgIndexKey); cErr == nil && raw != nil {
+				switch v := raw.(type) {
+				case []byte:
+					_ = json.Unmarshal(v, &orgTokenIds)
+				case string:
+					_ = json.Unmarshal([]byte(v), &orgTokenIds)
+				}
+			}
+			if !ArrayContains(orgTokenIds, token.AccessToken) {
+				orgTokenIds = append(orgTokenIds, token.AccessToken)
+				if idxBytes, mErr := json.Marshal(orgTokenIds); mErr == nil {
+					_ = SetCache(ctx, orgIndexKey, idxBytes, int32(token.ExpiresIn))
+				}
+			}
+		}
+
+		if len(token.UserId) > 0 {
+			userIndexKey := fmt.Sprintf("oauth_tokens_user_%s", token.UserId)
+			var userTokenIds []string
+			if raw, cErr := GetCache(ctx, userIndexKey); cErr == nil && raw != nil {
+				switch v := raw.(type) {
+				case []byte:
+					_ = json.Unmarshal(v, &userTokenIds)
+				case string:
+					_ = json.Unmarshal([]byte(v), &userTokenIds)
+				}
+			}
+			if !ArrayContains(userTokenIds, token.AccessToken) {
+				userTokenIds = append(userTokenIds, token.AccessToken)
+				if idxBytes, mErr := json.Marshal(userTokenIds); mErr == nil {
+					_ = SetCache(ctx, userIndexKey, idxBytes, int32(token.ExpiresIn))
+				}
+			}
 		}
 	}
 
@@ -20424,6 +20648,15 @@ func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error)
 				if err := json.Unmarshal(rawBytes, &token); err == nil && len(token.AccessToken) > 0 {
 					if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
 						return nil, errors.New("OAuth token has expired")
+					}
+					if token.RotationKey != "" {
+						rotation, rotationErr := getOAuthTokenRotation(ctx, token.RotationKey)
+						if rotationErr != nil {
+							return nil, errors.New("OAuth rotation storage unavailable")
+						}
+						if rotation == nil || rotation.Revoked || rotation.Token.AccessToken != token.AccessToken {
+							return nil, errors.New("OAuth token doesn't exist")
+						}
 					}
 					return &token, nil
 				}
@@ -20492,6 +20725,15 @@ func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error)
 
 	if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
 		return nil, errors.New("OAuth token has expired")
+	}
+	if token.RotationKey != "" {
+		rotation, rotationErr := getOAuthTokenRotation(ctx, token.RotationKey)
+		if rotationErr != nil {
+			return nil, errors.New("OAuth rotation storage unavailable")
+		}
+		if rotation == nil || rotation.Revoked || rotation.Token.AccessToken != token.AccessToken {
+			return nil, errors.New("OAuth token doesn't exist")
+		}
 	}
 
 	if project.CacheDb {
@@ -20576,7 +20818,7 @@ func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAu
 			if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
 				return nil, errors.New("OAuth token has expired")
 			}
-			return &token, nil
+			return GetOAuthToken(ctx, token.AccessToken)
 		}
 	} else {
 		var tokens []OAuthToken
@@ -20604,7 +20846,7 @@ func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAu
 			return nil, getErr
 		}
 		if len(tokens) > 0 {
-			return &tokens[0], nil
+			return GetOAuthToken(ctx, tokens[0].AccessToken)
 		}
 	}
 
@@ -20612,8 +20854,31 @@ func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAu
 }
 
 // DeleteOAuthToken removes an OAuthToken from storage and cache.
-func DeleteOAuthToken(ctx context.Context, accessToken string) error {
+// Normal rotation cleanup passes rotating=true; explicit revocation also cancels outgoing rotations.
+func DeleteOAuthToken(ctx context.Context, accessToken string, rotating ...bool) error {
 	token, err := GetOAuthToken(ctx, accessToken)
+	if err != nil && err.Error() != "OAuth token doesn't exist" && err.Error() != "OAuth token not found" &&
+		err.Error() != "OAuth token has expired" && !strings.HasPrefix(err.Error(), "status: 404,") {
+		return err
+	}
+	if token != nil && token.RefreshToken != "" && (len(rotating) == 0 || !rotating[0]) {
+		// Stop an in-flight refresh from producing another token after explicit revocation.
+		key := fmt.Sprintf("%x", sha256.Sum256([]byte(token.RefreshToken)))
+		outgoing, writeErr := saveOAuthTokenRotation(ctx, key, oauthTokenRotation{Revoked: true}, true)
+		if writeErr != nil {
+			return writeErr
+		}
+		if outgoing != nil && !outgoing.Revoked {
+			if _, err := saveOAuthTokenRotation(ctx, key, oauthTokenRotation{Revoked: true}, false); err != nil {
+				return err
+			}
+		}
+	}
+	if token != nil && token.RotationKey != "" {
+		if _, err := saveOAuthTokenRotation(ctx, token.RotationKey, oauthTokenRotation{Revoked: true}, false); err != nil {
+			return err
+		}
+	}
 	if err == nil && token != nil && len(token.RefreshToken) > 0 {
 		_ = DeleteKey(ctx, "oauth_refresh", token.RefreshToken)
 	}
@@ -20632,8 +20897,8 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 	if project.DbType == "opensearch" {
 		query := map[string]interface{}{
 			"query": map[string]interface{}{
-				"term": map[string]interface{}{
-					"org_id.keyword": orgId,
+				"match": map[string]interface{}{
+					"org_id": orgId,
 				},
 			},
 			"size": 100,
@@ -20644,10 +20909,16 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 			Body:    bytes.NewReader(queryBytes),
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return tokens, nil
+			}
 			return nil, err
 		}
 		res := resp.Inspect().Response
 		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return tokens, nil
+		}
 
 		var searchResp struct {
 			Hits struct {
@@ -20656,6 +20927,9 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 		}
 		if err := json.NewDecoder(res.Body).Decode(&searchResp); err == nil {
 			for _, hit := range searchResp.Hits.Hits {
+				if hit.Source.OrgId != orgId {
+					continue
+				}
 				if hit.Source.ExpiresAt.IsZero() || time.Now().Before(hit.Source.ExpiresAt) {
 					tokens = append(tokens, hit.Source)
 				}
@@ -20679,7 +20953,38 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 		}
 	}
 
-	return tokens, nil
+	if len(tokens) == 0 && project.CacheDb {
+		orgIndexKey := fmt.Sprintf("oauth_tokens_org_%s", orgId)
+		if raw, cErr := GetCache(ctx, orgIndexKey); cErr == nil && raw != nil {
+			var tokenIds []string
+			switch v := raw.(type) {
+			case []byte:
+				_ = json.Unmarshal(v, &tokenIds)
+			case string:
+				_ = json.Unmarshal([]byte(v), &tokenIds)
+			}
+			for _, tid := range tokenIds {
+				if tok, tErr := GetOAuthToken(ctx, tid); tErr == nil && tok != nil && len(tok.AccessToken) > 0 {
+					tokens = append(tokens, *tok)
+				}
+			}
+		}
+	}
+
+	activeTokens := tokens[:0]
+	for _, token := range tokens {
+		if token.RotationKey != "" {
+			rotation, err := getOAuthTokenRotation(ctx, token.RotationKey)
+			if err != nil {
+				return nil, err
+			}
+			if rotation == nil || rotation.Revoked || rotation.Token.AccessToken != token.AccessToken {
+				continue
+			}
+		}
+		activeTokens = append(activeTokens, token)
+	}
+	return activeTokens, nil
 }
 
 // GetOAuthTokensByUser retrieves all active OAuth tokens issued to a specific user.
@@ -20694,8 +20999,8 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 	if project.DbType == "opensearch" {
 		query := map[string]interface{}{
 			"query": map[string]interface{}{
-				"term": map[string]interface{}{
-					"user_id.keyword": userId,
+				"match": map[string]interface{}{
+					"user_id": userId,
 				},
 			},
 			"size": 100,
@@ -20706,10 +21011,16 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 			Body:    bytes.NewReader(queryBytes),
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return tokens, nil
+			}
 			return nil, err
 		}
 		res := resp.Inspect().Response
 		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return tokens, nil
+		}
 
 		var searchResp struct {
 			Hits struct {
@@ -20718,6 +21029,9 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 		}
 		if err := json.NewDecoder(res.Body).Decode(&searchResp); err == nil {
 			for _, hit := range searchResp.Hits.Hits {
+				if hit.Source.UserId != userId {
+					continue
+				}
 				if hit.Source.ExpiresAt.IsZero() || time.Now().Before(hit.Source.ExpiresAt) {
 					tokens = append(tokens, hit.Source)
 				}
@@ -20741,7 +21055,38 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 		}
 	}
 
-	return tokens, nil
+	if len(tokens) == 0 && project.CacheDb {
+		userIndexKey := fmt.Sprintf("oauth_tokens_user_%s", userId)
+		if raw, cErr := GetCache(ctx, userIndexKey); cErr == nil && raw != nil {
+			var tokenIds []string
+			switch v := raw.(type) {
+			case []byte:
+				_ = json.Unmarshal(v, &tokenIds)
+			case string:
+				_ = json.Unmarshal([]byte(v), &tokenIds)
+			}
+			for _, tid := range tokenIds {
+				if tok, tErr := GetOAuthToken(ctx, tid); tErr == nil && tok != nil && len(tok.AccessToken) > 0 {
+					tokens = append(tokens, *tok)
+				}
+			}
+		}
+	}
+
+	activeTokens := tokens[:0]
+	for _, token := range tokens {
+		if token.RotationKey != "" {
+			rotation, err := getOAuthTokenRotation(ctx, token.RotationKey)
+			if err != nil {
+				return nil, err
+			}
+			if rotation == nil || rotation.Revoked || rotation.Token.AccessToken != token.AccessToken {
+				continue
+			}
+		}
+		activeTokens = append(activeTokens, token)
+	}
+	return activeTokens, nil
 }
 
 // SetOAuthAuthCode persists a temporary authorization code in OpenSearch (onprem) or Datastore (cloud).

@@ -18,8 +18,764 @@ import (
 	"strings"
 	"time"
 
+	"firebase.google.com/go/v4/messaging"
 	uuid "github.com/satori/go.uuid"
 )
+
+const (
+	NotificationTypeCritical     string = "critical"
+	NotificationTypeAgentRequest string = "agent_request"
+	NotificationTypeGeneral      string = "general"
+)
+
+func ResolveNotificationPushType(reqType, severity, origin string) string {
+	t := strings.ToLower(strings.TrimSpace(reqType))
+	sev := strings.ToLower(strings.TrimSpace(severity))
+	orig := strings.ToLower(strings.TrimSpace(origin))
+
+	if t == NotificationTypeCritical || t == "pager" || sev == "critical" || orig == "pager" || orig == "critical" || orig == "siren" {
+		return NotificationTypeCritical
+	}
+
+	if t == NotificationTypeAgentRequest || t == "agent" || orig == "agent" || orig == "agent_request" || orig == "hitl" || orig == "approval" || orig == "user_input" {
+		return NotificationTypeAgentRequest
+	}
+
+	if t == NotificationTypeGeneral {
+		return NotificationTypeGeneral
+	}
+
+	if t != "" {
+		return t
+	}
+
+	return NotificationTypeGeneral
+}
+
+func IsDeviceOrgAllowedForType(device Device, pushType string, orgId string) bool {
+	orgId = strings.TrimSpace(orgId)
+	if len(orgId) == 0 {
+		return true
+	}
+
+	resolvedType := ResolveNotificationPushType(pushType, "", "")
+	var allowedOrgs []string
+	var disabledOrgs []string
+
+	switch resolvedType {
+	case NotificationTypeCritical:
+		allowedOrgs = device.Preferences.CriticalPagerOrgs
+		disabledOrgs = device.Preferences.CriticalPagerDisabledOrgs
+	case NotificationTypeAgentRequest:
+		allowedOrgs = device.Preferences.AgentRequestsOrgs
+		disabledOrgs = device.Preferences.AgentRequestsDisabledOrgs
+	default:
+		allowedOrgs = device.Preferences.GeneralAlertsOrgs
+		disabledOrgs = device.Preferences.GeneralAlertsDisabledOrgs
+	}
+
+	for _, disabled := range disabledOrgs {
+		if strings.TrimSpace(disabled) == orgId {
+			return false
+		}
+	}
+
+	if len(allowedOrgs) > 0 && len(disabledOrgs) == 0 {
+		for _, allowed := range allowedOrgs {
+			if strings.TrimSpace(allowed) == orgId {
+				return true
+			}
+		}
+		return false
+	}
+
+	// By default, all tenants are selected
+	return true
+}
+
+func IsDeviceEnabledForTypeAndOrg(device Device, pushType string, orgId string) bool {
+	resolvedType := ResolveNotificationPushType(pushType, "", "")
+	enabled := false
+	switch resolvedType {
+	case NotificationTypeCritical:
+		enabled = device.Preferences.CriticalPager
+	case NotificationTypeAgentRequest:
+		enabled = device.Preferences.AgentRequests
+	default:
+		enabled = device.Preferences.GeneralAlerts
+	}
+	if !enabled {
+		return false
+	}
+
+	return IsDeviceOrgAllowedForType(device, resolvedType, orgId)
+}
+
+func GetUserDeviceTokensForTypeAndOrg(user User, pushType string, orgId string) []string {
+	resolvedType := ResolveNotificationPushType(pushType, "", "")
+	tokens := make([]string, 0, len(user.Devices))
+	seen := make(map[string]bool, len(user.Devices))
+
+	for _, device := range user.Devices {
+		tok := strings.TrimSpace(device.Token)
+		if tok == "" || seen[tok] {
+			continue
+		}
+
+		if IsDeviceEnabledForTypeAndOrg(device, resolvedType, orgId) {
+			seen[tok] = true
+			tokens = append(tokens, tok)
+		}
+	}
+
+	return tokens
+}
+
+func GetUserDeviceTokensForType(user User, pushType string) []string {
+	return GetUserDeviceTokensForTypeAndOrg(user, pushType, "")
+}
+
+func FilterDeviceTokensForTypeAndOrg(user *User, tokens []string, pushType string, orgId string) []string {
+	orgId = strings.TrimSpace(orgId)
+	if user == nil || len(orgId) == 0 || len(tokens) == 0 {
+		return tokens
+	}
+
+	deviceByToken := make(map[string]Device, len(user.Devices))
+	for _, dev := range user.Devices {
+		t := strings.TrimSpace(dev.Token)
+		if t != "" {
+			deviceByToken[t] = dev
+		}
+	}
+
+	filtered := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		t := strings.TrimSpace(tok)
+		if t == "" {
+			continue
+		}
+		if dev, exists := deviceByToken[t]; exists {
+			if !IsDeviceOrgAllowedForType(dev, pushType, orgId) {
+				continue
+			}
+		}
+		filtered = append(filtered, t)
+	}
+	return filtered
+}
+
+func AuthorizeUserNotificationTarget(ctx context.Context, caller User, orgId string, targetUserId string) (*User, error) {
+	targetUserId = strings.TrimSpace(targetUserId)
+	if len(targetUserId) == 0 {
+		return nil, errors.New("No target user_id provided")
+	}
+
+	targetUser, err := GetUser(ctx, targetUserId)
+	if err != nil || targetUser == nil || len(targetUser.Id) == 0 {
+		return nil, errors.New("Target user not found")
+	}
+
+	if caller.SupportAccess || (len(caller.Id) > 0 && caller.Id == targetUserId) {
+		return targetUser, nil
+	}
+
+	orgId = strings.TrimSpace(orgId)
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(caller.ActiveOrg.Id)
+	}
+	if len(orgId) == 0 {
+		return nil, errors.New("Organization context is required to notify another user")
+	}
+
+	org, err := GetOrg(ctx, orgId)
+	if err != nil || org == nil || len(org.Id) == 0 {
+		return nil, errors.New("Failed getting organization for notification authorization")
+	}
+
+	callerAuthorized := caller.ActiveOrg.Id == orgId || strings.HasPrefix(caller.Username, "execution ")
+	targetAuthorized := targetUser.ActiveOrg.Id == orgId
+	for _, orgUser := range org.Users {
+		if len(caller.Id) > 0 && orgUser.Id == caller.Id {
+			callerAuthorized = true
+		}
+		if orgUser.Id == targetUserId {
+			targetAuthorized = true
+		}
+	}
+	if !targetAuthorized {
+		for _, userOrgId := range targetUser.Orgs {
+			if userOrgId == orgId {
+				targetAuthorized = true
+				break
+			}
+		}
+	}
+
+	if !callerAuthorized {
+		return nil, errors.New("Caller does not have access to this organization")
+	}
+	if !targetAuthorized {
+		return nil, errors.New("User is not a member of this organization")
+	}
+
+	return targetUser, nil
+}
+
+func AuthorizeTargetTokensForCaller(ctx context.Context, caller User, orgId string, targetUser *User, tokens []string) error {
+	if caller.SupportAccess || len(tokens) == 0 {
+		return nil
+	}
+
+	allowed := make(map[string]bool)
+	addDevices := func(devices []Device) {
+		for _, dev := range devices {
+			t := strings.TrimSpace(dev.Token)
+			if t != "" {
+				allowed[t] = true
+			}
+		}
+	}
+
+	addDevices(caller.Devices)
+	if len(caller.Id) > 0 {
+		if freshCaller, err := GetUser(ctx, caller.Id); err == nil && freshCaller != nil {
+			addDevices(freshCaller.Devices)
+		}
+	}
+	if targetUser != nil {
+		addDevices(targetUser.Devices)
+	}
+
+	allMatched := func() bool {
+		for _, tok := range tokens {
+			t := strings.TrimSpace(tok)
+			if t != "" && !allowed[t] {
+				return false
+			}
+		}
+		return true
+	}
+
+	if allMatched() {
+		return nil
+	}
+
+	orgId = strings.TrimSpace(orgId)
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(caller.ActiveOrg.Id)
+	}
+
+	if len(orgId) > 0 && caller.Role != "org-reader" {
+		if org, err := GetOrg(ctx, orgId); err == nil && org != nil {
+			for _, orgUser := range org.Users {
+				if len(orgUser.Id) > 0 {
+					if fullMember, err := GetUser(ctx, orgUser.Id); err == nil && fullMember != nil {
+						addDevices(fullMember.Devices)
+						if allMatched() {
+							return nil
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if !allMatched() {
+		return errors.New("Forbidden: one or more target device tokens do not belong to an authorized user in your organization")
+	}
+
+	return nil
+}
+
+func userBelongsToOrg(ctx context.Context, user User, orgId string) bool {
+	orgId = strings.TrimSpace(orgId)
+	if len(orgId) == 0 {
+		return true
+	}
+	if user.SupportAccess || strings.TrimSpace(user.ActiveOrg.Id) == orgId {
+		return true
+	}
+	for _, userOrgId := range user.Orgs {
+		if strings.TrimSpace(userOrgId) == orgId {
+			return true
+		}
+	}
+	if org, err := GetOrg(ctx, orgId); err == nil && org != nil {
+		for _, orgUser := range org.Users {
+			if len(user.Id) > 0 && orgUser.Id == user.Id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func ResolveTargetUserFromTokens(ctx context.Context, caller User, orgId string, tokens []string) *User {
+	tokenSet := make(map[string]bool, len(tokens))
+	for _, tok := range tokens {
+		t := strings.TrimSpace(tok)
+		if t != "" {
+			tokenSet[t] = true
+		}
+	}
+	if len(tokenSet) == 0 {
+		return nil
+	}
+
+	hasMatchingDevice := func(u User) bool {
+		for _, dev := range u.Devices {
+			if tokenSet[strings.TrimSpace(dev.Token)] {
+				return true
+			}
+		}
+		return false
+	}
+
+	if len(caller.Id) > 0 {
+		if freshCaller, err := GetUser(ctx, caller.Id); err == nil && freshCaller != nil && hasMatchingDevice(*freshCaller) {
+			return freshCaller
+		}
+		if hasMatchingDevice(caller) {
+			callerCopy := caller
+			return &callerCopy
+		}
+	}
+
+	orgId = strings.TrimSpace(orgId)
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(caller.ActiveOrg.Id)
+	}
+	if len(orgId) > 0 {
+		if org, err := GetOrg(ctx, orgId); err == nil && org != nil {
+			for _, orgUser := range org.Users {
+				if len(orgUser.Id) > 0 {
+					if fullMember, err := GetUser(ctx, orgUser.Id); err == nil && fullMember != nil && hasMatchingDevice(*fullMember) {
+						return fullMember
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func mergeNotificationTags(existing []string, additions ...string) []string {
+	out := make([]string, 0, len(existing)+len(additions))
+	seen := make(map[string]bool, len(existing)+len(additions))
+	for _, tag := range existing {
+		t := strings.TrimSpace(tag)
+		if t == "" || strings.HasPrefix(t, "devices:") {
+			continue
+		}
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	for _, tag := range additions {
+		t := strings.TrimSpace(tag)
+		if t == "" {
+			continue
+		}
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func RecordPagerNotification(ctx context.Context, req NotificationRequest, targetUser User, successCount int, totalTargets int) (Notification, error) {
+	userId := strings.TrimSpace(targetUser.Id)
+	if len(userId) == 0 {
+		return Notification{}, errors.New("no target user ID to record pager notification")
+	}
+
+	orgId := strings.TrimSpace(req.OrgID)
+	if len(orgId) == 0 {
+		if len(strings.TrimSpace(targetUser.ActiveOrg.Id)) > 0 {
+			orgId = strings.TrimSpace(targetUser.ActiveOrg.Id)
+		} else if len(targetUser.Orgs) > 0 {
+			orgId = strings.TrimSpace(targetUser.Orgs[0])
+		}
+	}
+
+	orgName := ""
+	if len(orgId) > 0 {
+		if targetUser.ActiveOrg.Id == orgId && len(targetUser.ActiveOrg.Name) > 0 {
+			orgName = targetUser.ActiveOrg.Name
+		} else if org, err := GetOrg(ctx, orgId); err == nil && org != nil {
+			orgName = org.Name
+		}
+	}
+
+	pushType := ResolveNotificationPushType(req.Type, req.Severity, req.Origin)
+	severity := strings.TrimSpace(req.Severity)
+	if len(severity) == 0 {
+		if pushType == NotificationTypeCritical {
+			severity = "critical"
+		} else if pushType == NotificationTypeAgentRequest {
+			severity = "high"
+		} else {
+			severity = "info"
+		}
+	}
+
+	origin := strings.TrimSpace(req.Origin)
+	if len(origin) == 0 || strings.EqualFold(origin, "personal") {
+		origin = "pager"
+	}
+
+	description := strings.TrimSpace(req.Description)
+	if len(description) == 0 {
+		description = strings.TrimSpace(req.Body)
+	}
+	if len(description) == 0 && len(strings.TrimSpace(req.Source)) > 0 {
+		description = fmt.Sprintf("Pager notification from %s", strings.TrimSpace(req.Source))
+	}
+
+	referenceUrl := strings.TrimSpace(req.ReferenceURL)
+	if len(referenceUrl) == 0 && len(strings.TrimSpace(req.IncidentID)) > 0 {
+		referenceUrl = fmt.Sprintf("/incidents/%s", strings.TrimSpace(req.IncidentID))
+	}
+
+	bucketDesc := fmt.Sprintf("Pager (%s) delivered to %d/%d device(s)", pushType, successCount, totalTargets)
+	tags := mergeNotificationTags(nil, "pager", fmt.Sprintf("push:%s", pushType), fmt.Sprintf("devices:%d/%d", successCount, totalTargets))
+	isRead := successCount > 0
+	modifiedBy := ""
+	if isRead {
+		modifiedBy = "pager_push"
+	}
+
+	notifications, _ := GetUserNotifications(ctx, userId)
+	now := int64(time.Now().Unix())
+	for _, existing := range notifications {
+		if existing.UserId != userId {
+			continue
+		}
+		if existing.Title == req.Title && existing.Description == description {
+			existing.Personal = true
+			existing.UserId = userId
+			if len(orgId) > 0 {
+				existing.OrgId = orgId
+			}
+			if len(orgName) > 0 {
+				existing.OrgName = orgName
+			}
+			existing.Amount += 1
+			existing.UpdatedAt = now
+			existing.Read = isRead
+			if len(modifiedBy) > 0 {
+				existing.ModifiedBy = modifiedBy
+			}
+			existing.Severity = severity
+			existing.Origin = origin
+			existing.BucketDescription = bucketDesc
+			existing.Tags = mergeNotificationTags(existing.Tags, tags...)
+			if len(referenceUrl) > 0 {
+				existing.ReferenceUrl = referenceUrl
+			}
+			if len(req.ExecutionID) > 0 {
+				existing.ExecutionId = req.ExecutionID
+			}
+			if len(req.WorkflowID) > 0 {
+				existing.WorkflowId = req.WorkflowID
+			}
+			if len(req.Action) > 0 {
+				existing.ActionName = req.Action
+			}
+			if existing.Ignored {
+				existing.Read = true
+			}
+			err := SetNotification(ctx, existing)
+			DeleteCache(ctx, fmt.Sprintf("notifications_%s", userId))
+			return existing, err
+		}
+	}
+
+	notifId := strings.TrimSpace(req.NotificationID)
+	if len(notifId) == 0 {
+		notifId = uuid.NewV4().String()
+	}
+
+	newNotif := Notification{
+		Id:                notifId,
+		Title:             req.Title,
+		Description:       description,
+		OrgId:             orgId,
+		OrgName:           orgName,
+		UserId:            userId,
+		Tags:              tags,
+		BucketDescription: bucketDesc,
+		Amount:            1,
+		ReferenceUrl:      referenceUrl,
+		Dismissable:       true,
+		Personal:          true,
+		Read:              isRead,
+		ModifiedBy:        modifiedBy,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		ExecutionId:       req.ExecutionID,
+		WorkflowId:        req.WorkflowID,
+		ActionName:        req.Action,
+		Severity:          severity,
+		Origin:            origin,
+	}
+
+	err := SetNotification(ctx, newNotif)
+	DeleteCache(ctx, fmt.Sprintf("notifications_%s", userId))
+	return newNotif, err
+}
+
+func DispatchFCMPushNotification(ctx context.Context, req NotificationRequest, targetUser *User) ([]TokenResult, int, error) {
+	if project.Environment != "cloud" {
+		return nil, 0, errors.New("FCM push notifications are only supported in cloud environment")
+	}
+
+	pushType := ResolveNotificationPushType(req.Type, req.Severity, req.Origin)
+	if pushType != NotificationTypeCritical && pushType != NotificationTypeAgentRequest && pushType != NotificationTypeGeneral {
+		return nil, 0, fmt.Errorf("Unsupported notification type: %s. Use 'critical', 'agent_request', or 'general'", req.Type)
+	}
+	req.Type = pushType
+
+	rawTokens := req.TargetTokens
+	if len(rawTokens) == 0 && strings.TrimSpace(req.TargetToken) != "" {
+		rawTokens = []string{strings.TrimSpace(req.TargetToken)}
+	}
+
+	validTokens := make([]string, 0, len(rawTokens))
+	seenTokens := make(map[string]bool, len(rawTokens))
+	for _, tok := range rawTokens {
+		t := strings.TrimSpace(tok)
+		if t != "" && !seenTokens[t] {
+			seenTokens[t] = true
+			validTokens = append(validTokens, t)
+		}
+	}
+
+	if len(validTokens) > 0 && targetUser != nil && len(strings.TrimSpace(req.OrgID)) > 0 {
+		validTokens = FilterDeviceTokensForTypeAndOrg(targetUser, validTokens, pushType, req.OrgID)
+	}
+
+	if len(validTokens) == 0 && targetUser != nil {
+		validTokens = GetUserDeviceTokensForTypeAndOrg(*targetUser, pushType, req.OrgID)
+	}
+
+	if len(validTokens) == 0 {
+		return nil, 0, errors.New("No registered target device tokens enabled for this notification type")
+	}
+
+	client, err := GetFCMClient(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("FCM configuration error: %w", err)
+	}
+
+	multicastMsg := &messaging.MulticastMessage{
+		Tokens: validTokens,
+	}
+
+	switch pushType {
+	case NotificationTypeCritical:
+		if strings.TrimSpace(req.Source) == "" {
+			req.Source = "Shuffle Security"
+		}
+		if strings.TrimSpace(req.Severity) == "" {
+			req.Severity = "critical"
+		}
+
+		bodyText := req.Body
+		if bodyText == "" && req.Description != "" {
+			bodyText = req.Description
+		}
+		if bodyText == "" {
+			bodyText = fmt.Sprintf("Incoming emergency on-call page from %s. Tap to respond.", req.Source)
+		}
+
+		multicastMsg.Data = map[string]string{
+			"type":           "pager_alert",
+			"title":          fmt.Sprintf("CRITICAL ALERT: %s", req.Title),
+			"body":           bodyText,
+			"notificationId": req.NotificationID,
+			"incidentId":     req.IncidentID,
+			"executionId":    req.ExecutionID,
+			"workflowId":     req.WorkflowID,
+			"referenceUrl":   req.ReferenceURL,
+			"orgId":          req.OrgID,
+			"severity":       req.Severity,
+			"source":         req.Source,
+			"timestamp":      fmt.Sprintf("%d", time.Now().UnixMilli()),
+		}
+		multicastMsg.Android = &messaging.AndroidConfig{
+			Priority: "high",
+		}
+		multicastMsg.APNS = &messaging.APNSConfig{
+			Headers: map[string]string{
+				"apns-priority":  "10",
+				"apns-push-type": "alert",
+			},
+			Payload: &messaging.APNSPayload{
+				Aps: &messaging.Aps{
+					CriticalSound: &messaging.CriticalSound{
+						Critical: true,
+						Name:     "default",
+						Volume:   1.0,
+					},
+				},
+			},
+		}
+
+	case NotificationTypeAgentRequest:
+		bodyText := req.Body
+		if bodyText == "" && req.Description != "" {
+			bodyText = req.Description
+		}
+		if bodyText == "" {
+			bodyText = "AI Agent requires your review or input to proceed."
+		}
+
+		multicastMsg.Notification = &messaging.Notification{
+			Title: req.Title,
+			Body:  bodyText,
+		}
+		multicastMsg.Data = map[string]string{
+			"type":           "agent_request",
+			"title":          req.Title,
+			"action":         req.Action,
+			"notificationId": req.NotificationID,
+			"executionId":    req.ExecutionID,
+			"workflowId":     req.WorkflowID,
+			"incidentId":     req.IncidentID,
+			"referenceUrl":   req.ReferenceURL,
+			"orgId":          req.OrgID,
+			"timestamp":      fmt.Sprintf("%d", time.Now().UnixMilli()),
+		}
+		multicastMsg.Android = &messaging.AndroidConfig{
+			Priority: "normal",
+			Notification: &messaging.AndroidNotification{
+				ChannelID: "agent_notifications",
+				Sound:     "default",
+				Priority:  messaging.PriorityDefault,
+			},
+		}
+		multicastMsg.APNS = &messaging.APNSConfig{
+			Payload: &messaging.APNSPayload{
+				Aps: &messaging.Aps{
+					Sound: "default",
+				},
+			},
+		}
+
+	default:
+		bodyText := req.Body
+		if bodyText == "" && req.Description != "" {
+			bodyText = req.Description
+		}
+		if bodyText == "" {
+			bodyText = "You have a new update from Shuffle Security."
+		}
+
+		multicastMsg.Notification = &messaging.Notification{
+			Title: req.Title,
+			Body:  bodyText,
+		}
+		multicastMsg.Data = map[string]string{
+			"type":           "general_notification",
+			"title":          req.Title,
+			"notificationId": req.NotificationID,
+			"referenceUrl":   req.ReferenceURL,
+			"executionId":    req.ExecutionID,
+			"workflowId":     req.WorkflowID,
+			"orgId":          req.OrgID,
+			"timestamp":      fmt.Sprintf("%d", time.Now().UnixMilli()),
+		}
+		multicastMsg.Android = &messaging.AndroidConfig{
+			Priority: "normal",
+			Notification: &messaging.AndroidNotification{
+				ChannelID: "general_notifications",
+				Sound:     "default",
+				Priority:  messaging.PriorityLow,
+			},
+		}
+		multicastMsg.APNS = &messaging.APNSConfig{
+			Payload: &messaging.APNSPayload{
+				Aps: &messaging.Aps{
+					Sound: "default",
+				},
+			},
+		}
+	}
+
+	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	batchResp, err := client.SendEachForMulticast(sendCtx, multicastMsg)
+	if err != nil {
+		return nil, 0, fmt.Errorf("FCM delivery failed: %w", err)
+	}
+
+	results := make([]TokenResult, 0, len(batchResp.Responses))
+	unregisteredTokens := make(map[string]bool)
+
+	for idx, r := range batchResp.Responses {
+		tok := validTokens[idx]
+		tokenMasked := tok
+		if len(tok) > 12 {
+			tokenMasked = tok[:6] + "..." + tok[len(tok)-4:]
+		}
+
+		if r.Success {
+			log.Printf("[INFO] FCM Success | Token: %s | MessageID: %s", tokenMasked, r.MessageID)
+			results = append(results, TokenResult{
+				Token:     tokenMasked,
+				Success:   true,
+				MessageID: r.MessageID,
+			})
+		} else {
+			isUnregistered := messaging.IsUnregistered(r.Error)
+			isSenderMismatch := messaging.IsSenderIDMismatch(r.Error)
+			isInvalidArgument := messaging.IsInvalidArgument(r.Error)
+
+			log.Printf("[ERROR] FCM Delivery Failed | Token: %s | Err: %v | Unregistered: %t | MismatchedSender: %t | InvalidArg: %t",
+				tokenMasked, r.Error, isUnregistered, isSenderMismatch, isInvalidArgument)
+
+			if isUnregistered {
+				unregisteredTokens[tok] = true
+			}
+
+			errMsg := "unknown error"
+			if r.Error != nil {
+				errMsg = r.Error.Error()
+			}
+
+			results = append(results, TokenResult{
+				Token:          tokenMasked,
+				Success:        false,
+				Error:          errMsg,
+				IsUnregistered: isUnregistered,
+			})
+		}
+	}
+
+	if len(unregisteredTokens) > 0 && targetUser != nil && len(targetUser.Id) > 0 {
+		updated := false
+		now := time.Now().Unix()
+		for i := range targetUser.Devices {
+			if unregisteredTokens[strings.TrimSpace(targetUser.Devices[i].Token)] {
+				targetUser.Devices[i].Token = ""
+				targetUser.Devices[i].EditedAt = now
+				updated = true
+			}
+		}
+		if updated {
+			if setErr := SetUser(ctx, targetUser, true); setErr != nil {
+				log.Printf("[WARNING] Failed pruning unregistered FCM token(s) for user %s: %v", targetUser.Id, setErr)
+			}
+		}
+	}
+
+	return results, batchResp.SuccessCount, nil
+}
 
 // Standalone to make it work many places
 func markNotificationRead(ctx context.Context, notification *Notification) error {
@@ -77,14 +833,14 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if notification.Personal && notification.UserId != user.Id {
-		log.Printf("[WARNING] Bad user for notification. %s (wanted) vs %s", notification.UserId, user.Id)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Bad userId or notification doesn't exist"}`))
-		return
-	}
-
-	if notification.OrgId != user.ActiveOrg.Id {
+	if notification.Personal || len(notification.UserId) > 0 {
+		if notification.UserId != user.Id {
+			log.Printf("[WARNING] Bad user for notification. %s (wanted) vs %s", notification.UserId, user.Id)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Bad userId or notification doesn't exist"}`))
+			return
+		}
+	} else if notification.OrgId != user.ActiveOrg.Id {
 		log.Printf("[WARNING] Bad org for notification. %s (wanted) vs %s", notification.OrgId, user.ActiveOrg.Id)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Bad userId or notification doesn't exist"}`))
@@ -110,12 +866,33 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(notification.UserId) > 0 {
+		DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.UserId))
+	}
+	if len(notification.OrgId) > 0 {
+		DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.OrgId))
+	}
+	DeleteCache(ctx, fmt.Sprintf("notifications_%s", user.Id))
+
 	log.Printf("[AUDIT] Marked %s as read by user %s (%s)", notification.Id, user.Username, user.Id)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
 
 	return
+}
+
+func isPersonalNotificationRequest(request *http.Request) bool {
+	if strings.EqualFold(request.URL.Query().Get("personal"), "true") {
+		return true
+	}
+	if strings.EqualFold(request.URL.Query().Get("type"), "personal") {
+		return true
+	}
+	if strings.EqualFold(request.URL.Query().Get("origin"), "personal") {
+		return true
+	}
+	return false
 }
 
 func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
@@ -144,8 +921,14 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 	*/
 
 	ctx := GetContext(request)
-	//notifications, err := GetUserNotifications(ctx, user.Id)
-	notifications, err := GetOrgNotifications(ctx, user.ActiveOrg.Id)
+	personal := isPersonalNotificationRequest(request)
+
+	var notifications []Notification
+	if personal {
+		notifications, err = GetUserNotifications(ctx, user.Id)
+	} else {
+		notifications, err = GetOrgNotifications(ctx, user.ActiveOrg.Id)
+	}
 	if err != nil && len(notifications) == 0 {
 		log.Printf("[ERROR] Failed to get notifications (clear): %s", err)
 		resp.WriteHeader(500)
@@ -154,12 +937,15 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	for _, notification := range notifications {
-		// Not including this as we want to mark as read for all users in the org
-		// We stopped using personal vs org notifications
-		// Also added index to track by updated time
-		//if user.Id != notification.UserId {
-		//	continue
-		//}
+		if personal {
+			if notification.UserId != user.Id {
+				continue
+			}
+		} else {
+			if notification.Personal || len(notification.UserId) > 0 {
+				continue
+			}
+		}
 
 		notification.ModifiedBy = user.Username
 		err = markNotificationRead(ctx, &notification)
@@ -206,9 +992,16 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 
 	// Should be made org-wide instead? Right now, it's cross org
 	ctx := GetContext(request)
+	personal := isPersonalNotificationRequest(request)
 
-	//notifications, err := GetUserNotifications(ctx, user.Id)
-	notifications, err := GetOrgNotifications(ctx, user.ActiveOrg.Id)
+	var notifications []Notification
+	if personal {
+		if len(user.Id) > 0 {
+			notifications, err = GetUserNotifications(ctx, user.Id)
+		}
+	} else {
+		notifications, err = GetOrgNotifications(ctx, user.ActiveOrg.Id)
+	}
 	if err != nil && len(notifications) == 0 {
 		log.Printf("[ERROR] Failed to get notifications: %s", err)
 		resp.WriteHeader(500)
@@ -225,6 +1018,9 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		if typeOk && len(typeList) > 0 {
 			curType = typeList[0]
 		}
+	}
+	if strings.EqualFold(curType, "personal") {
+		curType = ""
 	}
 
 	severity := ""
@@ -250,8 +1046,16 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		if notification.Personal {
-			continue
+		if personal {
+			if len(user.Id) == 0 || notification.UserId != user.Id {
+				continue
+			}
+			notification.Personal = true
+		} else {
+			if notification.Personal || len(notification.UserId) > 0 {
+				continue
+			}
+			notification.UserId = ""
 		}
 
 		if len(severity) > 0 && notification.Severity != severity {
@@ -262,11 +1066,6 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		//if notification.UserId != user.Id {
-		//	continue
-		//}
-
-		notification.UserId = ""
 		//notification.OrgId = ""
 		newNotifications = append(newNotifications, notification)
 	}
@@ -1105,6 +1904,223 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 	return nil
 }
 
+func CreatePersonalNotification(ctx context.Context, title, description, referenceUrl, userId, orgId, severity, origin string) error {
+	if standalone {
+		return nil
+	}
+
+	userId = strings.TrimSpace(userId)
+	if len(userId) == 0 {
+		log.Printf("[ERROR] No user ID provided to create personal notification '%s'", title)
+		return errors.New("no user ID provided")
+	}
+
+	if len(referenceUrl) > 0 {
+		cacheKey := fmt.Sprintf("notification-%s-%s", userId, referenceUrl)
+		_, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			return nil
+		}
+
+		err = SetCache(ctx, cacheKey, []byte("1"), 1)
+		if err != nil {
+			log.Printf("[ERROR] Failed saving cached personal notification %s: %s", cacheKey, err)
+		}
+	}
+
+	targetUser, userErr := GetUser(ctx, userId)
+	if userErr != nil {
+		log.Printf("[WARNING] Failed getting target user %s in CreatePersonalNotification: %s", userId, userErr)
+	}
+
+	orgId = strings.TrimSpace(orgId)
+	if len(orgId) == 0 && userErr == nil && targetUser != nil {
+		if len(strings.TrimSpace(targetUser.ActiveOrg.Id)) > 0 {
+			orgId = strings.TrimSpace(targetUser.ActiveOrg.Id)
+		} else if len(targetUser.Orgs) > 0 {
+			orgId = strings.TrimSpace(targetUser.Orgs[0])
+		}
+	}
+
+	notifications, err := GetUserNotifications(ctx, userId)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting user notifications for %s: %s", userId, err)
+	}
+
+	matchingNotifications := []Notification{}
+	for _, notification := range notifications {
+		if notification.UserId != userId {
+			continue
+		}
+
+		if notification.Title == title && notification.Description == description {
+			matchingNotifications = append(matchingNotifications, notification)
+		}
+	}
+
+	orgName := ""
+	if len(orgId) > 0 {
+		if userErr == nil && targetUser != nil && targetUser.ActiveOrg.Id == orgId && len(targetUser.ActiveOrg.Name) > 0 {
+			orgName = targetUser.ActiveOrg.Name
+		} else {
+			org, err := GetOrg(ctx, orgId)
+			if err == nil && org != nil {
+				orgName = org.Name
+			}
+		}
+	}
+
+	enrichedFailureContext := enrichNotificationFailureContext(ctx, referenceUrl, description)
+
+	generatedId := uuid.NewV4().String()
+	now := int64(time.Now().Unix())
+	mainNotification := Notification{
+		Title:             title,
+		Description:       description,
+		Id:                generatedId,
+		OrgId:             orgId,
+		OrgName:           orgName,
+		UserId:            userId,
+		Tags:              []string{},
+		Amount:            1,
+		ReferenceUrl:      referenceUrl,
+		OrgNotificationId: "",
+		Dismissable:       true,
+		Personal:          true,
+		Read:              false,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		ExecutionId:       enrichedFailureContext.ExecutionId,
+		WorkflowId:        enrichedFailureContext.WorkflowId,
+		NodeId:            enrichedFailureContext.NodeId,
+		NodeLabel:         enrichedFailureContext.NodeLabel,
+		ActionName:        enrichedFailureContext.ActionName,
+		AppName:           enrichedFailureContext.AppName,
+		NodeStatus:        enrichedFailureContext.NodeStatus,
+		FailureReason:     enrichedFailureContext.FailureReason,
+		Severity:          severity,
+		Origin:            origin,
+	}
+
+	wasRead := false
+	isIgnored := false
+	effectiveSeverity := mainNotification.Severity
+	effectiveOrigin := mainNotification.Origin
+	savedNotification := mainNotification
+
+	if len(matchingNotifications) > 0 {
+		notification := matchingNotifications[0]
+		wasRead = notification.Read
+		notification.Personal = true
+		notification.UserId = userId
+		if len(orgId) > 0 {
+			notification.OrgId = orgId
+		}
+		if len(orgName) > 0 {
+			notification.OrgName = orgName
+		}
+		notification.Amount += 1
+		notification.Read = false
+		notification.UpdatedAt = now
+		notification.ReferenceUrl = referenceUrl
+		notification.ExecutionId = mainNotification.ExecutionId
+		notification.WorkflowId = mainNotification.WorkflowId
+		notification.NodeId = mainNotification.NodeId
+		notification.NodeLabel = mainNotification.NodeLabel
+		notification.ActionName = mainNotification.ActionName
+		notification.AppName = mainNotification.AppName
+		notification.NodeStatus = mainNotification.NodeStatus
+		notification.FailureReason = mainNotification.FailureReason
+		if len(severity) > 0 {
+			notification.Severity = severity
+		}
+		if len(origin) > 0 {
+			notification.Origin = origin
+		}
+		effectiveSeverity = notification.Severity
+		effectiveOrigin = notification.Origin
+		if strings.EqualFold(effectiveOrigin, "pager") || strings.EqualFold(effectiveSeverity, "critical") {
+			notification.Tags = mergeNotificationTags(notification.Tags, "pager")
+		}
+		if notification.Ignored {
+			notification.Read = true
+			isIgnored = true
+		}
+
+		err = SetNotification(ctx, notification)
+		if err != nil {
+			log.Printf("[WARNING] Failed to reopen personal notification %s for user %s: %s", notification.Title, userId, err)
+			return err
+		}
+		savedNotification = notification
+	} else {
+		if strings.EqualFold(effectiveOrigin, "pager") || strings.EqualFold(effectiveSeverity, "critical") {
+			mainNotification.Tags = mergeNotificationTags(mainNotification.Tags, "pager")
+		}
+		err = SetNotification(ctx, mainNotification)
+		if err != nil {
+			log.Printf("[ERROR] Failed making personal notification with title %#v for user %s: %s", title, userId, err)
+			return err
+		}
+		savedNotification = mainNotification
+	}
+
+	pushType := ResolveNotificationPushType("", effectiveSeverity, effectiveOrigin)
+	shouldPush := len(matchingNotifications) == 0 || wasRead || pushType == NotificationTypeCritical
+
+	if shouldPush && !isIgnored && project.Environment == "cloud" && userErr == nil && targetUser != nil && len(targetUser.Devices) > 0 && userBelongsToOrg(ctx, *targetUser, orgId) {
+		tokens := GetUserDeviceTokensForTypeAndOrg(*targetUser, pushType, orgId)
+		if len(tokens) > 0 {
+			sourceName := orgName
+			if len(strings.TrimSpace(sourceName)) == 0 {
+				sourceName = "Shuffle Security"
+			}
+			pushReq := NotificationRequest{
+				Type:           pushType,
+				Title:          title,
+				Body:           description,
+				Description:    description,
+				Source:         sourceName,
+				Origin:         effectiveOrigin,
+				UserID:         userId,
+				OrgID:          orgId,
+				NotificationID: savedNotification.Id,
+				TargetTokens:   tokens,
+				Severity:       effectiveSeverity,
+				ExecutionID:    mainNotification.ExecutionId,
+				WorkflowID:     mainNotification.WorkflowId,
+				Action:         mainNotification.ActionName,
+				ReferenceURL:   referenceUrl,
+			}
+			targetCopy := *targetUser
+			notifCopy := savedNotification
+			go func(u User, req NotificationRequest, n Notification) {
+				bgCtx := context.Background()
+				_, successCount, pushErr := DispatchFCMPushNotification(bgCtx, req, &u)
+				if pushErr != nil {
+					log.Printf("[WARNING] Failed dispatching personal push notification '%s' to user %s: %v", req.Title, u.Id, pushErr)
+					return
+				}
+				if successCount > 0 {
+					n.Read = true
+					n.ModifiedBy = "device_push"
+					if len(strings.TrimSpace(n.Origin)) == 0 || strings.EqualFold(n.Origin, "personal") {
+						n.Origin = "pager"
+					}
+					n.Tags = mergeNotificationTags(n.Tags, "pager", fmt.Sprintf("push:%s", req.Type), fmt.Sprintf("devices:%d/%d", successCount, len(req.TargetTokens)))
+					n.BucketDescription = fmt.Sprintf("Pager (%s) delivered to %d/%d device(s)", req.Type, successCount, len(req.TargetTokens))
+					if setErr := SetNotification(bgCtx, n); setErr != nil {
+						log.Printf("[WARNING] Failed marking pushed personal notification %s as read for user %s: %v", n.Id, u.Id, setErr)
+					}
+					DeleteCache(bgCtx, fmt.Sprintf("notifications_%s", u.Id))
+				}
+			}(targetCopy, pushReq, notifCopy)
+		}
+	}
+
+	return nil
+}
+
 func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1274,7 +2290,9 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		notification.OrgId = orgId
 	}
 
-	if user.Role == "org-reader" {
+	isPersonal := notification.Personal || len(notification.UserId) > 0 || isPersonalNotificationRequest(request) || strings.EqualFold(notification.Origin, "personal")
+
+	if user.Role == "org-reader" && !(isPersonal && (len(notification.UserId) == 0 || notification.UserId == user.Id)) {
 		log.Printf("[INFO] User %s (%s) tried to create a notification without being admin", user.Username, user.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
@@ -1283,10 +2301,15 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 
 	// Goes in here if it's a manual user making the request
 	if !skipUserCheck {
-		orgId = user.ActiveOrg.Id
+		orgId = strings.TrimSpace(user.ActiveOrg.Id)
 
-		if len(notification.OrgId) > 0 {
-			orgId = notification.OrgId
+		requestedOrgId := strings.TrimSpace(notification.OrgId)
+		if len(requestedOrgId) == 0 {
+			requestedOrgId = strings.TrimSpace(request.Header.Get("Org-Id"))
+		}
+
+		if len(requestedOrgId) > 0 && requestedOrgId != orgId {
+			orgId = requestedOrgId
 
 			// Check if user has access
 			org, err := GetOrg(ctx, orgId)
@@ -1297,7 +2320,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-			found := false
+			found := user.SupportAccess
 			for _, orgUser := range org.Users {
 				if orgUser.Id == user.Id {
 					found = true
@@ -1312,20 +2335,67 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
+
+		if len(orgId) == 0 && len(user.Orgs) > 0 {
+			orgId = strings.TrimSpace(user.Orgs[0])
+		}
+		notification.OrgId = orgId
 	}
 
-	log.Printf("[DEBUG] User '%s' (%s) in org '%s' (%s) is creating notification '%s'", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id, notification.Title)
-	err = CreateOrgNotification(
-		ctx,
-		notification.Title,
-		notification.Description,
-		notification.ReferenceUrl,
-		orgId,
-		false,
-		notification.Severity,
-		notification.Origin,
-	)
+	if isPersonal {
+		targetUserId := strings.TrimSpace(notification.UserId)
+		if len(targetUserId) == 0 {
+			targetUserId = user.Id
+		}
 
+		if len(targetUserId) == 0 {
+			log.Printf("[ERROR] No user ID provided for personal notification in create notification api")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No user_id provided for personal notification"}`))
+			return
+		}
+
+		// When notifying another user, verify the target user exists and belongs to the authorized org
+		if targetUserId != user.Id {
+			if _, authErr := AuthorizeUserNotificationTarget(ctx, user, orgId, targetUserId); authErr != nil {
+				log.Printf("[WARNING] Unauthorized personal notification target %s by %s (%s) in org %s: %v", targetUserId, user.Username, user.Id, orgId, authErr)
+				if strings.Contains(strings.ToLower(authErr.Error()), "not found") {
+					resp.WriteHeader(400)
+				} else {
+					resp.WriteHeader(403)
+				}
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, authErr.Error())))
+				return
+			}
+		}
+
+		log.Printf("[DEBUG] User '%s' (%s) is creating personal notification '%s' for user '%s' in org '%s'", user.Username, user.Id, notification.Title, targetUserId, orgId)
+		err = CreatePersonalNotification(
+			ctx,
+			notification.Title,
+			notification.Description,
+			notification.ReferenceUrl,
+			targetUserId,
+			orgId,
+			notification.Severity,
+			notification.Origin,
+		)
+		DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", targetUserId))
+	} else {
+		log.Printf("[DEBUG] User '%s' (%s) in org '%s' (%s) is creating notification '%s'", user.Username, user.Id, user.ActiveOrg.Name, orgId, notification.Title)
+		err = CreateOrgNotification(
+			ctx,
+			notification.Title,
+			notification.Description,
+			notification.ReferenceUrl,
+			orgId,
+			false,
+			notification.Severity,
+			notification.Origin,
+		)
+	}
+
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", orgId))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", user.Id))
 
