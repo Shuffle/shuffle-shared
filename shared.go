@@ -10957,17 +10957,15 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[AUDIT] Handling password change for %s from %s (%s)", t.Username, userInfo.Username, userInfo.Id)
 
-	curUserFound := false
-	if t.Username != userInfo.Username {
+	curUserFound := strings.EqualFold(strings.TrimSpace(t.Username), userInfo.Username)
+	if !curUserFound {
 		log.Printf("[WARNING] Bad username during password change for %s.", t.Username)
 
-		if project.Environment == "cloud" {
+		if project.Environment == "cloud" || userInfo.Role != "admin" {
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Not allowed to change others' passwords in cloud"}`))
+			resp.Write([]byte(`{"success": false, "reason": "Not allowed to change others' passwords"}`))
 			return
 		}
-	} else if t.Username == userInfo.Username {
-		curUserFound = true
 	}
 
 	// Checking current user changing another user
@@ -11017,15 +11015,21 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		foundUser = users[0]
-		orgFound := false
-		if userInfo.ActiveOrg.Id == foundUser.ActiveOrg.Id {
-			orgFound = true
-		} else {
-			for _, item := range foundUser.Orgs {
-				if item == userInfo.ActiveOrg.Id {
-					orgFound = true
-					break
+		orgFound := len(foundUser.Orgs) > 0
+		for _, orgId := range foundUser.Orgs {
+			isAdmin := false
+			if org, err := GetOrg(ctx, orgId); err == nil {
+				for _, orgUser := range org.Users {
+					if orgUser.Id == userInfo.Id && orgUser.Role == "admin" {
+						isAdmin = true
+						break
+					}
 				}
+			}
+
+			if !isAdmin {
+				orgFound = false
+				break
 			}
 		}
 
