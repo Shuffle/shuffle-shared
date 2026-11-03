@@ -6257,11 +6257,34 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		if debug {
 			log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: looking up refresh_token (len: %d)", len(tokenReq.RefreshToken))
 		}
-		oldToken, err := GetOAuthTokenByRefreshToken(ctx, tokenReq.RefreshToken)
+		rotationKey := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenReq.RefreshToken)))
+		rotation, err := getOAuthTokenRotation(ctx, rotationKey)
+		if err != nil {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.Header().Set("Retry-After", "1")
+			resp.WriteHeader(http.StatusServiceUnavailable)
+			resp.Write([]byte(`{"error": "server_error", "error_description": "OAuth rotation storage unavailable; retry later"}`))
+			return
+		}
+		var oldToken *OAuthToken
+		if rotation != nil {
+			if rotation.Revoked || (rotation.CompletedAt != 0 && time.Since(time.Unix(0, rotation.CompletedAt)) >= time.Minute) ||
+				(rotation.CompletedAt == 0 && !rotation.PreviousExpiresAt.IsZero() && time.Now().After(rotation.PreviousExpiresAt)) {
+				resp.Header().Set("Content-Type", "application/json")
+				resp.Header().Set("Cache-Control", "no-store")
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(`{"error": "invalid_grant", "error_description": "Refresh recovery window expired or replacement revoked"}`))
+				return
+			}
+			oldToken = &rotation.Token
+		} else {
+			oldToken, err = GetOAuthTokenByRefreshToken(ctx, tokenReq.RefreshToken)
+		}
 		if err != nil || oldToken == nil || oldToken.AccessToken == "" {
 			// Grace period check: if a client retried a refresh request due to a network blip or
 			// sent concurrent refresh requests within 60s of rotation, return the rotated token response
-			// so the handoff/refresh never fails with invalid_grant.
+			// only while its replacement token is still valid.
 			cachedGraceData, gErr := GetCache(ctx, "oauth_refresh_grace_"+tokenReq.RefreshToken)
 			graceData, ok := cachedGraceData.([]byte)
 			if gErr == nil && ok && len(graceData) > 0 {
@@ -6287,6 +6310,33 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 						resp.Write([]byte(fmt.Sprintf(`{"error": "invalid_client", "error_description": %q}`, secretErr.Error())))
 						return
 					}
+				}
+				var cachedToken OAuthTokenResponse
+				if err := json.Unmarshal(graceData, &cachedToken); err != nil || cachedToken.AccessToken == "" || cachedToken.RefreshToken == "" {
+					resp.Header().Set("Content-Type", "application/json")
+					resp.Header().Set("Cache-Control", "no-store")
+					resp.WriteHeader(http.StatusInternalServerError)
+					resp.Write([]byte(`{"error": "server_error", "error_description": "Invalid cached refresh response"}`))
+					return
+				}
+				// A later refresh or revocation may already have invalidated this cached replacement.
+				replacement, lookupErr := GetOAuthToken(ctx, cachedToken.AccessToken)
+				if lookupErr != nil && lookupErr.Error() != "OAuth token doesn't exist" &&
+					lookupErr.Error() != "OAuth token not found" && lookupErr.Error() != "OAuth token has expired" &&
+					!strings.HasPrefix(lookupErr.Error(), "status: 404,") {
+					resp.Header().Set("Content-Type", "application/json")
+					resp.Header().Set("Cache-Control", "no-store")
+					resp.Header().Set("Retry-After", "1")
+					resp.WriteHeader(http.StatusServiceUnavailable)
+					resp.Write([]byte(`{"error": "server_error", "error_description": "Unable to validate cached refresh response; retry later"}`))
+					return
+				}
+				if lookupErr != nil || replacement == nil || replacement.RefreshToken != cachedToken.RefreshToken {
+					resp.Header().Set("Content-Type", "application/json")
+					resp.Header().Set("Cache-Control", "no-store")
+					resp.WriteHeader(http.StatusBadRequest)
+					resp.Write([]byte(`{"error": "invalid_grant", "error_description": "Cached refresh token has already been rotated, revoked or expired"}`))
+					return
 				}
 				if debug {
 					log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: serving grace-period cached response for recently rotated refresh_token")
@@ -6350,6 +6400,13 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		// Never allow a refresh_token request to escalate privileges (e.g. workflow:read -> workflow:edit or admin).
 		effectiveScope := oldToken.Scope
 		effectiveAllowedApps := oldToken.AllowedApps
+		if rotation != nil && strings.Join(strings.Fields(tokenReq.Scope), " ") != rotation.RequestScope {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_scope", "error_description": "Refresh retry must use the original requested scope"}`))
+			return
+		}
 
 		if tokenReq.Scope != "" && tokenReq.Scope != oldToken.Scope {
 			oldScopeParts := strings.Fields(strings.ToLower(strings.TrimSpace(oldToken.Scope)))
@@ -6438,6 +6495,7 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 
 		newToken := OAuthToken{
 			ID:                 connID,
+			RotationKey:        rotationKey,
 			AccessToken:        newAccessToken,
 			RefreshToken:       newRefreshToken,
 			TokenType:          "Bearer",
@@ -6478,14 +6536,59 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			MCPUserAgent:       oldToken.MCPUserAgent,
 		}
 
-		// Persist the new token BEFORE deleting the old token so a transient storage failure
-		// can never leave the client without a valid token.
-		if err := SetOAuthToken(ctx, newToken); err != nil {
-			log.Printf("[ERROR] HandleOAuthToken [refresh_token]: Failed to persist refreshed OAuth token: %v", err)
+		if rotation == nil {
+			rotation, err = saveOAuthTokenRotation(ctx, rotationKey, oauthTokenRotation{
+				Token: newToken, PreviousAccessToken: oldToken.AccessToken,
+				PreviousExpiresAt: oldToken.ExpiresAt, RequestScope: strings.Join(strings.Fields(tokenReq.Scope), " "),
+			}, true)
+		}
+		if err != nil || rotation == nil {
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
-			resp.WriteHeader(http.StatusInternalServerError)
-			resp.Write([]byte(`{"error": "server_error", "error_description": "Failed to persist refreshed OAuth token"}`))
+			resp.Header().Set("Retry-After", "1")
+			resp.WriteHeader(http.StatusServiceUnavailable)
+			resp.Write([]byte(`{"error": "server_error", "error_description": "Failed to reserve refreshed OAuth token; retry later"}`))
+			return
+		}
+		if rotation.Revoked || (rotation.CompletedAt != 0 && time.Since(time.Unix(0, rotation.CompletedAt)) >= time.Minute) ||
+			(rotation.CompletedAt == 0 && !rotation.PreviousExpiresAt.IsZero() && time.Now().After(rotation.PreviousExpiresAt)) ||
+			rotation.RequestScope != strings.Join(strings.Fields(tokenReq.Scope), " ") {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_grant", "error_description": "Refresh has already completed with different parameters or is no longer recoverable"}`))
+			return
+		}
+		// A competing request or crash recovery must use the durable winner, never its own candidate.
+		newToken = rotation.Token
+		newAccessToken, newRefreshToken, expiresIn = newToken.AccessToken, newToken.RefreshToken, newToken.ExpiresIn
+		effectiveScope = newToken.Scope
+		if rotation.CompletedAt == 0 {
+			if err = SetOAuthToken(ctx, newToken, true); err == nil {
+				rotation.CompletedAt = time.Now().UnixNano()
+				rotation, err = saveOAuthTokenRotation(ctx, rotationKey, *rotation, false)
+			}
+			if err != nil {
+				resp.Header().Set("Content-Type", "application/json")
+				resp.Header().Set("Cache-Control", "no-store")
+				resp.Header().Set("Retry-After", "1")
+				resp.WriteHeader(http.StatusServiceUnavailable)
+				resp.Write([]byte(`{"error": "server_error", "error_description": "Failed to persist refreshed OAuth token; retry later"}`))
+				return
+			}
+		}
+		// Completion does not authorize replay after a later rotation or explicit revocation.
+		if _, err := GetOAuthToken(ctx, newAccessToken); err != nil {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			if err.Error() == "OAuth token doesn't exist" || err.Error() == "OAuth token has expired" || err.Error() == "OAuth token not found" || strings.HasPrefix(err.Error(), "status: 404,") {
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(`{"error": "invalid_grant", "error_description": "Refresh replacement has been rotated, revoked or expired"}`))
+			} else {
+				resp.Header().Set("Retry-After", "1")
+				resp.WriteHeader(http.StatusServiceUnavailable)
+				resp.Write([]byte(`{"error": "server_error", "error_description": "Unable to validate refresh replacement; retry later"}`))
+			}
 			return
 		}
 
@@ -6517,19 +6620,24 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 
 		// Cache the new token response under a 60-second grace key for the old refresh token
 		// before invalidating the old token records.
-		_ = SetCache(ctx, "oauth_refresh_grace_"+tokenReq.RefreshToken, respData, 60)
+		_ = SetCache(ctx, "oauth_refresh_grace_"+tokenReq.RefreshToken, respData, 1)
 		if oldToken.ClientID != "" {
-			_ = SetCache(ctx, "oauth_refresh_grace_client_"+tokenReq.RefreshToken, []byte(oldToken.ClientID), 60)
+			_ = SetCache(ctx, "oauth_refresh_grace_client_"+tokenReq.RefreshToken, []byte(oldToken.ClientID), 1)
 		}
 
 		// Invalidate old access token and old refresh token index
 		if debug {
 			log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: deleting old access token")
 		}
-		_ = DeleteOAuthToken(ctx, oldToken.AccessToken)
-		if oldToken.RefreshToken != "" && oldToken.RefreshToken != newRefreshToken {
-			_ = DeleteKey(ctx, "oauth_refresh", oldToken.RefreshToken)
+		if err := DeleteOAuthToken(ctx, rotation.PreviousAccessToken, true); err != nil {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.Header().Set("Retry-After", "1")
+			resp.WriteHeader(http.StatusServiceUnavailable)
+			resp.Write([]byte(`{"error": "server_error", "error_description": "Unable to finalize token rotation; retry later"}`))
+			return
 		}
+		_ = DeleteCache(ctx, "oauth_refresh_"+tokenReq.RefreshToken)
 
 		if debug {
 			masked := newAccessToken
@@ -6728,7 +6836,14 @@ func HandleOAuthRevoke(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Invalidate access token and refresh token
-		_ = DeleteOAuthToken(ctx, token.AccessToken)
+		if err := DeleteOAuthToken(ctx, token.AccessToken); err != nil {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.Header().Set("Retry-After", "1")
+			resp.WriteHeader(http.StatusServiceUnavailable)
+			resp.Write([]byte(`{"error": "server_error", "error_description": "Unable to revoke OAuth token; retry later"}`))
+			return
+		}
 		if len(token.RefreshToken) > 0 {
 			_ = DeleteKey(ctx, "oauth_refresh", token.RefreshToken)
 		}
