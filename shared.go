@@ -10171,6 +10171,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+	} else {
+		DeleteCache(ctx, fmt.Sprintf("workflow_ops_cache_%s", workflow.ID))
 	}
 
 	org := &Org{}
