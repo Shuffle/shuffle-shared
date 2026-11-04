@@ -4983,15 +4983,10 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", orgId))
 	}
 
-	if entity == "notifications" {
+	if entity == "notifications" && len(value) > 0 {
 		notification, err := GetNotification(ctx, value)
-		if err == nil {
-			if len(notification.OrgId) > 0 {
-				DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.OrgId))
-			}
-			if len(notification.UserId) > 0 {
-				DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.UserId))
-			}
+		if err == nil && notification != nil {
+			removeNotificationFromCache(ctx, *notification)
 		} else if len(orgId) > 0 {
 			DeleteCache(ctx, fmt.Sprintf("notifications_%s", orgId))
 		}
@@ -10882,10 +10877,146 @@ func GetPipeline(ctx context.Context, triggerId string) (*Pipeline, error) {
 	return pipeline, nil
 }
 
+const defaultNotificationLimit = 100
+const notificationCacheTTLMinutes int32 = 30
+
+func cacheBytesFromInterface(cache interface{}) ([]byte, bool) {
+	switch v := cache.(type) {
+	case []uint8:
+		return []byte(v), true
+	case string:
+		return []byte(v), true
+	default:
+		return nil, false
+	}
+}
+
+func upsertNotificationInListCache(ctx context.Context, cacheKey string, notification Notification) {
+	if !project.CacheDb || len(cacheKey) == 0 || len(notification.Id) == 0 {
+		return
+	}
+
+	cache, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		return
+	}
+
+	cacheData, ok := cacheBytesFromInterface(cache)
+	if !ok {
+		DeleteCache(ctx, cacheKey)
+		return
+	}
+
+	var notifications []Notification
+	if err := json.Unmarshal(cacheData, &notifications); err != nil {
+		DeleteCache(ctx, cacheKey)
+		return
+	}
+
+	updated := false
+	for i := range notifications {
+		if notifications[i].Id == notification.Id {
+			notifications[i] = notification
+			updated = true
+			break
+		}
+	}
+
+	if !updated {
+		notifications = append([]Notification{notification}, notifications...)
+	}
+
+	sort.Slice(notifications, func(i, j int) bool {
+		return notifications[i].UpdatedAt > notifications[j].UpdatedAt
+	})
+
+	if len(notifications) > defaultNotificationLimit {
+		notifications = notifications[:defaultNotificationLimit]
+	}
+
+	data, err := json.Marshal(notifications)
+	if err != nil {
+		DeleteCache(ctx, cacheKey)
+		return
+	}
+
+	if err := SetCache(ctx, cacheKey, data, notificationCacheTTLMinutes); err != nil {
+		DeleteCache(ctx, cacheKey)
+	}
+}
+
+func removeNotificationFromListCache(ctx context.Context, cacheKey string, notificationId string) {
+	if !project.CacheDb || len(cacheKey) == 0 || len(notificationId) == 0 {
+		return
+	}
+
+	cache, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		return
+	}
+
+	cacheData, ok := cacheBytesFromInterface(cache)
+	if !ok {
+		DeleteCache(ctx, cacheKey)
+		return
+	}
+
+	var notifications []Notification
+	if err := json.Unmarshal(cacheData, &notifications); err != nil {
+		DeleteCache(ctx, cacheKey)
+		return
+	}
+
+	filtered := make([]Notification, 0, len(notifications))
+	for _, n := range notifications {
+		if n.Id != notificationId {
+			filtered = append(filtered, n)
+		}
+	}
+
+	data, err := json.Marshal(filtered)
+	if err != nil {
+		DeleteCache(ctx, cacheKey)
+		return
+	}
+
+	if err := SetCache(ctx, cacheKey, data, notificationCacheTTLMinutes); err != nil {
+		DeleteCache(ctx, cacheKey)
+	}
+}
+
+func removeNotificationFromCache(ctx context.Context, notification Notification) {
+	nameKey := "notifications"
+	if len(notification.Id) > 0 {
+		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, notification.Id))
+	}
+	if notification.Personal {
+		if len(strings.TrimSpace(notification.UserId)) > 0 {
+			removeNotificationFromListCache(ctx, fmt.Sprintf("%s_%s", nameKey, strings.TrimSpace(notification.UserId)), notification.Id)
+		}
+		return
+	}
+	if len(strings.TrimSpace(notification.OrgId)) > 0 {
+		removeNotificationFromListCache(ctx, fmt.Sprintf("%s_%s", nameKey, strings.TrimSpace(notification.OrgId)), notification.Id)
+	}
+}
+
 func GetNotification(ctx context.Context, id string) (*Notification, error) {
 	nameKey := "notifications"
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			if cacheData, ok := cacheBytesFromInterface(cache); ok {
+				curFile := &Notification{}
+				if err := json.Unmarshal(cacheData, curFile); err == nil && len(curFile.Id) > 0 {
+					return curFile, nil
+				}
+			}
+		}
+	}
+
 	curFile := &Notification{}
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
@@ -10922,6 +11053,12 @@ func GetNotification(ctx context.Context, id string) (*Notification, error) {
 			return &Notification{}, err
 		}
 
+	}
+
+	if project.CacheDb && len(curFile.Id) > 0 {
+		if data, err := json.Marshal(curFile); err == nil {
+			_ = SetCache(ctx, cacheKey, data, notificationCacheTTLMinutes)
+		}
 	}
 
 	return curFile, nil
@@ -11069,13 +11206,22 @@ func SetNotification(ctx context.Context, notification Notification) error {
 		}
 	}
 
-	if len(notification.OrgId) > 0 {
-		cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.OrgId)
-		DeleteCache(ctx, cacheKey)
+	if project.CacheDb && len(notification.Id) > 0 {
+		if data, err := json.Marshal(notification); err == nil {
+			_ = SetCache(ctx, fmt.Sprintf("%s_%s", nameKey, notification.Id), data, notificationCacheTTLMinutes)
+		}
 	}
-	if len(notification.UserId) > 0 {
-		cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.UserId)
-		DeleteCache(ctx, cacheKey)
+
+	if notification.Personal {
+		userId := strings.TrimSpace(notification.UserId)
+		if len(userId) > 0 {
+			cacheKey := fmt.Sprintf("%s_%s", nameKey, userId)
+			upsertNotificationInListCache(ctx, cacheKey, notification)
+		}
+	} else if len(strings.TrimSpace(notification.OrgId)) > 0 {
+		orgId := strings.TrimSpace(notification.OrgId)
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+		upsertNotificationInListCache(ctx, cacheKey, notification)
 	}
 
 	return nil
@@ -11288,10 +11434,11 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &notifications)
-			if err == nil {
-				return notifications, nil
+			if cacheData, ok := cacheBytesFromInterface(cache); ok {
+				err = json.Unmarshal(cacheData, &notifications)
+				if err == nil {
+					return notifications, nil
+				}
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
@@ -11381,7 +11528,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 
 		notifications = []Notification{}
 		for _, hit := range wrapped.Hits.Hits {
-			if hit.Source.Personal || len(hit.Source.UserId) > 0 {
+			if hit.Source.Personal {
 				continue
 			}
 
@@ -11391,24 +11538,13 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-updated_at").Limit(250)
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-updated_at").Limit(defaultNotificationLimit)
 		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 
 		if err != nil && len(notifications) == 0 {
-			data, err := json.Marshal(notifications)
-			if err != nil {
-				log.Printf("[ERROR] Failed marshalling notification cache (2): %s", err)
-				return notifications, nil
-			}
-
-			err = SetCache(ctx, cacheKey, data, 5)
-			if err != nil {
-				log.Printf("[ERROR] Failed updating notification cache (2): %s", err)
-			}
-
 			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
 				q = q.Limit(50)
-				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
+				_, err = project.Dbclient.GetAll(ctx, q, &notifications)
 				if err != nil && len(notifications) == 0 {
 					return notifications, err
 				}
@@ -11417,8 +11553,8 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			} else if strings.Contains(fmt.Sprintf("%s", err), "no matching index found") || strings.Contains(fmt.Sprintf("%s", err), "not ready to serve") {
 				log.Printf("[ERROR] Failed loading notifications based on index: %s", err)
 
-				q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(199)
-				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
+				q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(defaultNotificationLimit)
+				_, err = project.Dbclient.GetAll(ctx, q, &notifications)
 				if err != nil && len(notifications) == 0 {
 					if !strings.Contains(err.Error(), `cannot load field`) {
 						return notifications, err
@@ -11432,7 +11568,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 
 		filtered := []Notification{}
 		for _, notification := range notifications {
-			if notification.Personal || len(notification.UserId) > 0 {
+			if notification.Personal {
 				continue
 			}
 			filtered = append(filtered, notification)
@@ -11447,10 +11583,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			return notifications, nil
 		}
 
-		// Set it low, because Notifications are very often being set
-		// in certain cases. This means lowering this, will increase cache util
-		// while not clearing it on every SetNotification()
-		err = SetCache(ctx, cacheKey, data, 5)
+		err = SetCache(ctx, cacheKey, data, notificationCacheTTLMinutes)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating notification cache: %s", err)
 		}
@@ -11467,10 +11600,11 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &notifications)
-			if err == nil {
-				return notifications, nil
+			if cacheData, ok := cacheBytesFromInterface(cache); ok {
+				err = json.Unmarshal(cacheData, &notifications)
+				if err == nil {
+					return notifications, nil
+				}
 			}
 		}
 	}
@@ -11564,7 +11698,7 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(250)
+		q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(defaultNotificationLimit)
 
 		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 		if err != nil && len(notifications) == 0 {
@@ -11585,7 +11719,7 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 	if project.CacheDb {
 		data, err := json.Marshal(notifications)
 		if err == nil {
-			err = SetCache(ctx, cacheKey, data, 5)
+			err = SetCache(ctx, cacheKey, data, notificationCacheTTLMinutes)
 			if err != nil {
 				log.Printf("[WARNING] Failed updating user notification cache: %s", err)
 			}
