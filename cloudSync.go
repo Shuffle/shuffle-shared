@@ -2661,7 +2661,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		return body, debugUrl, appName, []string{}, "", err
 	}
 
-	if builderRequest, ok := getWorkflowBuilderRequest(decision); ok {
+	if builderRequest, ok := getInProcessAgentRequest(execution, decision); ok {
 		return runWorkflowBuilderDecisionInProcess(execution, decision, builderRequest)
 	}
 
@@ -3048,9 +3048,12 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			}
 		} else {
 			// Singul handler
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG][%s] Running agent decision %s with action '%s' and tool '%s'", execution.ExecutionId, decision.RunDetails.Id, decision.Action, decision.Tool)
 			}
+
+			// Checked before running, as the handler may rename decision.Tool
+			_, ranInProcess := getInProcessAgentRequest(execution, decision)
 			rawResponse, debugUrl, appname, categoryLabels, actionName, runError := RunAgentDecisionSingulActionHandler(execution, decision, agentOutput.ExecutionMode)
 
 			if len(appname) > 0 {
@@ -3073,8 +3076,14 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 				}
 			} 
 
+			// In-process actions already ran, delay or not: nothing will come back later to finish them
+			if parsedDelay > 0 && ranInProcess {
+				log.Printf("[DEBUG][%s] AI Agent: ignored delay %ds on in-process action '%s', it ran immediately", execution.ExecutionId, parsedDelay, decision.Action)
+				parsedDelay = 0
+			}
+
 			// Handles the case where the action is delayed on purpose (scheduled)
-			if parsedDelay > 0 { 
+			if parsedDelay > 0 {
 				decision.RunDetails.Status = "WAITING"
 
 			} else if runError != nil {

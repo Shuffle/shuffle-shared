@@ -9368,6 +9368,8 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 		// Actively used keys
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_2", nameKey, workflow.ID))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflow.ID))
+		// Agent chat revert
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflow.ID))
 	}
 
 	return nil
@@ -18330,11 +18332,17 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 
 		//return executions, "", errors.New("Not implemented yet")
 	} else {
-		query := datastore.NewQuery(nameKey).Filter("execution_org=", orgId).Order("-started_at").Limit(5)
+		// Light searches take the whole page at once: 5 per round trip made 50 agent chats ~10 trips
+		pageSize := 5
+		if search.Light {
+			pageSize = maxLimit
+		}
+
+		query := datastore.NewQuery(nameKey).Filter("execution_org=", orgId).Order("-started_at").Limit(pageSize)
 
 		// This is a trick for SupportAccess users
 		if len(orgId) == 0 {
-			query = datastore.NewQuery(nameKey).Order("-started_at").Limit(5)
+			query = datastore.NewQuery(nameKey).Order("-started_at").Limit(pageSize)
 		}
 
 		if len(search.WorkflowId) > 0 {
@@ -18532,7 +18540,8 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 			continue
 		}
 
-		if execution.Status == "EXECUTING" {
+		// A light list doesn't show live status; each refresh is another execution read
+		if execution.Status == "EXECUTING" && !search.Light {
 			// Get the right one from cache
 			newexec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
 			if err == nil {

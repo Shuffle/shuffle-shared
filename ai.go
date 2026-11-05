@@ -8169,6 +8169,16 @@ The user sees the "reason" of every decision as progress while you work, so writ
 
 Only ask the user for information when it is genuinely unavailable through any allowed action. Use get_minimal_workflow to fetch the latest workflow state whenever you need to inspect or verify what is currently in the workflow — prefer this over relying on stale context.
 
+Runs, versions and checks (all on shuffle_workflows_builder, all for this workflow only):
+- When the user says a run failed, didn't work, or asks you to check it, call get_workflow_run FIRST (execution_id defaults to latest_failed). Base your fix on the real errors and on "references", which show what each $variable resolved to. Don't guess. Use search_workflow_runs to find a specific run (by status, node, text, time or source).
+- Errors inside a run (HTTP 401/403, invalid tokens, credentials) are the workflow's errors, not failures of your own tool call: don't stop for them. Credential errors can't be fixed by editing nodes: get the app's setup_url with post_get_app_actions_summary and ask the user to authenticate.
+- A run that started before the workflow was last saved used an older version. Ask the user to re-run before judging your fix.
+- put_agent_update returns "validation". Fix its errors before you tell the user you're done.
+- To see or undo changes, use list_workflow_revisions, compare_workflow and revert_workflow. Before reverting the whole workflow, ask the user unless they asked you to revert; then call it with confirm=true.
+- Every one of these tools returns "next". When unsure what to do, follow it.
+- Your messages and finish output render in a chat that colors two markdown forms, so use them for results the user must notice: a quote starting with [!ERROR], [!WARNING] or [!SUCCESS] on its own line (e.g. "> [!ERROR]" then "> Google Sheets rejected the body: HTTP 400"), and statuses as inline code, wrapped in single backticks (FAILED, SUCCESS, HTTP 400). Use at most one or two callouts per message; plain text for everything else.
+- shuffle_workflows_builder actions run immediately, so never set "delay" on them. After post_run_workflow, check the run with get_workflow_run; if it's still running after one more check, finish and give the user the run ID instead of waiting.
+
 Payload Structure
 
 Send your incremental steps in the operations array. You can send one operation at a time, or multiple if you are building a connected sequence.
@@ -9694,6 +9704,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							}
 						}
 					}
+
+					// Run history, versions and validation, for the workflow builder agent only (shared.go)
+					if strings.Contains(trimmedActionStr, agentToolBuilderName) && isWorkflowBuilderTemplate(template) {
+						sortedAppActions = withAgentWorkflowToolActions(sortedAppActions)
+					}
 				}
 
 				// Sort alphabetically so the action list is byte-for-byte identical across every LLM loop, keeping the prompt cache prefix stable.
@@ -9853,6 +9868,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	oldAgentOutput := AgentOutput{}
 	previousAnswers := ""
 	continuationMessage := "" // Tracks user continuation text (new message sent to a finished agent)
+	workflowChangedNote := ""  // Set on a continuation when the edited workflow changed outside the chat
 
 	marshalledDecisions := []byte{}
 	relevantDecisions := []AgentDecision{}
@@ -10190,6 +10206,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 						continuationMessage = field.Answer
 						foundContinuation = true
+
+						// The workflow may have been reverted or edited outside the chat since the agent last
+						// looked. Without being told, it answers the follow-up from its memory of the old one.
+						isWorkflowEdit := template == "workflow-edit" || template == "edit-workflow" || template == "build-workflows" || template == "workflow-builder"
+						if isWorkflowEdit && len(execution.ExecutionArgument) == 36 && AgentWorkflowChangedSinceSeen(ctx, execution.ExecutionArgument) {
+							workflowChangedNote = fmt.Sprintf("SYSTEM NOTE: Workflow %s was changed outside this chat since you last read or edited it (for example reverted or edited by the user). What you saw before may be out of date. Call get_minimal_workflow before answering about the workflow or changing it.", execution.ExecutionArgument)
+							log.Printf("[INFO][%s] AI Agent continuation: workflow %s changed outside the chat, telling the agent to re-read it", execution.ExecutionId, execution.ExecutionArgument)
+						}
 						break
 					}
 				}
@@ -10636,6 +10660,12 @@ data_filter:
 			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 				Role:    openai.ChatMessageRoleUser,
 				Content: fmt.Sprintf("ORIGINAL REQUEST (already completed, visible in HISTORY): %s", userMessage),
+			})
+		}
+		if len(workflowChangedNote) > 0 {
+			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleUser,
+				Content: workflowChangedNote,
 			})
 		}
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
@@ -11238,6 +11268,15 @@ data_filter:
 
 		// Parse decisions using the refactored helper function
 		mappedDecisions, parsingErr := parseAgentDecisions(choicesString)
+
+		// In-process actions run right away and never honor a delay (getInProcessAgentRequest).
+		// Cleared here, before the decision is stored, so nothing treats it as scheduled.
+		for idx := range mappedDecisions {
+			if _, inProcess := getInProcessAgentRequest(execution, mappedDecisions[idx]); inProcess && len(mappedDecisions[idx].Delay) > 0 && mappedDecisions[idx].Delay != "0" {
+				mappedDecisions[idx].Delay = "0"
+			}
+		}
+
 		if len(mappedDecisions) == 0 {
 			if parsingErr == nil {
 				parsingErr = errors.New("no valid AgentDecision array or objects found in output")

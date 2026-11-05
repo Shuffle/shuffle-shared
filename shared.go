@@ -7256,6 +7256,9 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// The first revision, so an agent chat started before any save can still be reverted
+	SetWorkflowRevision(ctx, workflow)
+
 	// Cleans up cache for the users
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err == nil {
@@ -10138,7 +10141,16 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Name: user.ActiveOrg.Name,
 	}
 
-	go SetWorkflowRevision(ctx, workflow)
+	// Not in a goroutine: GetWorkflow copies triggers from the latest revision when a
+	// workflow has none, so a stale one resurrects triggers this save just removed
+	SetWorkflowRevision(ctx, workflow)
+
+	// The agent reads its unsaved draft before the saved workflow, so a draft from before
+	// this save would hide it from the agent, and its next save would overwrite this one
+	DeleteCache(ctx, fmt.Sprintf("workflow_ops_cache_%s", workflow.ID))
+	// Editors that load the workflow from now on must not replay stream edits from before
+	// this save: they're in it, or it undid them (a revert)
+	markStreamSaved(ctx, workflow.ID)
 
 	go func() {
 		err = SetGitWorkflow(context.Background(), workflow, org)
@@ -28324,6 +28336,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			found = true
 
+			// Use the environment's own spelling, so "cloud" and "Cloud" don't count as two environments below
+			action.Environment = env.Name
+			workflowExecution.Workflow.Actions[actionIndex].Environment = env.Name
+
 			if env.Type == "cloud" || strings.ToLower(env.Name) == "cloud" {
 				cloudExec = true
 			} else if env.Type == "onprem" {
@@ -34542,6 +34558,47 @@ func AssignAuthEverywhere(ctx context.Context, auth *AppAuthenticationStorage, u
 	return nil
 }
 
+// lightWorkflowRun keeps what a list of runs shows: ids, status, times, the argument, and
+// for agent runs only the first message (results otherwise carry the whole conversation)
+func lightWorkflowRun(run WorkflowExecution) WorkflowExecution {
+	light := WorkflowExecution{
+		Type:              run.Type,
+		Status:            run.Status,
+		ExecutionId:       run.ExecutionId,
+		ExecutionOrg:      run.ExecutionOrg,
+		OrgId:             run.OrgId,
+		WorkflowId:        run.WorkflowId,
+		Authorization:     run.Authorization,
+		StartedAt:         run.StartedAt,
+		CompletedAt:       run.CompletedAt,
+		ExecutionSource:   run.ExecutionSource,
+		ExecutionArgument: run.ExecutionArgument,
+		Workflow:          Workflow{ID: run.Workflow.ID, Name: run.Workflow.Name},
+	}
+
+	for _, result := range run.Results {
+		agent := struct {
+			OriginalInput string `json:"original_input"`
+			Input         string `json:"input"`
+		}{}
+		if json.Unmarshal([]byte(result.Result), &agent) != nil || (len(agent.OriginalInput) == 0 && len(agent.Input) == 0) {
+			continue
+		}
+
+		summary, _ := json.Marshal(agent)
+		light.Results = []ActionResult{{
+			Action:      Action{ID: result.Action.ID, Name: result.Action.Name, AppName: result.Action.AppName},
+			Status:      result.Status,
+			Result:      string(summary),
+			StartedAt:   result.StartedAt,
+			CompletedAt: result.CompletedAt,
+		}}
+		break
+	}
+
+	return light
+}
+
 func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -34760,6 +34817,12 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 		})
 
 		workflowSearchResult.Runs = allRuns
+	}
+
+	if search.Light {
+		for i := range workflowSearchResult.Runs {
+			workflowSearchResult.Runs[i] = lightWorkflowRun(workflowSearchResult.Runs[i])
+		}
 	}
 
 	respBody, err := json.Marshal(workflowSearchResult)
@@ -38186,6 +38249,65 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(responseData)
 }
 
+// agentWorkflowFingerprint is what the agent's picture of a workflow depends on: its nodes, their
+// parameter values and the branches. Positions and metadata are left out, so saving it unchanged
+// (the editor saves before every chat message) doesn't count as a change.
+func agentWorkflowFingerprint(workflow Workflow) string {
+	paramValues := func(params []WorkflowAppActionParameter) string {
+		values := []string{}
+		for _, param := range params {
+			values = append(values, param.Name+"="+param.Value)
+		}
+		sort.Strings(values)
+		return strings.Join(values, "\x00")
+	}
+
+	parts := []string{}
+	for _, action := range workflow.Actions {
+		parts = append(parts, fmt.Sprintf("a|%s|%s|%s|%s|%x", action.ID, action.Label, action.AppName, action.Name, md5.Sum([]byte(paramValues(action.Parameters)))))
+	}
+	for _, trigger := range workflow.Triggers {
+		parts = append(parts, fmt.Sprintf("t|%s|%s|%s|%x", trigger.ID, trigger.Label, trigger.TriggerType, md5.Sum([]byte(paramValues(trigger.Parameters)))))
+	}
+	for _, branch := range workflow.Branches {
+		parts = append(parts, fmt.Sprintf("b|%s|%s", branch.SourceID, branch.DestinationID))
+	}
+	sort.Strings(parts)
+	return fmt.Sprintf("%x", md5.Sum([]byte(strings.Join(parts, "\n"))))
+}
+
+func agentWorkflowSeenKey(workflowID string) string {
+	return fmt.Sprintf("agent_workflow_seen_%s", workflowID)
+}
+
+// rememberAgentWorkflowView records what the agent last read or wrote, so a follow-up
+// message can tell whether the workflow changed outside the chat since
+func rememberAgentWorkflowView(ctx context.Context, workflow Workflow) {
+	if err := SetCache(ctx, agentWorkflowSeenKey(workflow.ID), []byte(agentWorkflowFingerprint(workflow)), 60*24); err != nil {
+		log.Printf("[WARNING] Failed remembering the agent's view of workflow %s: %s", workflow.ID, err)
+	}
+}
+
+// AgentWorkflowChangedSinceSeen: whether the saved workflow differs from what the agent last
+// read or wrote. An unsaved draft of the agent's own counts as what it saw. Unknown counts as changed.
+func AgentWorkflowChangedSinceSeen(ctx context.Context, workflowID string) bool {
+	if draft, err := GetCache(ctx, fmt.Sprintf("workflow_ops_cache_%s", workflowID)); err == nil && draft != nil {
+		return false
+	}
+
+	seen, err := GetCache(ctx, agentWorkflowSeenKey(workflowID))
+	seenBytes, ok := seen.([]byte)
+	if err != nil || !ok || len(seenBytes) == 0 {
+		return true
+	}
+
+	workflow, err := GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return true
+	}
+	return agentWorkflowFingerprint(*workflow) != string(seenBytes)
+}
+
 func GetWorkflowMinimal(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -38257,6 +38379,8 @@ func GetWorkflowMinimal(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+
+	rememberAgentWorkflowView(ctx, *workflow)
 
 	// Build minimal workflow
 	minimalWorkflow := BuildMinimalWorkflow(workflow)
@@ -38623,14 +38747,19 @@ type workflowBuilderRequest struct {
 	Path    string
 	Body    []byte
 	Handler http.HandlerFunc
+
+	// Builder agent tools (WORKFLOW BUILDER AGENT TOOLS section) need the agent's session, so their handler is set when run
+	AgentTool   string
+	LegacyAlias bool
 }
 
 func normalizeToolName(name string) string {
 	return strings.ToLower(strings.NewReplacer("_", "", " ", "", "-", "").Replace(strings.TrimSpace(name)))
 }
 
-// Only the actions that read or write workflow content. Anything else the
-// builder app can do (running workflows, reading executions) keeps the normal app path.
+// Only the actions that read or write workflow content, plus the builder agent's
+// run/version/validation tools (WORKFLOW BUILDER AGENT TOOLS section). Anything else
+// the builder app can do (running workflows) keeps the normal app path.
 func getWorkflowBuilderRequest(decision AgentDecision) (workflowBuilderRequest, bool) {
 	action := normalizeToolName(decision.Action)
 	tool := normalizeToolName(decision.Tool)
@@ -38657,6 +38786,17 @@ func getWorkflowBuilderRequest(decision AgentDecision) (workflowBuilderRequest, 
 		}
 
 		fields[normalizeToolName(field.Key)] = value
+	}
+
+	if tool, legacyAlias, ok := findAgentWorkflowTool(action); ok {
+		body, _ := json.Marshal(fields)
+		return workflowBuilderRequest{
+			Method:      "POST",
+			Path:        fmt.Sprintf("/api/v1/workflows/agent-tools/%s", tool.Name),
+			Body:        body,
+			AgentTool:   tool.Name,
+			LegacyAlias: legacyAlias,
+		}, true
 	}
 
 	switch action {
@@ -38816,6 +38956,10 @@ func runWorkflowBuilderDecisionInProcess(execution WorkflowExecution, decision A
 	if err != nil {
 		log.Printf("[ERROR][%s] AI Agent: Failed finding a user to run workflow builder action '%s' as: %s", execution.ExecutionId, decision.Action, err)
 		return nil, "", workflowBuilderAppName, []string{}, decision.Action, err
+	}
+
+	if len(builderRequest.AgentTool) > 0 {
+		builderRequest.Handler = agentWorkflowToolHandler(execution, builderRequest.AgentTool)
 	}
 
 	result := runWorkflowBuilderRequest(builderRequest, apikey, execution.ExecutionOrg)
@@ -39008,17 +39152,18 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	cacheErr = SetCache(ctx, cacheKey, workflowBytes, 1800)
+	cacheErr = SetCache(ctx, cacheKey, workflowBytes, 30)
 	if cacheErr != nil {
 		log.Printf("[WARNING] Failed caching workflow: %s", cacheErr)
 		// Don't fail the request, cache is best-effort
 	}
+	rememberAgentWorkflowView(ctx, *workflow)
 
 	if shouldSaveDB {
 		env := workflow.ExecutionEnvironment
 		if len(env) == 0 {
 			if project.Environment == "cloud" {
-				env = "cloud"
+				env = "Cloud" // the name the editor and the cloud environment use
 			} else {
 				env = "Shuffle"
 			}
@@ -39086,7 +39231,9 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 			return
 		}
 
-		go SetWorkflowRevision(context.Background(), *workflow)
+		SetWorkflowRevision(ctx, *workflow)
+		// As saved, after the hydration above changed it
+		rememberAgentWorkflowView(ctx, *workflow)
 
 		// Invalidate the ops cache now that DB is the real source.
 		if delErr := DeleteCache(ctx, cacheKey); delErr != nil {
@@ -39202,6 +39349,7 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		Workflow:          minWf,
 		IDMapping:         tempIDMap, // Include temp_id → real_id mappings
 		CacheExpiresIn:    1800,
+		Validation:        validateWorkflowForAgent(ctx, workflow, agentLatestRun(ctx, workflowID)),
 	}
 
 	resp.Header().Set("Content-Type", "application/json")
@@ -39210,7 +39358,7 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 	resp.Write(responseData)
 
 
-	go streamWorkflowOperations(ctx, request, workflow.ID, streamOps)
+	go streamWorkflowOperations(ctx, request, workflow.ID, streamOps, shouldSaveDB)
 
 	if debug {
 		log.Printf("[INFO] Applied %d operations to workflow %s for user %s", len(setOpsReq.Operations), workflowID, user.Username)
@@ -39218,7 +39366,8 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 }
 
 // streamWorkflowOperations sends stream ops to the streaming API endpoint.
-func streamWorkflowOperations(ctx context.Context, request *http.Request, workflowID string, streamOps []StreamWorkflowOperation) {
+// saved: the ops were saved to the workflow, so editors loading it later mustn't replay them
+func streamWorkflowOperations(ctx context.Context, request *http.Request, workflowID string, streamOps []StreamWorkflowOperation, saved bool) {
 	if len(streamOps) == 0 {
 		return
 	}
@@ -39242,6 +39391,11 @@ func streamWorkflowOperations(ctx context.Context, request *http.Request, workfl
 
 	if err := sendStreamOperations(ctx, request, streamURL, streamOps); err != nil {
 		log.Printf("[WARNING] Failed to stream %d ops for workflow %s: %s", len(streamOps), workflowID, err)
+	}
+
+	// After they're in the stream, so the baseline covers them
+	if saved {
+		markStreamSaved(ctx, workflowID)
 	}
 }
 
@@ -40101,25 +40255,16 @@ func opMoveNode(wf *Workflow, op *WorkflowOperation) error {
 func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
 	nodeType := strings.ToLower(strings.TrimSpace(op.NodeType))
 
-	if nodeType == "action" {
+	// node_type picks where to look; without it, both
+	if nodeType != "trigger" && findActionIndexByID(wf, op.ID) != -1 {
 		return deleteActionFromWorkflow(wf, op.ID)
-	} else if nodeType == "trigger" {
+	}
+	if nodeType != "action" && findTriggerIndexByID(wf, op.ID) != -1 {
 		return deleteTriggerFromWorkflow(wf, op.ID)
 	}
 
-	// Auto-detect by searching Actions and Triggers when node_type is omitted
-	if idx := findActionIndexByID(wf, op.ID); idx != -1 {
-		return deleteActionFromWorkflow(wf, op.ID)
-	}
-	if idx := findTriggerIndexByID(wf, op.ID); idx != -1 {
-		return deleteTriggerFromWorkflow(wf, op.ID)
-	}
-
-	// Already gone, idempotent no-op (e.g. cascade from a prior delete)
-	if debug {
-		log.Printf("[DEBUG] delete_node: node %s not found in actions or triggers - skipping", op.ID)
-	}
-	return nil
+	// An error, not a silent success: the agent must see that what it wanted removed isn't there
+	return fmt.Errorf("node %s not found in the workflow", op.ID)
 }
 
 func deleteActionFromWorkflow(wf *Workflow, id string) error {
@@ -40526,6 +40671,2612 @@ func canReach(wf *Workflow, from, to string) bool {
 
 	return false
 }
+
+// =============================================================================
+// WORKFLOW BUILDER AGENT TOOLS: run history, saved versions, validation
+// =============================================================================
+//
+// Extra actions on the shuffle_workflows_builder tool. They run in-process like
+// put_agent_update (see getWorkflowBuilderRequest), only for the workflow builder
+// agent, and only on the workflow its session edits.
+//
+//   search_workflow_runs     find runs by status, failing node, text, time window, source
+//   get_workflow_run         one run: real status per node, errors, what each $ref resolved to
+//   list_workflow_revisions  saved versions with what changed in each
+//   compare_workflow         diff two versions (current, before_my_changes, a run, a revision)
+//   revert_workflow          restore a saved version, whole workflow or single nodes
+//   validate_workflow        static checks, also attached to every put_agent_update response
+//
+// Every response carries "next": what to call or do next. Wrong calls (unknown node,
+// wrong ID, empty time window) answer with a nudge instead of a bare error, and with
+// HTTP 200, as a failed call makes the agent retry the same thing.
+//
+// Sections below: registry & dispatch -> session scope -> run analysis -> $ref
+// resolution -> run tools -> version tools -> validation -> small helpers.
+
+const (
+	agentToolBuilderName    = "shuffle_workflows_builder"
+	agentToolAppsName       = "shuffle_apps"
+	agentToolDefaultWindow  = 24 * time.Hour
+	agentToolMaxRunsScanned = 50
+	agentToolStuckAfter     = 10 * time.Minute
+
+	// The first node normally returns within seconds; a cold start takes under a minute
+	agentToolNotStartedAfter = 2 * time.Minute
+)
+
+// ----- Registry & dispatch -----
+
+type agentWorkflowTool struct {
+	Name        string
+	Aliases     []string // older action names routed here, for the builder agent only
+	Description string   // the prompt cuts descriptions at 130 characters
+	Params      []WorkflowAppActionParameter
+	Run         func(tc agentToolContext, fields map[string]string) map[string]interface{}
+}
+
+type agentToolContext struct {
+	Ctx            context.Context
+	Request        *http.Request
+	User           User
+	Workflow       *Workflow // saved version of the workflow this agent session edits
+	AgentExecution WorkflowExecution
+}
+
+func agentToolParam(name, description string, required bool) WorkflowAppActionParameter {
+	return WorkflowAppActionParameter{Name: name, Description: description, Required: required}
+}
+
+func getAgentWorkflowTools() []agentWorkflowTool {
+	return []agentWorkflowTool{
+		{
+			Name:        "search_workflow_runs",
+			Description: "Find runs of this workflow (default: last 24h, 5 runs) with each run's real status and failing nodes",
+			Params: []WorkflowAppActionParameter{
+				agentToolParam("status", "failed|aborted|stuck|finished|executing|any", false),
+				agentToolParam("has_errors", "true: only runs where a node failed, even if the run says FINISHED", false),
+				agentToolParam("node", "node label or ID: runs where it ran", false),
+				agentToolParam("contains", "text to find in node results and errors", false),
+				agentToolParam("since", "e.g. 1h, 24h, 7d, or a unix timestamp", false),
+				agentToolParam("until", "e.g. 1h or a unix timestamp", false),
+				agentToolParam("source", "webhook|manual|schedule|subflow|agent", false),
+				agentToolParam("limit", "1-20, default 5", false),
+			},
+			Run: runAgentSearchWorkflowRuns,
+		},
+		{
+			Name:        "get_workflow_run",
+			Aliases:     []string{"get_workflow_execution", "post_check_execution_results"},
+			Description: "Explain one run: per-node real status, errors, what each $variable resolved to. execution_id: latest_failed|latest|<id>",
+			Params: []WorkflowAppActionParameter{
+				agentToolParam("execution_id", "latest_failed (default), latest, or a run ID", false),
+				agentToolParam("node", "node label or ID for full detail on one node", false),
+				agentToolParam("max_chars", "max characters per result, default 1500, max 8000", false),
+			},
+			Run: runAgentGetWorkflowRun,
+		},
+		{
+			Name:        "list_workflow_revisions",
+			Description: "Saved versions of this workflow, newest first, with what changed in each (default: last 24h)",
+			Params: []WorkflowAppActionParameter{
+				agentToolParam("since", "e.g. 24h, 7d, or a unix timestamp", false),
+				agentToolParam("limit", "1-30, default 10", false),
+			},
+			Run: runAgentListWorkflowRevisions,
+		},
+		{
+			Name:        "compare_workflow",
+			Description: "Diff two versions. from/to: current|before_my_changes|last_successful_run|<revision_id>|<execution_id>",
+			Params: []WorkflowAppActionParameter{
+				agentToolParam("from", "default before_my_changes", false),
+				agentToolParam("to", "default current", false),
+				agentToolParam("node", "only show changes to this node", false),
+			},
+			Run: runAgentCompareWorkflow,
+		},
+		{
+			Name:        "revert_workflow",
+			Description: "Restore a saved version (to: same values as compare_workflow). nodes=[labels] for only some. Whole workflow needs confirm=true",
+			Params: []WorkflowAppActionParameter{
+				agentToolParam("to", "before_my_changes, last_successful_run, a revision_id or an execution_id", true),
+				agentToolParam("nodes", `optional list of node labels, e.g. ["Create_List"]`, false),
+				agentToolParam("confirm", "true to revert the whole workflow", false),
+			},
+			Run: runAgentRevertWorkflow,
+		},
+		{
+			Name:        "validate_workflow",
+			Description: "Check for broken $references, empty required params, missing credentials, unreachable nodes, hardcoded secrets",
+			Params: []WorkflowAppActionParameter{
+				agentToolParam("node", "only report issues for this node", false),
+			},
+			Run: runAgentValidateWorkflow,
+		},
+	}
+}
+
+// Returns the tool for a normalized action name, and whether it matched an older alias
+func findAgentWorkflowTool(action string) (agentWorkflowTool, bool, bool) {
+	action = normalizeToolName(action)
+	for _, tool := range getAgentWorkflowTools() {
+		if normalizeToolName(tool.Name) == action {
+			return tool, false, true
+		}
+
+		for _, alias := range tool.Aliases {
+			if normalizeToolName(alias) == action {
+				return tool, true, true
+			}
+		}
+	}
+
+	return agentWorkflowTool{}, false, false
+}
+
+// Adds the agent tools to the builder's action list in the prompt. The older
+// execution actions are hidden there, as get_workflow_run now answers them.
+func withAgentWorkflowToolActions(actions []WorkflowAppAction) []WorkflowAppAction {
+	hidden := map[string]bool{}
+	for _, tool := range getAgentWorkflowTools() {
+		hidden[normalizeToolName(tool.Name)] = true
+		for _, alias := range tool.Aliases {
+			hidden[normalizeToolName(alias)] = true
+		}
+	}
+
+	kept := []WorkflowAppAction{}
+	for _, action := range actions {
+		if !hidden[normalizeToolName(action.Name)] {
+			kept = append(kept, action)
+		}
+	}
+
+	for _, tool := range getAgentWorkflowTools() {
+		kept = append(kept, WorkflowAppAction{
+			Name:        tool.Name,
+			Label:       tool.Name,
+			Description: tool.Description,
+			Parameters:  tool.Params,
+		})
+	}
+
+	return kept
+}
+
+// Older aliases keep the normal app path for agents that aren't the workflow builder
+func (builderRequest workflowBuilderRequest) usableBy(execution WorkflowExecution) bool {
+	return !builderRequest.LegacyAlias || isWorkflowBuilderAgent(execution)
+}
+
+// The decision runs inside the backend instead of as an app call. Such decisions run
+// right away and ignore "delay", so they must never be left WAITING for a scheduled result.
+func getInProcessAgentRequest(execution WorkflowExecution, decision AgentDecision) (workflowBuilderRequest, bool) {
+	builderRequest, ok := getWorkflowBuilderRequest(decision)
+	if !ok || !builderRequest.usableBy(execution) {
+		return workflowBuilderRequest{}, false
+	}
+
+	return builderRequest, true
+}
+
+// Field names the model tends to use instead of the documented ones. Keys are normalized.
+var agentToolFieldAliases = map[string]string{
+	"id": "executionid", "runid": "executionid", "run": "executionid", "execution": "executionid", "exec": "executionid", "executionids": "executionid",
+	"nodeid": "node", "nodelabel": "node", "nodename": "node", "label": "node", "actionid": "node", "actionlabel": "node", "step": "node", "nodes": "nodes",
+	"query": "contains", "search": "contains", "text": "contains", "q": "contains", "error": "contains",
+	"count": "limit", "amount": "limit", "max": "limit", "maxresults": "limit",
+	"maxlength": "maxchars", "chars": "maxchars",
+	"revision": "to", "revisionid": "to", "target": "to", "version": "to",
+	"labels": "nodes", "nodelist": "nodes",
+	"haserror": "haserrors", "errorsonly": "haserrors", "onlyerrors": "haserrors",
+	"after": "since", "before": "until",
+	"trigger": "source", "triggertype": "source",
+}
+
+// Normalizes the decision's fields to the tool's parameter names. Unknown fields
+// are reported back, and a workflow_id other than the session's is flagged.
+func normalizeAgentToolFields(raw map[string]string, tool agentWorkflowTool) (map[string]string, []string, string) {
+	merged := map[string]string{}
+	for key, value := range raw {
+		merged[normalizeToolName(key)] = value
+	}
+
+	// The model often puts every field inside "body"
+	if body := strings.TrimSpace(merged["body"]); strings.HasPrefix(body, "{") {
+		parsed := map[string]interface{}{}
+		if json.Unmarshal([]byte(body), &parsed) == nil {
+			for key, value := range parsed {
+				key = normalizeToolName(key)
+				if _, exists := merged[key]; exists && key != "body" {
+					continue
+				}
+
+				if stringValue, ok := value.(string); ok {
+					merged[key] = stringValue
+				} else {
+					marshalled, _ := json.Marshal(value)
+					merged[key] = string(marshalled)
+				}
+			}
+		}
+	}
+
+	known := map[string]bool{}
+	for _, param := range tool.Params {
+		known[normalizeToolName(param.Name)] = true
+	}
+
+	fields := map[string]string{}
+	ignored := []string{}
+	workflowID := ""
+	for key, value := range merged {
+		if key == "workflowid" {
+			workflowID = strings.TrimSpace(value)
+			continue
+		}
+
+		if key == "body" || key == "headers" || key == "queries" || key == "url" || key == "foragent" || key == "authorization" {
+			continue
+		}
+
+		if alias, ok := agentToolFieldAliases[key]; ok && !known[key] {
+			key = alias
+		}
+
+		if !known[key] {
+			if len(strings.TrimSpace(value)) > 0 {
+				ignored = append(ignored, key)
+			}
+			continue
+		}
+
+		if _, exists := fields[key]; !exists || len(fields[key]) == 0 {
+			fields[key] = strings.TrimSpace(value)
+		}
+	}
+
+	sort.Strings(ignored)
+	return fields, ignored, workflowID
+}
+
+// Runs an agent tool as the user who started the agent, on the session's workflow
+func agentWorkflowToolHandler(agentExecution WorkflowExecution, toolName string) http.HandlerFunc {
+	return func(resp http.ResponseWriter, request *http.Request) {
+		writeResult := func(result map[string]interface{}) {
+			data, _ := json.Marshal(result)
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(200)
+			resp.Write(data)
+		}
+
+		ctx := GetContext(request)
+		user, err := HandleApiAuthentication(resp, request)
+		if err != nil {
+			writeResult(agentToolProblem("Couldn't act as the user who started this agent.", "Finish and tell the user the workflow couldn't be read with their account.", nil))
+			return
+		}
+
+		tool, _, ok := findAgentWorkflowTool(toolName)
+		if !ok {
+			writeResult(agentToolProblem(fmt.Sprintf("Unknown action '%s'.", toolName), "Use one of the actions listed for shuffle_workflows_builder.", nil))
+			return
+		}
+
+		if !isWorkflowBuilderAgent(agentExecution) {
+			writeResult(agentToolProblem(fmt.Sprintf("%s is only available to the workflow builder agent.", tool.Name), "Use the actions listed for your tools instead.", nil))
+			return
+		}
+
+		workflowID := getAgentSessionWorkflowID(agentExecution)
+		if len(workflowID) == 0 {
+			writeResult(agentToolProblem("This session has no workflow yet, so there are no runs or versions to read.", "Create the workflow first.", agentToolCall(agentToolBuilderName, "post_create_workflow")))
+			return
+		}
+
+		workflow, err := GetWorkflow(ctx, workflowID)
+		if err != nil {
+			writeResult(agentToolProblem(fmt.Sprintf("Workflow %s couldn't be loaded: %s", workflowID, err), "Tell the user the workflow couldn't be loaded.", nil))
+			return
+		}
+
+		if workflow.OrgId != user.ActiveOrg.Id && workflow.Owner != user.Id {
+			writeResult(agentToolProblem("The user who started this agent doesn't have access to this workflow.", "Finish and tell the user.", nil))
+			return
+		}
+
+		raw := map[string]string{}
+		if request.Body != nil {
+			body, _ := ioutil.ReadAll(request.Body)
+			json.Unmarshal(body, &raw)
+		}
+
+		fields, ignored, requestedWorkflowID := normalizeAgentToolFields(raw, tool)
+		result := tool.Run(agentToolContext{
+			Ctx:            ctx,
+			Request:        request,
+			User:           user,
+			Workflow:       workflow,
+			AgentExecution: agentExecution,
+		}, fields)
+
+		result["workflow_id"] = workflowID
+		if len(ignored) > 0 {
+			result["ignored_fields"] = ignored
+			result["ignored_fields_note"] = fmt.Sprintf("These fields aren't used by %s and were ignored. Valid fields: %s", tool.Name, agentToolParamNames(tool))
+		}
+
+		if len(requestedWorkflowID) > 0 && requestedWorkflowID != workflowID {
+			result["workflow_id_note"] = fmt.Sprintf("You can only read the workflow you're editing (%s), so workflow_id %s was ignored.", workflowID, requestedWorkflowID)
+		}
+
+		writeResult(result)
+	}
+}
+
+func agentToolParamNames(tool agentWorkflowTool) string {
+	names := []string{}
+	for _, param := range tool.Params {
+		names = append(names, param.Name)
+	}
+
+	return strings.Join(names, ", ")
+}
+
+// ----- Session scope -----
+
+func isWorkflowBuilderTemplate(template string) bool {
+	switch strings.ToLower(strings.TrimSpace(template)) {
+	case "workflow-edit", "edit-workflow", "build-workflows", "workflow-builder":
+		return true
+	}
+
+	return false
+}
+
+func getAgentNodeParam(execution WorkflowExecution, name string) string {
+	for _, action := range execution.Workflow.Actions {
+		if action.AppName != "AI Agent" {
+			continue
+		}
+
+		for _, param := range action.Parameters {
+			if param.Name == name {
+				return strings.TrimSpace(param.Value)
+			}
+		}
+	}
+
+	return ""
+}
+
+func isWorkflowBuilderAgent(execution WorkflowExecution) bool {
+	return isWorkflowBuilderTemplate(getAgentNodeParam(execution, "template"))
+}
+
+func getAgentDecisions(execution WorkflowExecution) []AgentDecision {
+	for _, result := range execution.Results {
+		if result.Action.AppName != "AI Agent" {
+			continue
+		}
+
+		output := struct {
+			Decisions []AgentDecision `json:"decisions"`
+		}{}
+		if json.Unmarshal([]byte(result.Result), &output) == nil && len(output.Decisions) > 0 {
+			return output.Decisions
+		}
+	}
+
+	return []AgentDecision{}
+}
+
+// The workflow the session edits: the agent's workflow_id, the execution argument,
+// or a workflow the agent created in this session.
+func getAgentSessionWorkflowID(execution WorkflowExecution) string {
+	if workflowID := getAgentNodeParam(execution, "workflow_id"); len(workflowID) == 36 {
+		return workflowID
+	}
+
+	if workflowID := strings.TrimSpace(execution.ExecutionArgument); len(workflowID) == 36 {
+		return workflowID
+	}
+
+	decisions := getAgentDecisions(execution)
+	for i := len(decisions) - 1; i >= 0; i-- {
+		if normalizeToolName(decisions[i].Action) != "postcreateworkflow" {
+			continue
+		}
+
+		created := struct {
+			Body struct {
+				ID string `json:"id"`
+			} `json:"body"`
+		}{}
+		if json.Unmarshal([]byte(decisions[i].RunDetails.RawResponse), &created) == nil && len(created.Body.ID) == 36 {
+			return created.Body.ID
+		}
+	}
+
+	return ""
+}
+
+// ----- Run analysis -----
+
+type agentNodeOutcome struct {
+	Action       Action
+	Result       *ActionResult
+	RealStatus   string // OK, FAILED, SKIPPED, PENDING, NOT_RUN
+	Error        string
+	ErrorKind    string // http, app, python, auth
+	HTTPStatus   int
+	NotRunReason string
+}
+
+type agentRunSummary struct {
+	Execution  *WorkflowExecution
+	RealStatus string // FINISHED, FAILED, ABORTED, STUCK, NOT_STARTED, EXECUTING
+	Outcomes   []agentNodeOutcome
+	Failed     []agentNodeOutcome
+}
+
+var agentAuthErrorPattern = regexp.MustCompile(`(?i)(invalid[_ ]?(grant|token|credentials?|api[_ ]?key)|unauthori[sz]ed|unauthenticated|expired[_ ]?token|token[_ ]?expired|access[_ ]?denied|permission[_ ]?denied|forbidden)`)
+
+// What really happened in a node: Shuffle marks it SUCCESS whenever the app ran,
+// even when the API it called answered 400 or the app reported success:false.
+func analyzeAgentNodeResult(result ActionResult) (string, string, string, int) {
+	status := strings.ToUpper(strings.TrimSpace(result.Status))
+	switch status {
+	case "SKIPPED":
+		return "SKIPPED", "", "", 0
+	case "", "EXECUTING", "WAITING", "STARTED":
+		if len(result.Result) == 0 {
+			return "PENDING", "", "", 0
+		}
+	}
+
+	parsed := map[string]interface{}{}
+	json.Unmarshal([]byte(result.Result), &parsed)
+
+	errorText := ""
+	errorKind := ""
+	httpStatus := agentToInt(parsed["status"])
+	if httpStatus >= 400 {
+		errorText = fmt.Sprintf("HTTP %d: %s", httpStatus, agentHTTPErrorMessage(parsed))
+		errorKind = "http"
+	} else if success, ok := parsed["success"].(bool); ok && !success {
+		errorText = agentFirstString(parsed, "reason", "message", "error", "details")
+		if len(errorText) == 0 {
+			errorText = "The app reported success: false"
+		}
+		errorKind = "app"
+	} else if strings.Contains(result.Result, "Traceback (most recent call last)") {
+		lines := strings.Split(strings.TrimSpace(strings.ReplaceAll(result.Result, `\n`, "\n")), "\n")
+		if len(lines) > 3 {
+			lines = lines[len(lines)-3:]
+		}
+		errorText = strings.Join(lines, "\n")
+		errorKind = "python"
+	} else if status == "FAILURE" || status == "ABORTED" || status == "ERROR" {
+		errorText = agentToolTruncate(result.Result, 300)
+		errorKind = "app"
+	}
+
+	if len(errorText) == 0 {
+		return "OK", "", "", httpStatus
+	}
+
+	if httpStatus == 401 || httpStatus == 403 || agentAuthErrorPattern.MatchString(errorText) {
+		errorKind = "auth"
+	}
+
+	return "FAILED", agentToolTruncate(errorText, 500), errorKind, httpStatus
+}
+
+func agentHTTPErrorMessage(parsed map[string]interface{}) string {
+	switch body := parsed["body"].(type) {
+	case map[string]interface{}:
+		if errorObject, ok := body["error"].(map[string]interface{}); ok {
+			if message := agentFirstString(errorObject, "message", "status", "code"); len(message) > 0 {
+				return message
+			}
+		}
+
+		if message := agentFirstString(body, "error", "message", "reason", "detail", "errors", "error_description"); len(message) > 0 {
+			return message
+		}
+
+		marshalled, _ := json.Marshal(body)
+		return agentToolTruncate(string(marshalled), 300)
+	case string:
+		return agentToolTruncate(body, 300)
+	}
+
+	return agentFirstString(parsed, "reason", "message")
+}
+
+func summarizeAgentRun(execution *WorkflowExecution) agentRunSummary {
+	summary := agentRunSummary{Execution: execution}
+
+	resultByID := map[string]*ActionResult{}
+	for i := range execution.Results {
+		resultByID[execution.Results[i].Action.ID] = &execution.Results[i]
+	}
+
+	// Nodes that ran, in the order they started
+	ran := []agentNodeOutcome{}
+	for i := range execution.Results {
+		result := &execution.Results[i]
+		if resultByID[result.Action.ID] != result {
+			continue
+		}
+
+		action := result.Action
+		for _, workflowAction := range execution.Workflow.Actions {
+			if workflowAction.ID == action.ID {
+				action = workflowAction
+				break
+			}
+		}
+
+		outcome := agentNodeOutcome{Action: action, Result: result}
+		outcome.RealStatus, outcome.Error, outcome.ErrorKind, outcome.HTTPStatus = analyzeAgentNodeResult(*result)
+		ran = append(ran, outcome)
+	}
+
+	sort.SliceStable(ran, func(i, j int) bool {
+		return agentUnixSeconds(ran[i].Result.StartedAt) < agentUnixSeconds(ran[j].Result.StartedAt)
+	})
+
+	outcomeByID := map[string]agentNodeOutcome{}
+	for _, outcome := range ran {
+		outcomeByID[outcome.Action.ID] = outcome
+	}
+
+	executionStatus := strings.ToUpper(execution.Status)
+	stillRunning := executionStatus == "EXECUTING" || executionStatus == "WAITING"
+	lastActivity := agentUnixSeconds(execution.StartedAt)
+	for _, outcome := range ran {
+		if completed := agentUnixSeconds(outcome.Result.CompletedAt); completed > lastActivity {
+			lastActivity = completed
+		}
+	}
+	stuck := stillRunning && time.Since(time.Unix(lastActivity, 0)) > agentToolStuckAfter
+
+	// Running for a while without a single node result: it was most likely never dispatched
+	notStarted := stillRunning && len(ran) == 0 && time.Since(time.Unix(agentUnixSeconds(execution.StartedAt), 0)) > agentToolNotStartedAfter
+
+	// Nodes that didn't run, with the likely reason
+	notRun := []agentNodeOutcome{}
+	for _, action := range execution.Workflow.Actions {
+		if _, ok := outcomeByID[action.ID]; ok {
+			continue
+		}
+
+		outcome := agentNodeOutcome{Action: action, RealStatus: "NOT_RUN"}
+		parentReason := ""
+		for _, branch := range execution.Workflow.Branches {
+			if branch.DestinationID != action.ID {
+				continue
+			}
+
+			parent, ok := outcomeByID[branch.SourceID]
+			if !ok {
+				continue
+			}
+
+			if parent.RealStatus == "FAILED" {
+				parentReason = fmt.Sprintf("parent '%s' failed", parent.Action.Label)
+				break
+			}
+
+			if len(branch.Conditions) > 0 {
+				parentReason = fmt.Sprintf("the branch condition from '%s' was most likely not met", parent.Action.Label)
+			}
+		}
+
+		switch {
+		case notStarted:
+			outcome.NotRunReason = "the run never started any node"
+		case stillRunning && !stuck:
+			outcome.RealStatus = "PENDING"
+			outcome.NotRunReason = "waiting to run"
+		case len(parentReason) > 0:
+			outcome.NotRunReason = parentReason
+		case executionStatus == "ABORTED":
+			outcome.NotRunReason = "the run was aborted before this node"
+		default:
+			outcome.NotRunReason = "never reached"
+		}
+
+		notRun = append(notRun, outcome)
+	}
+
+	summary.Outcomes = append(ran, notRun...)
+	for _, outcome := range summary.Outcomes {
+		if outcome.RealStatus == "FAILED" {
+			summary.Failed = append(summary.Failed, outcome)
+		}
+	}
+
+	switch {
+	case notStarted:
+		summary.RealStatus = "NOT_STARTED"
+	case stuck:
+		summary.RealStatus = "STUCK"
+	case len(summary.Failed) > 0:
+		summary.RealStatus = "FAILED"
+	case stillRunning:
+		summary.RealStatus = "EXECUTING"
+	case executionStatus == "ABORTED" || executionStatus == "FAILURE":
+		summary.RealStatus = "ABORTED"
+	default:
+		summary.RealStatus = executionStatus
+	}
+
+	return summary
+}
+
+func (summary agentRunSummary) didNotFinishCleanly() bool {
+	return summary.RealStatus == "FAILED" || summary.RealStatus == "ABORTED" || summary.RealStatus == "STUCK" || summary.RealStatus == "NOT_STARTED"
+}
+
+func (summary agentRunSummary) runningFor() int64 {
+	return int64(time.Since(time.Unix(agentUnixSeconds(summary.Execution.StartedAt), 0)).Seconds())
+}
+
+func (summary agentRunSummary) pendingNode() string {
+	for _, outcome := range summary.Outcomes {
+		if outcome.RealStatus == "PENDING" || outcome.RealStatus == "NOT_RUN" {
+			return outcome.Action.Label
+		}
+	}
+
+	return ""
+}
+
+func normalizeAgentRunSource(source string) string {
+	source = strings.ToLower(strings.TrimSpace(source))
+	switch {
+	case strings.Contains(source, "webhook"):
+		return "webhook"
+	case strings.Contains(source, "schedule"), strings.Contains(source, "cron"):
+		return "schedule"
+	case strings.Contains(source, "subflow"), strings.Contains(source, "workflow"):
+		return "subflow"
+	case strings.Contains(source, "agent"), source == "ai":
+		return "agent"
+	case source == "", source == "default", source == "manual", source == "ui", source == "single_action":
+		return "manual"
+	}
+
+	return source
+}
+
+// Newest first. Lists can come back with results stripped, so runs are loaded one by one when needed.
+func getAgentWorkflowRuns(ctx context.Context, workflowID string, amount int) ([]WorkflowExecution, error) {
+	executions, _, err := GetAllWorkflowExecutionsV2(ctx, workflowID, amount, "")
+	if err != nil {
+		return executions, err
+	}
+
+	sort.SliceStable(executions, func(i, j int) bool {
+		return executions[i].StartedAt > executions[j].StartedAt
+	})
+
+	if len(executions) > amount {
+		executions = executions[:amount]
+	}
+
+	return executions, nil
+}
+
+func loadFullAgentRun(ctx context.Context, execution WorkflowExecution) *WorkflowExecution {
+	needsLoad := execution.ExecutionArgument == "too large" || (len(execution.Results) == 0 && len(execution.Workflow.Actions) > 0)
+	for _, result := range execution.Results {
+		if strings.HasPrefix(result.Result, "Result was too large to load") {
+			needsLoad = true
+			break
+		}
+	}
+
+	if needsLoad {
+		if full, err := GetWorkflowExecution(ctx, execution.ExecutionId); err == nil {
+			return full
+		}
+	}
+
+	return &execution
+}
+
+// Copy with auth tokens and secret parameters removed, safe to hand to the model
+func sanitizedAgentRunCopy(execution *WorkflowExecution) *WorkflowExecution {
+	runCopy := *execution
+	runCopy.Results = append([]ActionResult{}, execution.Results...)
+	for i := range runCopy.Results {
+		runCopy.Results[i].Action.Parameters = append([]WorkflowAppActionParameter{}, runCopy.Results[i].Action.Parameters...)
+	}
+
+	runCopy.Workflow.Actions = append([]Action{}, execution.Workflow.Actions...)
+	for i := range runCopy.Workflow.Actions {
+		runCopy.Workflow.Actions[i].Parameters = append([]WorkflowAppActionParameter{}, runCopy.Workflow.Actions[i].Parameters...)
+		redactSensitiveParameters(runCopy.Workflow.Actions[i].Parameters)
+	}
+
+	return SanitizeExecutionForAgent(&runCopy)
+}
+
+func agentRunRow(summary agentRunSummary, current *Workflow) map[string]interface{} {
+	execution := summary.Execution
+	counts := map[string]int{"ok": 0, "failed": 0, "skipped": 0, "not_run": 0}
+	for _, outcome := range summary.Outcomes {
+		switch outcome.RealStatus {
+		case "OK":
+			counts["ok"] += 1
+		case "FAILED":
+			counts["failed"] += 1
+		case "SKIPPED":
+			counts["skipped"] += 1
+		default:
+			counts["not_run"] += 1
+		}
+	}
+
+	row := map[string]interface{}{
+		"execution_id":  execution.ExecutionId,
+		"status":        execution.Status,
+		"real_status":   summary.RealStatus,
+		"started":       agentTimeLabel(execution.StartedAt),
+		"source":        normalizeAgentRunSource(execution.ExecutionSource),
+		"trigger_input": agentToolTruncate(execution.ExecutionArgument, 200),
+		"nodes":         counts,
+	}
+
+	if execution.CompletedAt > 0 {
+		row["duration_s"] = agentUnixSeconds(execution.CompletedAt) - agentUnixSeconds(execution.StartedAt)
+	}
+
+	if len(summary.Failed) > 0 {
+		failed := []map[string]string{}
+		for _, outcome := range summary.Failed {
+			failed = append(failed, map[string]string{"label": outcome.Action.Label, "error": agentToolTruncate(outcome.Error, 250), "kind": outcome.ErrorKind})
+		}
+		row["failed_nodes"] = failed
+	}
+
+	if summary.RealStatus == "STUCK" {
+		row["stuck_on"] = summary.pendingNode()
+	} else if summary.RealStatus == "NOT_STARTED" {
+		row["note"] = fmt.Sprintf("no node has run in %ds, the run most likely never started", summary.runningFor())
+	}
+
+	if changed := agentChangedSinceRun(execution, current); len(changed) > 0 {
+		row["changed_since"] = changed
+	}
+
+	return row
+}
+
+// What changed in the workflow since a run, by content: the chat saves the workflow
+// whenever an agent starts, so the last-saved time alone flags nearly every run.
+func agentChangedSinceRun(execution *WorkflowExecution, current *Workflow) []string {
+	if current == nil || len(execution.Workflow.Actions) == 0 {
+		return []string{}
+	}
+
+	return diffAgentWorkflows(&execution.Workflow, current, "").Lines
+}
+
+// The "never run" nudge, with the webhook URL when there is one
+func agentNeverRunProblem(workflow *Workflow) map[string]interface{} {
+	why := "Nothing has run yet. Ask the user to trigger the workflow, then check the run with get_workflow_run."
+	for _, trigger := range workflow.Triggers {
+		if strings.ToUpper(trigger.TriggerType) != "WEBHOOK" {
+			continue
+		}
+
+		for _, param := range trigger.Parameters {
+			if param.Name == "url" && len(param.Value) > 0 {
+				why = fmt.Sprintf("Nothing has run yet. Ask the user to send data to the webhook (%s) or run it from the editor, then check it with get_workflow_run.", param.Value)
+			}
+		}
+	}
+
+	return agentToolProblem("This workflow has never run.", why, nil)
+}
+
+// Finds a node by ID or label, ignoring case, spaces and underscores
+func findAgentNode(actions []Action, name string) *Action {
+	wanted := normalizeToolName(strings.TrimPrefix(strings.TrimSpace(name), "$"))
+	if len(wanted) == 0 {
+		return nil
+	}
+
+	for i := range actions {
+		if actions[i].ID == strings.TrimSpace(name) || normalizeToolName(actions[i].Label) == wanted {
+			return &actions[i]
+		}
+	}
+
+	return nil
+}
+
+func closestAgentNodeLabel(actions []Action, name string) string {
+	wanted := normalizeToolName(name)
+	best := ""
+	bestDistance := 1 << 30
+	for _, action := range actions {
+		candidate := normalizeToolName(action.Label)
+		distance := agentLevenshtein(wanted, candidate)
+		if strings.Contains(candidate, wanted) || strings.Contains(wanted, candidate) {
+			distance = distance / 2
+		}
+
+		if distance < bestDistance {
+			bestDistance = distance
+			best = action.Label
+		}
+	}
+
+	if len(best) == 0 || bestDistance > len(wanted)/2+2 {
+		return ""
+	}
+
+	return best
+}
+
+func agentNodeList(actions []Action) []map[string]string {
+	nodes := []map[string]string{}
+	for _, action := range actions {
+		nodes = append(nodes, map[string]string{"label": action.Label, "id": action.ID})
+	}
+
+	return nodes
+}
+
+// The unknown-node nudge: closest match, the nodes that do exist, and get_minimal_workflow
+func agentUnknownNodeProblem(name string, actions []Action, where string, workflowID string) map[string]interface{} {
+	problem := fmt.Sprintf("No node '%s' %s.", name, where)
+	if closest := closestAgentNodeLabel(actions, name); len(closest) > 0 {
+		problem += fmt.Sprintf(" Did you mean '%s'?", closest)
+	}
+
+	result := agentToolProblem(problem, "Read the workflow to see its nodes, their IDs and how they connect.", agentToolCall(agentToolBuilderName, "get_minimal_workflow", "workflowId", workflowID))
+	result["nodes"] = agentNodeList(actions)
+	return result
+}
+
+// ----- $ref resolution: what each variable in a node's parameters resolves to -----
+
+var agentRefPattern = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)((?:\.[A-Za-z0-9_#\-]+)*)`)
+
+var agentBuiltinRefs = map[string]bool{"shuffle_cache": true, "shuffle_datastore": true, "shuffle_file": true, "shuffle_files": true, "shuffle_org": true}
+
+func agentRefName(label string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(label), " ", "_"))
+}
+
+// Describes every $ref in the parameters. With a run it says what each resolved to;
+// without one it only checks that the name exists.
+func describeAgentRefs(params []WorkflowAppActionParameter, workflow *Workflow, run *WorkflowExecution) []map[string]interface{} {
+	refs := []map[string]interface{}{}
+	seen := map[string]bool{}
+
+	actionByRef := map[string]Action{}
+	for _, action := range workflow.Actions {
+		actionByRef[agentRefName(action.Label)] = action
+	}
+
+	triggerRefs := map[string]bool{}
+	for _, trigger := range workflow.Triggers {
+		triggerRefs[agentRefName(trigger.Label)] = true
+	}
+
+	variableRefs := map[string]bool{}
+	for _, variable := range append(append([]Variable{}, workflow.WorkflowVariables...), workflow.ExecutionVariables...) {
+		variableRefs[agentRefName(variable.Name)] = true
+	}
+
+	for _, param := range params {
+		for _, match := range agentRefPattern.FindAllStringSubmatch(param.Value, -1) {
+			fullRef := match[0]
+			if seen[fullRef] {
+				continue
+			}
+			seen[fullRef] = true
+
+			name := strings.ToLower(match[1])
+			path := []string{}
+			if len(match[2]) > 0 {
+				path = strings.Split(strings.TrimPrefix(match[2], "."), ".")
+			}
+
+			entry := map[string]interface{}{"ref": fullRef, "param": param.Name}
+			var value interface{}
+			hasValue := false
+
+			switch {
+			case agentBuiltinRefs[name]:
+				continue
+			case name == "exec":
+				entry["source"] = "trigger input"
+				if run != nil {
+					value = agentParseMaybeJSON(run.ExecutionArgument)
+					hasValue = true
+				}
+			case variableRefs[name]:
+				entry["source"] = "workflow variable"
+			case triggerRefs[name]:
+				entry["source"] = "trigger"
+			default:
+				action, ok := actionByRef[name]
+				if !ok {
+					entry["problem"] = fmt.Sprintf("No node, trigger or variable named '%s'.", match[1])
+					if closest := closestAgentNodeLabel(workflow.Actions, name); len(closest) > 0 {
+						entry["did_you_mean"] = fmt.Sprintf("$%s (node '%s')", agentRefName(closest), closest)
+					}
+					refs = append(refs, entry)
+					continue
+				}
+
+				entry["source"] = fmt.Sprintf("node '%s'", action.Label)
+				entry["node_id"] = action.ID
+				if run != nil {
+					for _, result := range run.Results {
+						if result.Action.ID == action.ID {
+							value = agentParseMaybeJSON(result.Result)
+							hasValue = true
+							break
+						}
+					}
+
+					if !hasValue {
+						entry["resolves_to"] = "nothing in this run (the node didn't run)"
+					}
+				}
+			}
+
+			if !hasValue {
+				refs = append(refs, entry)
+				continue
+			}
+
+			resolved, problem := followAgentRefPath(value, path)
+			if len(problem) > 0 {
+				entry["problem"] = problem
+				refs = append(refs, entry)
+				continue
+			}
+
+			entry["resolves_to"] = describeAgentValueShape(resolved)
+			if hint := agentRefShapeHint(fullRef, path, resolved); len(hint) > 0 {
+				entry["hint"] = hint
+			}
+
+			refs = append(refs, entry)
+		}
+	}
+
+	return refs
+}
+
+func followAgentRefPath(value interface{}, path []string) (interface{}, string) {
+	walked := ""
+	for _, segment := range path {
+		if text, ok := value.(string); ok {
+			value = agentParseMaybeJSON(text)
+		}
+
+		switch typed := value.(type) {
+		case map[string]interface{}:
+			next, ok := typed[segment]
+			if !ok {
+				return nil, fmt.Sprintf("Key '%s' doesn't exist%s. Keys there: [%s]", segment, agentPathSuffix(walked), strings.Join(agentSortedKeys(typed, 15), ", "))
+			}
+			value = next
+		case []interface{}:
+			if segment == "#" {
+				if len(typed) == 0 {
+					return nil, fmt.Sprintf("The list%s is empty, so .# has nothing to loop over", agentPathSuffix(walked))
+				}
+				value = typed[0]
+			} else if index, err := strconv.Atoi(segment); err == nil {
+				if index < 0 || index >= len(typed) {
+					return nil, fmt.Sprintf("Index %d is out of range%s: the list has %d items", index, agentPathSuffix(walked), len(typed))
+				}
+				value = typed[index]
+			} else {
+				return nil, fmt.Sprintf("'.%s' is used on a list%s. Use .# to loop over it or .0 for the first item", segment, agentPathSuffix(walked))
+			}
+		default:
+			return nil, fmt.Sprintf("Can't read '.%s'%s: the value there is %s", segment, agentPathSuffix(walked), describeAgentValueShape(value))
+		}
+
+		walked += "." + segment
+	}
+
+	return value, ""
+}
+
+func agentPathSuffix(walked string) string {
+	if len(walked) == 0 {
+		return ""
+	}
+
+	return " at " + walked
+}
+
+func describeAgentValueShape(value interface{}) string {
+	switch typed := value.(type) {
+	case nil:
+		return "null"
+	case map[string]interface{}:
+		keys := agentSortedKeys(typed, 10)
+		described := []string{}
+		for _, key := range keys {
+			described = append(described, fmt.Sprintf("%s (%s)", key, agentShortType(typed[key])))
+		}
+
+		more := ""
+		if len(typed) > len(keys) {
+			more = fmt.Sprintf(", +%d more", len(typed)-len(keys))
+		}
+
+		return fmt.Sprintf("object with keys [%s%s]", strings.Join(described, ", "), more)
+	case []interface{}:
+		if len(typed) == 0 {
+			return "empty list"
+		}
+
+		return fmt.Sprintf("list of %d, first item: %s", len(typed), agentShortType(typed[0]))
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		switch {
+		case len(trimmed) == 0:
+			return "empty string"
+		case agentLooksLikePythonLiteral(trimmed):
+			return fmt.Sprintf("string that looks like a Python list/dict (single quotes), not JSON: %s", agentToolTruncate(trimmed, 80))
+		}
+
+		parsed := agentParseMaybeJSON(trimmed)
+		if _, isString := parsed.(string); !isString {
+			return "string containing JSON: " + describeAgentValueShape(parsed)
+		}
+
+		return fmt.Sprintf("string: %q", agentToolTruncate(trimmed, 80))
+	case float64:
+		return "number"
+	case bool:
+		return "boolean"
+	}
+
+	return fmt.Sprintf("%T", value)
+}
+
+func agentShortType(value interface{}) string {
+	switch typed := value.(type) {
+	case nil:
+		return "null"
+	case map[string]interface{}:
+		return "object"
+	case []interface{}:
+		return "list"
+	case string:
+		if agentLooksLikePythonLiteral(strings.TrimSpace(typed)) {
+			return "string, Python-style list"
+		}
+		return "string"
+	case float64:
+		return "number"
+	case bool:
+		return "boolean"
+	}
+
+	return fmt.Sprintf("%T", value)
+}
+
+// Points out the usual reference mistakes
+func agentRefShapeHint(fullRef string, path []string, value interface{}) string {
+	if object, ok := value.(map[string]interface{}); ok && len(path) == 0 {
+		if _, hasSuccess := object["success"]; hasSuccess {
+			for _, key := range []string{"message", "body", "result", "data", "output"} {
+				if _, hasKey := object[key]; hasKey {
+					return fmt.Sprintf("%s is the app's whole output. The data is most likely in %s.%s", fullRef, fullRef, key)
+				}
+			}
+		}
+	}
+
+	if text, ok := value.(string); ok && agentLooksLikePythonLiteral(strings.TrimSpace(text)) {
+		return "This isn't valid JSON: it's printed with Python quotes. In the Python node, use print(json.dumps(...)) instead of print(...)"
+	}
+
+	return ""
+}
+
+func agentLooksLikePythonLiteral(text string) bool {
+	if !(strings.HasPrefix(text, "[") || strings.HasPrefix(text, "{")) || !strings.Contains(text, "'") {
+		return false
+	}
+
+	var parsed interface{}
+	return json.Unmarshal([]byte(text), &parsed) != nil
+}
+
+func agentParseMaybeJSON(text string) interface{} {
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		var parsed interface{}
+		if json.Unmarshal([]byte(trimmed), &parsed) == nil {
+			return parsed
+		}
+	}
+
+	return text
+}
+
+// ----- Run tools -----
+
+func runAgentSearchWorkflowRuns(tc agentToolContext, fields map[string]string) map[string]interface{} {
+	notes := []string{}
+	now := time.Now()
+
+	since, note := parseAgentToolTime(fields["since"], now.Add(-agentToolDefaultWindow), now)
+	notes = agentAppendNote(notes, note)
+	until, note := parseAgentToolTime(fields["until"], now, now)
+	notes = agentAppendNote(notes, note)
+
+	statusFilter, note := normalizeAgentStatusFilter(fields["status"])
+	notes = agentAppendNote(notes, note)
+
+	sourceFilter := strings.ToLower(strings.TrimSpace(fields["source"]))
+	if sourceFilter == "any" || sourceFilter == "all" {
+		sourceFilter = ""
+	}
+	if len(sourceFilter) > 0 && !ArrayContains([]string{"webhook", "manual", "schedule", "subflow", "agent"}, sourceFilter) {
+		notes = append(notes, fmt.Sprintf("source '%s' isn't one of webhook, manual, schedule, subflow, agent; ignored it", sourceFilter))
+		sourceFilter = ""
+	}
+
+	limit, note := agentClampInt(fields["limit"], 5, 1, 20, "limit")
+	notes = agentAppendNote(notes, note)
+	hasErrors := agentIsTrue(fields["haserrors"])
+	contains := strings.ToLower(strings.TrimSpace(fields["contains"]))
+	nodeFilter := strings.TrimSpace(fields["node"])
+
+	executions, err := getAgentWorkflowRuns(tc.Ctx, tc.Workflow.ID, agentToolMaxRunsScanned)
+	if err != nil && len(executions) == 0 {
+		return agentToolProblem(fmt.Sprintf("Couldn't load the runs: %s", err), "Tell the user the run history couldn't be loaded right now.", nil)
+	}
+
+	if len(executions) == 0 {
+		return agentNeverRunProblem(tc.Workflow)
+	}
+
+	if len(nodeFilter) > 0 && findAgentNode(tc.Workflow.Actions, nodeFilter) == nil {
+		foundInRun := false
+		for _, execution := range executions {
+			if findAgentNode(execution.Workflow.Actions, nodeFilter) != nil {
+				foundInRun = true
+				break
+			}
+		}
+
+		if !foundInRun {
+			return agentUnknownNodeProblem(nodeFilter, tc.Workflow.Actions, "in this workflow or its recent runs", tc.Workflow.ID)
+		}
+	}
+
+	runs := []map[string]interface{}{}
+	inWindow := 0
+	firstFailedID, firstFailedNode := "", ""
+	for _, listed := range executions {
+		started := agentUnixSeconds(listed.StartedAt)
+		if started < since.Unix() || started > until.Unix() {
+			continue
+		}
+		inWindow += 1
+
+		if len(sourceFilter) > 0 && normalizeAgentRunSource(listed.ExecutionSource) != sourceFilter {
+			continue
+		}
+
+		execution := loadFullAgentRun(tc.Ctx, listed)
+		summary := summarizeAgentRun(execution)
+		if !agentRunMatchesStatus(summary, statusFilter) {
+			continue
+		}
+
+		if hasErrors && len(summary.Failed) == 0 {
+			continue
+		}
+
+		if len(nodeFilter) > 0 {
+			node := findAgentNode(execution.Workflow.Actions, nodeFilter)
+			ranNode := false
+			for _, outcome := range summary.Outcomes {
+				if node != nil && outcome.Action.ID == node.ID && outcome.Result != nil {
+					ranNode = true
+					break
+				}
+			}
+
+			if !ranNode {
+				continue
+			}
+		}
+
+		if len(contains) > 0 && !agentRunContains(execution, summary, contains) {
+			continue
+		}
+
+		runs = append(runs, agentRunRow(summary, tc.Workflow))
+		if len(firstFailedID) == 0 && len(summary.Failed) > 0 {
+			firstFailedID = execution.ExecutionId
+			firstFailedNode = summary.Failed[0].Action.Label
+		}
+
+		if len(runs) >= limit {
+			break
+		}
+	}
+
+	result := map[string]interface{}{
+		"success":        true,
+		"window":         map[string]string{"since": agentTimeLabel(since.Unix()), "until": agentTimeLabel(until.Unix())},
+		"runs":           runs,
+		"runs_in_window": inWindow,
+	}
+
+	if len(notes) > 0 {
+		result["notes"] = notes
+	}
+
+	switch {
+	case len(firstFailedID) > 0:
+		result["next"] = agentToolNext("Look at the failing node in detail before changing anything.", agentToolCall(agentToolBuilderName, "get_workflow_run", "execution_id", firstFailedID, "node", firstFailedNode))
+	case len(runs) > 0:
+		result["next"] = agentToolNext("None of these runs has a failing node. Open one for the per-node detail.", agentToolCall(agentToolBuilderName, "get_workflow_run", "execution_id", fmt.Sprintf("%v", runs[0]["execution_id"])))
+	case inWindow == 0:
+		newest := agentUnixSeconds(executions[0].StartedAt)
+		days := int(now.Sub(time.Unix(newest, 0)).Hours()/24) + 1
+		result["problem"] = fmt.Sprintf("No runs between %s and %s. The newest run is from %s.", agentTimeLabel(since.Unix()), agentTimeLabel(until.Unix()), agentTimeLabel(newest))
+		result["next"] = agentToolNext("Widen the time window to include it.", agentToolCall(agentToolBuilderName, "search_workflow_runs", "since", fmt.Sprintf("%dd", days)))
+	default:
+		result["problem"] = fmt.Sprintf("%d runs in the time window, but none matched the filters (%s).", inWindow, agentDescribeFilters(fields))
+		result["next"] = agentToolNext("Drop the filters to see what's there.", agentToolCall(agentToolBuilderName, "search_workflow_runs", "since", agentFirstNonEmpty(fields["since"], "24h")))
+	}
+
+	return result
+}
+
+func normalizeAgentStatusFilter(status string) (string, string) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "any", "all":
+		return "any", ""
+	case "failed", "failure", "fail", "error", "errors", "errored", "broken":
+		return "failed", ""
+	case "aborted", "abort", "cancelled", "canceled", "stopped":
+		return "aborted", ""
+	case "stuck", "hanging", "hung", "timeout", "notstarted", "not_started", "neverstarted", "never_started":
+		return "stuck", ""
+	case "finished", "success", "successful", "succeeded", "ok", "done", "completed", "complete":
+		return "finished", ""
+	case "executing", "running", "pending", "in_progress", "waiting":
+		return "executing", ""
+	}
+
+	return "any", fmt.Sprintf("status '%s' isn't one of failed, aborted, stuck, finished, executing, any; showing all", status)
+}
+
+// "failed" is anything that didn't finish cleanly, as that's what users mean by it
+func agentRunMatchesStatus(summary agentRunSummary, filter string) bool {
+	switch filter {
+	case "failed":
+		return summary.didNotFinishCleanly()
+	case "aborted":
+		return summary.RealStatus == "ABORTED"
+	case "stuck":
+		return summary.RealStatus == "STUCK" || summary.RealStatus == "NOT_STARTED"
+	case "finished":
+		return summary.RealStatus == "FINISHED"
+	case "executing":
+		return summary.RealStatus == "EXECUTING"
+	}
+
+	return true
+}
+
+func agentRunContains(execution *WorkflowExecution, summary agentRunSummary, text string) bool {
+	if strings.Contains(strings.ToLower(execution.ExecutionArgument), text) {
+		return true
+	}
+
+	for _, outcome := range summary.Outcomes {
+		if strings.Contains(strings.ToLower(outcome.Error), text) {
+			return true
+		}
+
+		if outcome.Result != nil && strings.Contains(strings.ToLower(outcome.Result.Result), text) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func agentDescribeFilters(fields map[string]string) string {
+	parts := []string{}
+	for _, key := range []string{"status", "haserrors", "node", "contains", "source"} {
+		if len(fields[key]) > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%s", key, fields[key]))
+		}
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+func runAgentGetWorkflowRun(tc agentToolContext, fields map[string]string) map[string]interface{} {
+	maxChars, maxNote := agentClampInt(fields["maxchars"], 1500, 200, 8000, "max_chars")
+	execution, runNote, problem := resolveAgentRun(tc, fields["executionid"])
+	if problem != nil {
+		return problem
+	}
+
+	run := sanitizedAgentRunCopy(execution)
+	summary := summarizeAgentRun(run)
+	notes := agentAppendNote(agentAppendNote([]string{}, runNote), maxNote)
+
+	runInfo := map[string]interface{}{
+		"execution_id":  run.ExecutionId,
+		"status":        run.Status,
+		"real_status":   summary.RealStatus,
+		"started":       agentTimeLabel(run.StartedAt),
+		"source":        normalizeAgentRunSource(run.ExecutionSource),
+		"trigger_input": agentToolTruncate(run.ExecutionArgument, maxChars),
+	}
+	if run.CompletedAt > 0 {
+		runInfo["duration_s"] = agentUnixSeconds(run.CompletedAt) - agentUnixSeconds(run.StartedAt)
+	}
+
+	if changed := agentChangedSinceRun(execution, tc.Workflow); len(changed) > 0 {
+		runInfo["changed_since"] = changed
+		runInfo["older_version"] = fmt.Sprintf("The workflow changed after this run (%s), so the run doesn't show those changes. Don't redo fixes that are already in place; ask the user to re-run to check them.", agentSummaryLines(changed, 4))
+	}
+
+	// One node in full detail
+	nodeFilter := strings.TrimSpace(fields["node"])
+	var focus *Action
+	if len(nodeFilter) > 0 {
+		focus = findAgentNode(run.Workflow.Actions, nodeFilter)
+		if focus == nil {
+			if current := findAgentNode(tc.Workflow.Actions, nodeFilter); current != nil {
+				return agentToolProblem(fmt.Sprintf("'%s' was added after this run, so the run has nothing for it.", current.Label), "Find a run where the node ran.", agentToolCall(agentToolBuilderName, "search_workflow_runs", "node", current.Label, "since", "7d"))
+			}
+
+			return agentUnknownNodeProblem(nodeFilter, run.Workflow.Actions, "in this run", tc.Workflow.ID)
+		}
+
+		if findAgentNode(tc.Workflow.Actions, focus.ID) == nil {
+			notes = append(notes, fmt.Sprintf("'%s' has been deleted from the workflow since this run", focus.Label))
+		}
+	}
+
+	nodes := []map[string]interface{}{}
+	for _, outcome := range summary.Outcomes {
+		if focus != nil && outcome.Action.ID != focus.ID {
+			continue
+		}
+
+		entry := map[string]interface{}{
+			"label":       outcome.Action.Label,
+			"id":          outcome.Action.ID,
+			"app":         outcome.Action.AppName,
+			"action":      outcome.Action.Name,
+			"real_status": outcome.RealStatus,
+		}
+
+		if outcome.Result != nil {
+			entry["status"] = outcome.Result.Status
+			if outcome.Result.CompletedAt > 0 {
+				entry["duration_s"] = agentUnixSeconds(outcome.Result.CompletedAt) - agentUnixSeconds(outcome.Result.StartedAt)
+			}
+
+			previewLength := 200
+			if focus != nil {
+				previewLength = maxChars
+			} else if outcome.RealStatus == "FAILED" {
+				previewLength = 400
+			}
+
+			entry["result_preview"] = agentToolTruncate(outcome.Result.Result, previewLength)
+			if len([]rune(outcome.Result.Result)) > previewLength {
+				entry["result_truncated"] = fmt.Sprintf("%d characters total. Pass node=%s and a higher max_chars (up to 8000) to see more.", len([]rune(outcome.Result.Result)), outcome.Action.Label)
+			}
+		}
+
+		if len(outcome.NotRunReason) > 0 {
+			entry["reason"] = outcome.NotRunReason
+		}
+
+		if len(outcome.Error) > 0 {
+			entry["error"] = outcome.Error
+			entry["error_kind"] = outcome.ErrorKind
+			if outcome.ErrorKind == "auth" {
+				entry["hint"] = "This is the workflow node's credentials failing, not your own tool call. Editing the node's parameters won't fix it."
+				entry["next"] = agentToolNext("Get the app's setup_url and ask the user to authenticate it again.", agentToolCall(agentToolAppsName, "post_get_app_actions_summary", "body", fmt.Sprintf(`{"app_names": [%q]}`, outcome.Action.AppName)))
+			}
+		}
+
+		if refs := describeAgentRefs(outcome.Action.Parameters, &run.Workflow, run); len(refs) > 0 {
+			entry["references"] = refs
+		}
+
+		if focus != nil {
+			params := []map[string]string{}
+			for _, param := range outcome.Action.Parameters {
+				if len(strings.TrimSpace(param.Value)) == 0 {
+					continue
+				}
+
+				params = append(params, map[string]string{"name": param.Name, "value": agentToolTruncate(param.Value, maxChars)})
+			}
+			entry["parameters"] = params
+		}
+
+		nodes = append(nodes, entry)
+	}
+
+	result := map[string]interface{}{
+		"success": true,
+		"run":     runInfo,
+		"nodes":   nodes,
+	}
+
+	if len(notes) > 0 {
+		result["notes"] = notes
+	}
+
+	switch {
+	case summary.RealStatus == "NOT_STARTED":
+		result["next"] = agentToolNext(fmt.Sprintf("No node has run in %ds. Runs return their first node within seconds, so this run most likely never started. That's a platform or environment problem, not the workflow's nodes: don't edit nodes or start more runs. Finish and tell the user run %s didn't start.", summary.runningFor(), run.ExecutionId), nil)
+	case summary.RealStatus == "STUCK":
+		result["next"] = agentToolNext(fmt.Sprintf("The run is stuck on '%s': it never returned. That's usually the app not being reachable, not the workflow's configuration, so don't edit nodes for it. Tell the user.", summary.pendingNode()), nil)
+	case len(summary.Failed) > 0 && focus == nil:
+		failed := summary.Failed[0]
+		if failed.ErrorKind == "auth" {
+			result["next"] = agentToolNext("The failure is a credentials problem. Ask the user to authenticate the app again.", agentToolCall(agentToolAppsName, "post_get_app_actions_summary", "body", fmt.Sprintf(`{"app_names": [%q]}`, failed.Action.AppName)))
+		} else {
+			result["next"] = agentToolNext("See the failing node's full parameters and result before fixing it.", agentToolCall(agentToolBuilderName, "get_workflow_run", "execution_id", run.ExecutionId, "node", failed.Action.Label))
+		}
+	case len(summary.Failed) > 0:
+		result["next"] = agentToolNext("Fix the node based on its error and 'references', save with put_agent_update and check its 'validation'. Then ask the user to re-run, and check the new run with get_workflow_run(execution_id=latest).", nil)
+	case summary.RealStatus == "EXECUTING":
+		result["next"] = agentToolNext(fmt.Sprintf("The run is in progress (%ds so far, waiting on '%s'). Check it once more with this call, without a delay: delays aren't used on these actions. If it's still running after that, finish and give the user run %s to follow in the editor. Don't edit nodes while it runs.", summary.runningFor(), summary.pendingNode(), run.ExecutionId), agentToolCall(agentToolBuilderName, "get_workflow_run", "execution_id", run.ExecutionId))
+	default:
+		result["next"] = agentToolNext("This run finished without errors. If the user says it didn't work, ask what they expected, or look at other runs.", agentToolCall(agentToolBuilderName, "search_workflow_runs", "has_errors", "true", "since", "7d"))
+	}
+
+	return result
+}
+
+// Resolves latest, latest_failed or a run ID to a run of the session's workflow
+func resolveAgentRun(tc agentToolContext, ref string) (*WorkflowExecution, string, map[string]interface{}) {
+	ref = strings.TrimSpace(ref)
+	normalized := normalizeToolName(ref)
+	if len(normalized) == 0 {
+		normalized = "latestfailed"
+	}
+
+	switch normalized {
+	case "latest", "last", "newest", "recent", "latestrun", "lastrun", "mostrecent":
+		executions, err := getAgentWorkflowRuns(tc.Ctx, tc.Workflow.ID, 5)
+		if err != nil && len(executions) == 0 {
+			return nil, "", agentToolProblem(fmt.Sprintf("Couldn't load the runs: %s", err), "Tell the user the run history couldn't be loaded right now.", nil)
+		}
+		if len(executions) == 0 {
+			return nil, "", agentNeverRunProblem(tc.Workflow)
+		}
+		return loadFullAgentRun(tc.Ctx, executions[0]), "", nil
+
+	case "latestfailed", "lastfailed", "failed", "latestfailure", "lastfailure", "latesterror", "lasterror":
+		executions, err := getAgentWorkflowRuns(tc.Ctx, tc.Workflow.ID, agentToolMaxRunsScanned)
+		if err != nil && len(executions) == 0 {
+			return nil, "", agentToolProblem(fmt.Sprintf("Couldn't load the runs: %s", err), "Tell the user the run history couldn't be loaded right now.", nil)
+		}
+		if len(executions) == 0 {
+			return nil, "", agentNeverRunProblem(tc.Workflow)
+		}
+
+		for _, listed := range executions {
+			execution := loadFullAgentRun(tc.Ctx, listed)
+			if summarizeAgentRun(execution).didNotFinishCleanly() {
+				return execution, "", nil
+			}
+		}
+
+		return loadFullAgentRun(tc.Ctx, executions[0]), fmt.Sprintf("None of the last %d runs failed, so this is the latest run instead.", len(executions)), nil
+	}
+
+	if ref == tc.Workflow.ID {
+		return nil, "", agentToolProblem("That's the workflow's ID, not a run ID.", "Use latest_failed or latest, or find a run ID with search_workflow_runs.", agentToolCall(agentToolBuilderName, "get_workflow_run", "execution_id", "latest_failed"))
+	}
+
+	if len(ref) != 36 {
+		return nil, "", agentToolProblem(fmt.Sprintf("'%s' isn't a run ID. Run IDs look like 8431c35b-6b37-43b2-9e16-89dab1fd8d22.", ref), "Find the run first.", agentToolCall(agentToolBuilderName, "search_workflow_runs"))
+	}
+
+	execution, err := GetWorkflowExecution(tc.Ctx, ref)
+	if err != nil || execution == nil || len(execution.ExecutionId) == 0 {
+		return nil, "", agentToolProblem(fmt.Sprintf("No run with ID %s.", ref), "List the recent runs to get a valid ID.", agentToolCall(agentToolBuilderName, "search_workflow_runs", "since", "7d"))
+	}
+
+	if execution.WorkflowId != tc.Workflow.ID && execution.Workflow.ID != tc.Workflow.ID {
+		return nil, "", agentToolProblem("That run belongs to a different workflow. You can only read runs of the workflow you're editing.", "List this workflow's runs instead.", agentToolCall(agentToolBuilderName, "search_workflow_runs"))
+	}
+
+	return execution, "", nil
+}
+
+// ----- Version tools: list, compare, revert -----
+
+func getAgentWorkflowRevisions(ctx context.Context, workflowID string) []Workflow {
+	revisions, err := ListWorkflowRevisions(ctx, workflowID, 100)
+	if err != nil {
+		log.Printf("[WARNING] Agent tools: failed listing revisions for workflow %s: %s", workflowID, err)
+	}
+
+	sort.SliceStable(revisions, func(i, j int) bool {
+		return revisions[i].Edited > revisions[j].Edited
+	})
+
+	return revisions
+}
+
+// The newest saved version from at or before a time, like the chat's revert does
+func agentRevisionAtOrBefore(revisions []Workflow, unixSeconds int64) *Workflow {
+	for i := range revisions {
+		if agentUnixSeconds(revisions[i].Edited) <= unixSeconds {
+			return &revisions[i]
+		}
+	}
+
+	return nil
+}
+
+// Resolves current, before_my_changes, last_successful_run, last_failed_run,
+// a revision_id or an execution_id to a version of the workflow
+func resolveAgentWorkflowVersion(tc agentToolContext, ref string, revisions []Workflow) (*Workflow, string, map[string]interface{}) {
+	ref = strings.TrimSpace(ref)
+	normalized := normalizeToolName(ref)
+	listCall := agentToolCall(agentToolBuilderName, "list_workflow_revisions", "since", "7d")
+
+	versionForRun := func(execution *WorkflowExecution, what string) (*Workflow, string, map[string]interface{}) {
+		if revision := agentRevisionAtOrBefore(revisions, agentUnixSeconds(execution.StartedAt)); revision != nil {
+			return revision, fmt.Sprintf("the version %s used (saved %s, revision %s)", what, agentTimeLabel(revision.Edited), revision.RevisionId), nil
+		}
+
+		workflow := execution.Workflow
+		return &workflow, fmt.Sprintf("the version %s used (from the run itself)", what), nil
+	}
+
+	findRun := func(wantFailed bool) (*Workflow, string, map[string]interface{}) {
+		executions, _ := getAgentWorkflowRuns(tc.Ctx, tc.Workflow.ID, agentToolMaxRunsScanned)
+		for _, listed := range executions {
+			execution := loadFullAgentRun(tc.Ctx, listed)
+			summary := summarizeAgentRun(execution)
+			if (wantFailed && summary.didNotFinishCleanly()) || (!wantFailed && summary.RealStatus == "FINISHED") {
+				what := fmt.Sprintf("run %s (%s)", execution.ExecutionId, agentTimeLabel(execution.StartedAt))
+				return versionForRun(execution, what)
+			}
+		}
+
+		kind := "finished without errors"
+		if wantFailed {
+			kind = "failed"
+		}
+
+		return nil, "", agentToolProblem(fmt.Sprintf("No run among the last %d %s.", len(executions), kind), "Look at the saved versions instead.", listCall)
+	}
+
+	switch normalized {
+	case "", "current", "now", "latest", "head", "saved":
+		return tc.Workflow, "the current saved version", nil
+	case "beforemychanges", "sessionstart", "beforeagent", "beforesession", "original", "beforechat", "beforethischat", "start":
+		started := agentUnixSeconds(tc.AgentExecution.StartedAt)
+		if revision := agentRevisionAtOrBefore(revisions, started); revision != nil {
+			return revision, fmt.Sprintf("the version from before this session (saved %s, revision %s)", agentTimeLabel(revision.Edited), revision.RevisionId), nil
+		}
+		return nil, "", agentToolProblem(fmt.Sprintf("There's no saved version from before this session started (%s). The workflow may have been created in this session.", agentTimeLabel(started)), "Pick a version from the list instead.", listCall)
+	case "lastsuccessfulrun", "lastsuccess", "lastworking", "lastgood", "lastok", "lastsuccessful", "lastworkingversion":
+		return findRun(false)
+	case "lastfailedrun", "latestfailed", "lastfailed", "latestfailedrun":
+		return findRun(true)
+	}
+
+	if ref == tc.Workflow.ID {
+		return nil, "", agentToolProblem("That's the workflow's ID, not a version.", "Use current, before_my_changes, last_successful_run, a revision_id from list_workflow_revisions, or a run ID.", listCall)
+	}
+
+	for i := range revisions {
+		if revisions[i].RevisionId == ref {
+			return &revisions[i], fmt.Sprintf("revision %s (saved %s)", ref, agentTimeLabel(revisions[i].Edited)), nil
+		}
+	}
+
+	if len(ref) == 36 {
+		execution, err := GetWorkflowExecution(tc.Ctx, ref)
+		if err == nil && execution != nil && len(execution.ExecutionId) > 0 {
+			if execution.WorkflowId != tc.Workflow.ID && execution.Workflow.ID != tc.Workflow.ID {
+				return nil, "", agentToolProblem("That run belongs to a different workflow.", "Use a run of the workflow you're editing.", agentToolCall(agentToolBuilderName, "search_workflow_runs"))
+			}
+
+			return versionForRun(execution, fmt.Sprintf("run %s", ref))
+		}
+	}
+
+	return nil, "", agentToolProblem(fmt.Sprintf("Unknown version '%s'. Use current, before_my_changes, last_successful_run, last_failed_run, a revision_id or a run ID.", ref), "List the saved versions to get a revision_id.", listCall)
+}
+
+type agentWorkflowDiff struct {
+	Changes map[string]interface{}
+	Lines   []string
+	Count   int
+}
+
+// Diff by meaning: nodes, parameters, branches, triggers, variables. Positions are ignored.
+func diffAgentWorkflows(from, to *Workflow, nodeFilter string) agentWorkflowDiff {
+	diff := agentWorkflowDiff{Changes: map[string]interface{}{}}
+	labelFor := map[string]string{}
+	for _, workflow := range []*Workflow{from, to} {
+		for _, action := range workflow.Actions {
+			labelFor[action.ID] = action.Label
+		}
+		for _, trigger := range workflow.Triggers {
+			labelFor[trigger.ID] = trigger.Label
+		}
+	}
+
+	var filterIDs map[string]bool
+	if len(nodeFilter) > 0 {
+		filterIDs = map[string]bool{}
+		for _, workflow := range []*Workflow{from, to} {
+			if node := findAgentNode(workflow.Actions, nodeFilter); node != nil {
+				filterIDs[node.ID] = true
+			}
+		}
+	}
+	included := func(id string) bool { return filterIDs == nil || filterIDs[id] }
+
+	fromActions := map[string]Action{}
+	for _, action := range from.Actions {
+		fromActions[action.ID] = action
+	}
+	toActions := map[string]Action{}
+	for _, action := range to.Actions {
+		toActions[action.ID] = action
+	}
+
+	added, removed, changed := []map[string]string{}, []map[string]string{}, []map[string]interface{}{}
+	for _, action := range to.Actions {
+		if _, ok := fromActions[action.ID]; !ok && included(action.ID) {
+			added = append(added, map[string]string{"label": action.Label, "id": action.ID, "app": action.AppName, "action": action.Name})
+			diff.Lines = append(diff.Lines, fmt.Sprintf("+node %s", action.Label))
+		}
+	}
+
+	for _, action := range from.Actions {
+		if !included(action.ID) {
+			continue
+		}
+
+		newAction, ok := toActions[action.ID]
+		if !ok {
+			removed = append(removed, map[string]string{"label": action.Label, "id": action.ID, "app": action.AppName, "action": action.Name})
+			diff.Lines = append(diff.Lines, fmt.Sprintf("-node %s", action.Label))
+			continue
+		}
+
+		nodeChanges := diffAgentActions(action, newAction)
+		if len(nodeChanges) > 0 {
+			changed = append(changed, map[string]interface{}{"label": newAction.Label, "id": action.ID, "changes": nodeChanges})
+			diff.Lines = append(diff.Lines, fmt.Sprintf("~%s: %s", newAction.Label, agentDiffKeys(nodeChanges)))
+		}
+	}
+
+	branchKey := func(branch Branch) string { return branch.SourceID + "->" + branch.DestinationID }
+	branchName := func(branch Branch) string {
+		return fmt.Sprintf("%s -> %s", agentFirstNonEmpty(labelFor[branch.SourceID], branch.SourceID), agentFirstNonEmpty(labelFor[branch.DestinationID], branch.DestinationID))
+	}
+
+	fromBranches := map[string]Branch{}
+	for _, branch := range from.Branches {
+		fromBranches[branchKey(branch)] = branch
+	}
+	toBranches := map[string]Branch{}
+	for _, branch := range to.Branches {
+		toBranches[branchKey(branch)] = branch
+	}
+
+	branchChanges := []string{}
+	for _, branch := range to.Branches {
+		if !included(branch.SourceID) && !included(branch.DestinationID) {
+			continue
+		}
+
+		old, ok := fromBranches[branchKey(branch)]
+		if !ok {
+			branchChanges = append(branchChanges, "+"+branchName(branch))
+			continue
+		}
+
+		oldConditions, _ := json.Marshal(old.Conditions)
+		newConditions, _ := json.Marshal(branch.Conditions)
+		if string(oldConditions) != string(newConditions) {
+			branchChanges = append(branchChanges, "~conditions on "+branchName(branch))
+		}
+	}
+
+	for _, branch := range from.Branches {
+		if _, ok := toBranches[branchKey(branch)]; !ok && (included(branch.SourceID) || included(branch.DestinationID)) {
+			branchChanges = append(branchChanges, "-"+branchName(branch))
+		}
+	}
+
+	for _, line := range branchChanges {
+		diff.Lines = append(diff.Lines, line[:1]+"branch "+line[1:])
+	}
+
+	triggerChanges := []string{}
+	if filterIDs == nil {
+		fromTriggers := map[string]Trigger{}
+		for _, trigger := range from.Triggers {
+			fromTriggers[trigger.ID] = trigger
+		}
+		toTriggers := map[string]Trigger{}
+		for _, trigger := range to.Triggers {
+			toTriggers[trigger.ID] = trigger
+		}
+
+		for _, trigger := range to.Triggers {
+			old, ok := fromTriggers[trigger.ID]
+			if !ok {
+				triggerChanges = append(triggerChanges, fmt.Sprintf("+%s (%s)", trigger.Label, trigger.TriggerType))
+				continue
+			}
+
+			if old.Label != trigger.Label {
+				triggerChanges = append(triggerChanges, fmt.Sprintf("~%s: renamed from %s", trigger.Label, old.Label))
+			} else if paramChanges := diffAgentParams(old.Parameters, trigger.Parameters); len(paramChanges) > 0 {
+				triggerChanges = append(triggerChanges, fmt.Sprintf("~%s: %s", trigger.Label, agentDiffKeys(paramChanges)))
+			}
+		}
+
+		for _, trigger := range from.Triggers {
+			if _, ok := toTriggers[trigger.ID]; !ok {
+				triggerChanges = append(triggerChanges, fmt.Sprintf("-%s (%s)", trigger.Label, trigger.TriggerType))
+			}
+		}
+
+		for _, line := range triggerChanges {
+			diff.Lines = append(diff.Lines, line[:1]+"trigger "+line[1:])
+		}
+
+		if from.Start != to.Start {
+			diff.Changes["start_node"] = fmt.Sprintf("%s -> %s", agentFirstNonEmpty(labelFor[from.Start], from.Start, "none"), agentFirstNonEmpty(labelFor[to.Start], to.Start, "none"))
+			diff.Lines = append(diff.Lines, "~start node")
+		}
+
+		fromVariables := map[string]string{}
+		for _, variable := range from.WorkflowVariables {
+			fromVariables[variable.Name] = variable.Value
+		}
+		variableChanges := []string{}
+		toVariableNames := map[string]bool{}
+		for _, variable := range to.WorkflowVariables {
+			toVariableNames[variable.Name] = true
+			old, ok := fromVariables[variable.Name]
+			if !ok {
+				variableChanges = append(variableChanges, "+"+variable.Name)
+			} else if old != variable.Value {
+				variableChanges = append(variableChanges, "~"+variable.Name+" (value hidden)")
+			}
+		}
+		for name := range fromVariables {
+			if !toVariableNames[name] {
+				variableChanges = append(variableChanges, "-"+name)
+			}
+		}
+		sort.Strings(variableChanges)
+		if len(variableChanges) > 0 {
+			diff.Changes["variables"] = variableChanges
+			diff.Lines = append(diff.Lines, "~variables")
+		}
+	}
+
+	if len(added) > 0 {
+		diff.Changes["nodes_added"] = added
+	}
+	if len(removed) > 0 {
+		diff.Changes["nodes_removed"] = removed
+	}
+	if len(changed) > 0 {
+		diff.Changes["nodes_changed"] = changed
+	}
+	if len(branchChanges) > 0 {
+		diff.Changes["branches"] = branchChanges
+	}
+	if len(triggerChanges) > 0 {
+		diff.Changes["triggers"] = triggerChanges
+	}
+
+	diff.Count = len(diff.Lines)
+	return diff
+}
+
+func diffAgentActions(from, to Action) map[string]string {
+	changes := map[string]string{}
+	if from.Label != to.Label {
+		changes["label"] = fmt.Sprintf("%s -> %s", from.Label, to.Label)
+	}
+
+	if from.AppName != to.AppName || from.Name != to.Name {
+		changes["app/action"] = fmt.Sprintf("%s/%s -> %s/%s", from.AppName, from.Name, to.AppName, to.Name)
+	}
+
+	if from.AuthenticationId != to.AuthenticationId {
+		changes["credentials"] = "changed"
+	}
+
+	for name, change := range diffAgentParams(from.Parameters, to.Parameters) {
+		changes["param "+name] = change
+	}
+
+	return changes
+}
+
+func diffAgentParams(from, to []WorkflowAppActionParameter) map[string]string {
+	changes := map[string]string{}
+	fromValues := map[string]string{}
+	for _, param := range from {
+		fromValues[param.Name] = param.Value
+	}
+
+	toNames := map[string]bool{}
+	for _, param := range to {
+		toNames[param.Name] = true
+		old := fromValues[param.Name]
+		if old == param.Value {
+			continue
+		}
+
+		if isSensitiveParameter(param.Name) || len(agentFindSecret(old)) > 0 || len(agentFindSecret(param.Value)) > 0 {
+			changes[param.Name] = "changed (value hidden)"
+			continue
+		}
+
+		changes[param.Name] = fmt.Sprintf("%q -> %q", agentToolTruncate(old, 160), agentToolTruncate(param.Value, 160))
+	}
+
+	for name, value := range fromValues {
+		if !toNames[name] && len(value) > 0 {
+			changes[name] = "removed"
+		}
+	}
+
+	return changes
+}
+
+func agentDiffKeys(changes map[string]string) string {
+	keys := []string{}
+	for key := range changes {
+		keys = append(keys, strings.TrimPrefix(key, "param "))
+	}
+
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
+}
+
+func agentSummaryLines(lines []string, max int) string {
+	if len(lines) <= max {
+		return strings.Join(lines, "; ")
+	}
+
+	return fmt.Sprintf("%s; +%d more", strings.Join(lines[:max], "; "), len(lines)-max)
+}
+
+func runAgentListWorkflowRevisions(tc agentToolContext, fields map[string]string) map[string]interface{} {
+	notes := []string{}
+	now := time.Now()
+	since, note := parseAgentToolTime(fields["since"], now.Add(-agentToolDefaultWindow), now)
+	notes = agentAppendNote(notes, note)
+	limit, note := agentClampInt(fields["limit"], 10, 1, 30, "limit")
+	notes = agentAppendNote(notes, note)
+
+	revisions := getAgentWorkflowRevisions(tc.Ctx, tc.Workflow.ID)
+	if len(revisions) == 0 {
+		return agentToolProblem("This workflow has no saved versions yet.", "Versions are saved every time the workflow is saved. Nothing to compare or revert to.", nil)
+	}
+
+	beforeMine := agentRevisionAtOrBefore(revisions, agentUnixSeconds(tc.AgentExecution.StartedAt))
+	rows := []map[string]interface{}{}
+	for i := range revisions {
+		revision := revisions[i]
+		if agentUnixSeconds(revision.Edited) < since.Unix() {
+			break
+		}
+
+		row := map[string]interface{}{
+			"revision_id": revision.RevisionId,
+			"saved":       agentTimeLabel(revision.Edited),
+			"updated_by":  revision.UpdatedBy,
+		}
+
+		if i+1 < len(revisions) {
+			row["changes"] = agentSummaryLines(diffAgentWorkflows(&revisions[i+1], &revision, "").Lines, 4)
+		} else {
+			row["changes"] = "oldest saved version"
+		}
+
+		if diffAgentWorkflows(&revision, tc.Workflow, "").Count == 0 {
+			row["matches_current"] = true
+		}
+
+		if beforeMine != nil && beforeMine.RevisionId == revision.RevisionId {
+			row["before_my_changes"] = true
+		}
+
+		rows = append(rows, row)
+		if len(rows) >= limit {
+			break
+		}
+	}
+
+	result := map[string]interface{}{
+		"success":   true,
+		"window":    map[string]string{"since": agentTimeLabel(since.Unix())},
+		"revisions": rows,
+		"total":     len(revisions),
+	}
+
+	if len(notes) > 0 {
+		result["notes"] = notes
+	}
+
+	if len(rows) == 0 {
+		days := int(now.Sub(time.Unix(agentUnixSeconds(revisions[0].Edited), 0)).Hours()/24) + 1
+		result["problem"] = fmt.Sprintf("No versions saved since %s. The newest is from %s.", agentTimeLabel(since.Unix()), agentTimeLabel(revisions[0].Edited))
+		result["next"] = agentToolNext("Widen the time window.", agentToolCall(agentToolBuilderName, "list_workflow_revisions", "since", fmt.Sprintf("%dd", days)))
+		return result
+	}
+
+	result["next"] = agentToolNext("Compare a version with the current one to see exactly what changed, before reverting anything.", agentToolCall(agentToolBuilderName, "compare_workflow", "from", fmt.Sprintf("%v", rows[len(rows)-1]["revision_id"]), "to", "current"))
+	return result
+}
+
+func runAgentCompareWorkflow(tc agentToolContext, fields map[string]string) map[string]interface{} {
+	revisions := getAgentWorkflowRevisions(tc.Ctx, tc.Workflow.ID)
+	fromRef := agentFirstNonEmpty(fields["from"], "before_my_changes")
+	toRef := agentFirstNonEmpty(fields["to"], "current")
+
+	from, fromLabel, problem := resolveAgentWorkflowVersion(tc, fromRef, revisions)
+	if problem != nil {
+		return problem
+	}
+
+	to, toLabel, problem := resolveAgentWorkflowVersion(tc, toRef, revisions)
+	if problem != nil {
+		return problem
+	}
+
+	nodeFilter := strings.TrimSpace(fields["node"])
+	if len(nodeFilter) > 0 && findAgentNode(from.Actions, nodeFilter) == nil && findAgentNode(to.Actions, nodeFilter) == nil {
+		return agentUnknownNodeProblem(nodeFilter, tc.Workflow.Actions, "in either version", tc.Workflow.ID)
+	}
+
+	diff := diffAgentWorkflows(from, to, nodeFilter)
+	result := map[string]interface{}{
+		"success": true,
+		"from":    fromLabel,
+		"to":      toLabel,
+	}
+
+	if diff.Count == 0 {
+		result["identical"] = true
+		result["next"] = agentToolNext("The two versions are the same, so there's nothing to revert between them.", nil)
+		return result
+	}
+
+	result["summary"] = diff.Lines
+	result["changes"] = diff.Changes
+	if normalizeToolName(toRef) == "current" {
+		result["next"] = agentToolNext("To undo these changes, revert to the 'from' version. Pass nodes=[...] to restore only some nodes.", agentToolCall(agentToolBuilderName, "revert_workflow", "to", fromRef))
+	} else {
+		result["next"] = agentToolNext("Compare with the current version to see what's in the workflow now.", agentToolCall(agentToolBuilderName, "compare_workflow", "from", fromRef, "to", "current"))
+	}
+
+	return result
+}
+
+func runAgentRevertWorkflow(tc agentToolContext, fields map[string]string) map[string]interface{} {
+	toRef := strings.TrimSpace(fields["to"])
+	if len(toRef) == 0 {
+		return agentToolProblem("Say which version to restore with 'to'.", "List the saved versions, or use to=before_my_changes to undo this session's changes.", agentToolCall(agentToolBuilderName, "list_workflow_revisions"))
+	}
+
+	revisions := getAgentWorkflowRevisions(tc.Ctx, tc.Workflow.ID)
+	target, targetLabel, problem := resolveAgentWorkflowVersion(tc, toRef, revisions)
+	if problem != nil {
+		return problem
+	}
+
+	current := tc.Workflow
+	reverted := *current
+	nodes := agentParseList(fields["nodes"])
+	restored := []string{}
+	skipped := []string{}
+
+	if len(nodes) > 0 {
+		// Only the listed nodes: their settings come back, everything else stays
+		reverted.Actions = append([]Action{}, current.Actions...)
+		for _, name := range nodes {
+			targetAction := findAgentNode(target.Actions, name)
+			currentAction := findAgentNode(current.Actions, name)
+			if targetAction != nil && currentAction == nil {
+				currentAction = findAgentNode(current.Actions, targetAction.ID)
+			}
+
+			switch {
+			case targetAction == nil && currentAction != nil:
+				skipped = append(skipped, fmt.Sprintf("'%s' didn't exist in that version. To remove it, use put_agent_update with delete_node.", currentAction.Label))
+			case targetAction == nil:
+				suggestion := ""
+				if closest := closestAgentNodeLabel(append(append([]Action{}, current.Actions...), target.Actions...), name); len(closest) > 0 {
+					suggestion = fmt.Sprintf(" Did you mean '%s'?", closest)
+				}
+				skipped = append(skipped, fmt.Sprintf("No node '%s' in either version.%s", name, suggestion))
+			case currentAction == nil:
+				skipped = append(skipped, fmt.Sprintf("'%s' was deleted after that version. Restoring it needs its connections too: revert the whole workflow, or add it again with put_agent_update.", targetAction.Label))
+			default:
+				for i := range reverted.Actions {
+					if reverted.Actions[i].ID == currentAction.ID {
+						restoredAction := *targetAction
+						restoredAction.ID = currentAction.ID
+						restoredAction.Position = currentAction.Position
+						reverted.Actions[i] = restoredAction
+						restored = append(restored, targetAction.Label)
+						break
+					}
+				}
+			}
+		}
+
+		if len(restored) == 0 {
+			result := agentToolProblem("None of the nodes could be restored.", "Read the workflow to check the node names, then try again.", agentToolCall(agentToolBuilderName, "get_minimal_workflow", "workflowId", current.ID))
+			result["details"] = skipped
+			return result
+		}
+	} else {
+		reverted.Actions = target.Actions
+		reverted.Triggers = target.Triggers
+		reverted.Branches = target.Branches
+		reverted.VisualBranches = target.VisualBranches
+		reverted.WorkflowVariables = target.WorkflowVariables
+		reverted.Start = target.Start
+	}
+
+	diff := diffAgentWorkflows(current, &reverted, "")
+	if diff.Count == 0 {
+		result := map[string]interface{}{
+			"success":       true,
+			"nothing_to_do": true,
+			"note":          fmt.Sprintf("The workflow already matches %s.", targetLabel),
+			"next":          agentToolNext("Nothing changed. If the user expected a difference, compare other versions.", agentToolCall(agentToolBuilderName, "list_workflow_revisions", "since", "7d")),
+		}
+		if len(skipped) > 0 {
+			result["skipped"] = skipped
+		}
+		return result
+	}
+
+	if len(nodes) == 0 && !agentIsTrue(fields["confirm"]) {
+		return map[string]interface{}{
+			"success":      true,
+			"dry_run":      true,
+			"target":       targetLabel,
+			"would_change": diff.Lines,
+			"next":         agentToolNext("Nothing was changed yet. Reverting the whole workflow replaces it for everyone: unless the user asked you to revert, ask them first. Then call again with confirm=true.", agentToolCall(agentToolBuilderName, "revert_workflow", "to", toRef, "confirm", "true")),
+		}
+	}
+
+	if err := saveAgentRevertedWorkflow(tc, &reverted); err != nil {
+		return agentToolProblem(fmt.Sprintf("Saving the reverted workflow failed: %s", err), "Nothing was changed. Tell the user the revert failed.", nil)
+	}
+
+	log.Printf("[INFO] Agent tools: reverted workflow %s to %s (%d changes) for user %s", current.ID, targetLabel, diff.Count, tc.User.Username)
+	result := map[string]interface{}{
+		"success":     true,
+		"reverted_to": targetLabel,
+		"changed":     diff.Lines,
+		"validation":  validateWorkflowForAgent(tc.Ctx, &reverted, nil),
+		"next":        agentToolNext("Tell the user what was restored. To check it works, ask them to re-run the workflow, then use get_workflow_run(execution_id=latest).", nil),
+	}
+
+	if len(restored) > 0 {
+		result["restored_nodes"] = restored
+	}
+	if len(skipped) > 0 {
+		result["skipped"] = skipped
+	}
+
+	return result
+}
+
+// Saves through the regular workflow save, the same one the chat's revert button uses,
+// then drops the agent's draft cache so the next put_agent_update starts from it.
+func saveAgentRevertedWorkflow(tc agentToolContext, workflow *Workflow) error {
+	body, err := json.Marshal(workflow)
+	if err != nil {
+		return err
+	}
+
+	request := httptest.NewRequest("PUT", fmt.Sprintf("/api/v1/workflows/%s", workflow.ID), bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", tc.Request.Header.Get("Authorization"))
+	request.Header.Set("Org-Id", tc.Request.Header.Get("Org-Id"))
+
+	recorder := httptest.NewRecorder()
+	SaveWorkflow(recorder, request)
+	if recorder.Code >= 300 {
+		return fmt.Errorf("status %d: %s", recorder.Code, agentToolTruncate(recorder.Body.String(), 300))
+	}
+
+	return nil
+}
+
+// ----- Validation -----
+
+var agentSecretPatterns = []struct {
+	Name    string
+	Pattern *regexp.Regexp
+}{
+	{"Google OAuth access token", regexp.MustCompile(`ya29\.[A-Za-z0-9_\-]{20,}`)},
+	{"API key (sk-...)", regexp.MustCompile(`\bsk-(?:ant-|proj-)?[A-Za-z0-9_\-]{20,}`)},
+	{"GitHub token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{30,}`)},
+	{"Slack token", regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9\-]{10,}`)},
+	{"AWS access key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)},
+	{"JWT", regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}`)},
+	{"private key", regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
+	{"bearer token", regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9_\-\.=]{20,}`)},
+}
+
+// Returns the kind of secret and a masked preview, or empty strings
+func agentFindSecret(value string) string {
+	for _, secret := range agentSecretPatterns {
+		if found := secret.Pattern.FindString(value); len(found) > 0 {
+			preview := found
+			if len(preview) > 6 {
+				preview = preview[:6]
+			}
+			return fmt.Sprintf("%s (%s..., %d characters)", secret.Name, preview, len(found))
+		}
+	}
+
+	return ""
+}
+
+func agentLatestRun(ctx context.Context, workflowID string) *WorkflowExecution {
+	executions, err := getAgentWorkflowRuns(ctx, workflowID, 1)
+	if err != nil || len(executions) == 0 {
+		return nil
+	}
+
+	return loadFullAgentRun(ctx, executions[0])
+}
+
+// Static checks on a workflow. Never blocks a save: the agent gets the issues and fixes them.
+// With a recent run, $refs are also checked against what that run produced.
+func validateWorkflowForAgent(ctx context.Context, workflow *Workflow, latestRun *WorkflowExecution) map[string]interface{} {
+	issues := []map[string]string{}
+	errorCount, warningCount := 0, 0
+	add := func(severity, node, code, problem, fix string) {
+		if severity == "error" {
+			errorCount += 1
+		} else {
+			warningCount += 1
+		}
+		issues = append(issues, map[string]string{"severity": severity, "node": node, "code": code, "problem": problem, "fix": fix})
+	}
+
+	// A node changed since the latest run produced different output then, so its shape there says nothing now
+	changedSinceRun := map[string]bool{}
+	if latestRun != nil {
+		latestRun = sanitizedAgentRunCopy(latestRun)
+		for _, action := range workflow.Actions {
+			runAction := findAgentNode(latestRun.Workflow.Actions, action.ID)
+			if runAction == nil || len(diffAgentActions(*runAction, action)) > 0 {
+				changedSinceRun[action.ID] = true
+			}
+		}
+	}
+
+	if len(workflow.Actions) > 0 {
+		if len(workflow.Start) == 0 || findAgentNode(workflow.Actions, workflow.Start) == nil {
+			add("error", "", "no_start_node", "The workflow has no valid start node, so nothing runs.", "Set a start node, e.g. connect the trigger to the first node with add_branch.")
+		}
+	}
+
+	incoming := map[string]bool{}
+	outgoing := map[string]bool{}
+	for _, branch := range workflow.Branches {
+		incoming[branch.DestinationID] = true
+		outgoing[branch.SourceID] = true
+	}
+
+	actionByRef := map[string]Action{}
+	for _, action := range workflow.Actions {
+		actionByRef[agentRefName(action.Label)] = action
+	}
+
+	for _, action := range workflow.Actions {
+		if action.ID != workflow.Start && !incoming[action.ID] {
+			add("warning", action.Label, "unreachable", "Nothing connects to this node, so it never runs.", "Add a branch from the node that should run before it, or delete it.")
+		}
+
+		hasCredentialParams, credentialsFilled := false, false
+		for _, param := range action.Parameters {
+			value := strings.TrimSpace(param.Value)
+			if param.Configuration {
+				hasCredentialParams = true
+				if len(value) > 0 {
+					credentialsFilled = true
+				}
+			} else if param.Required && len(value) == 0 {
+				add("error", action.Label, "missing_required_param", fmt.Sprintf("Required parameter '%s' is empty.", param.Name), "Set it with put_agent_update (edit_node).")
+			}
+
+			if secret := agentFindSecret(param.Value); len(secret) > 0 {
+				add("warning", action.Label, "hardcoded_secret", fmt.Sprintf("Parameter '%s' contains what looks like a %s. Anyone who can open the workflow can read it, and it stops working once it expires.", param.Name, secret), "Clear it and use the app's saved credentials. post_get_app_actions_summary returns a setup_url if the app isn't authenticated.")
+			}
+		}
+
+		if hasCredentialParams && !credentialsFilled && len(action.AuthenticationId) == 0 {
+			add("warning", action.Label, "needs_credentials", fmt.Sprintf("%s has no credentials attached.", action.AppName), fmt.Sprintf("Call post_get_app_actions_summary for %s to get its setup_url, and ask the user to authenticate.", action.AppName))
+		}
+
+		for _, ref := range describeAgentRefs(action.Parameters, workflow, latestRun) {
+			refText := fmt.Sprintf("%v", ref["ref"])
+			if problem, ok := ref["problem"].(string); ok {
+				fix := "Fix the reference."
+				if suggestion, ok := ref["did_you_mean"].(string); ok {
+					fix = fmt.Sprintf("Did you mean %s?", suggestion)
+				}
+
+				severity := "warning"
+				if strings.HasPrefix(problem, "No node") {
+					severity = "error"
+				}
+				add(severity, action.Label, "bad_reference", fmt.Sprintf("%s: %s", refText, problem), fix)
+				continue
+			}
+
+			if nodeID, ok := ref["node_id"].(string); ok && nodeID != action.ID && !canReach(workflow, nodeID, action.ID) {
+				add("warning", action.Label, "reference_not_upstream", fmt.Sprintf("%s points to %s, which doesn't run before this node, so it'll be empty here.", refText, ref["source"]), "Reference a node that runs earlier, or add a branch so it runs first.")
+			}
+
+			if nodeID, _ := ref["node_id"].(string); changedSinceRun[nodeID] {
+				continue
+			}
+
+			if hint, ok := ref["hint"].(string); ok {
+				add("warning", action.Label, "reference_shape", fmt.Sprintf("%s resolved to %s in the latest run.", refText, ref["resolves_to"]), hint)
+			}
+		}
+	}
+
+	for _, trigger := range workflow.Triggers {
+		if !outgoing[trigger.ID] && strings.ToUpper(trigger.TriggerType) != "USERINPUT" {
+			add("warning", trigger.Label, "trigger_not_connected", "This trigger isn't connected to any node.", "Connect it to the first node with add_branch.")
+		}
+	}
+
+	loopReported := false
+	for _, branch := range workflow.Branches {
+		if !loopReported && canReach(workflow, branch.DestinationID, branch.SourceID) {
+			add("warning", "", "loop", "The branches form a loop, so some nodes could run repeatedly.", "Remove the branch that closes the loop unless it's intended.")
+			loopReported = true
+		}
+	}
+
+	if len(issues) > 25 {
+		issues = issues[:25]
+	}
+
+	result := map[string]interface{}{
+		"ok":       errorCount == 0,
+		"errors":   errorCount,
+		"warnings": warningCount,
+	}
+
+	if len(issues) > 0 {
+		result["issues"] = issues
+	} else {
+		result["summary"] = "No problems found."
+	}
+
+	return result
+}
+
+func runAgentValidateWorkflow(tc agentToolContext, fields map[string]string) map[string]interface{} {
+	validation := validateWorkflowForAgent(tc.Ctx, tc.Workflow, agentLatestRun(tc.Ctx, tc.Workflow.ID))
+
+	nodeFilter := strings.TrimSpace(fields["node"])
+	if len(nodeFilter) > 0 {
+		node := findAgentNode(tc.Workflow.Actions, nodeFilter)
+		if node == nil {
+			return agentUnknownNodeProblem(nodeFilter, tc.Workflow.Actions, "in this workflow", tc.Workflow.ID)
+		}
+
+		if issues, ok := validation["issues"].([]map[string]string); ok {
+			kept := []map[string]string{}
+			for _, issue := range issues {
+				if issue["node"] == node.Label {
+					kept = append(kept, issue)
+				}
+			}
+			validation["issues"] = kept
+		}
+	}
+
+	result := map[string]interface{}{"success": true, "validation": validation}
+	if validation["ok"] == true {
+		result["next"] = agentToolNext("No blocking problems. Warnings are worth fixing, but don't have to be.", nil)
+	} else {
+		result["next"] = agentToolNext("Fix the errors with put_agent_update. Its response includes a new 'validation'.", nil)
+	}
+
+	return result
+}
+
+// ----- Small helpers -----
+
+func agentToolProblem(problem, why string, call map[string]interface{}) map[string]interface{} {
+	return map[string]interface{}{"success": false, "problem": problem, "next": agentToolNext(why, call)}
+}
+
+func agentToolNext(why string, call map[string]interface{}) map[string]interface{} {
+	next := map[string]interface{}{"why": why}
+	if call != nil {
+		next["call"] = call
+	}
+
+	return next
+}
+
+// A decision the agent can copy as-is. fields are key, value pairs.
+func agentToolCall(tool, action string, fields ...string) map[string]interface{} {
+	callFields := []map[string]string{}
+	for i := 0; i+1 < len(fields); i += 2 {
+		callFields = append(callFields, map[string]string{"key": fields[i], "value": fields[i+1]})
+	}
+
+	return map[string]interface{}{"tool": tool, "action": action, "fields": callFields}
+}
+
+func agentToolTruncate(text string, max int) string {
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+
+	return string(runes[:max]) + "..."
+}
+
+// Accepts 24h, 90m, 7d, 2w, a unix timestamp in seconds or ms, or RFC3339
+func parseAgentToolTime(value string, fallback, now time.Time) (time.Time, string) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len(value) == 0 {
+		return fallback, ""
+	}
+
+	value = strings.TrimSuffix(strings.TrimSuffix(value, " ago"), "ago")
+	if number, err := strconv.ParseInt(value, 10, 64); err == nil && number > 100000 {
+		return time.Unix(agentUnixSeconds(number), 0), ""
+	}
+
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed, ""
+	}
+
+	units := map[string]time.Duration{"m": time.Minute, "h": time.Hour, "d": 24 * time.Hour, "w": 7 * 24 * time.Hour}
+	if len(value) >= 2 {
+		if unit, ok := units[value[len(value)-1:]]; ok {
+			if amount, err := strconv.Atoi(strings.TrimSpace(value[:len(value)-1])); err == nil && amount > 0 {
+				return now.Add(-time.Duration(amount) * unit), ""
+			}
+		}
+	}
+
+	return fallback, fmt.Sprintf("couldn't read time '%s' (use e.g. 1h, 24h, 7d or a unix timestamp); used %s instead", value, agentTimeLabel(fallback.Unix()))
+}
+
+func agentClampInt(value string, fallback, min, max int, name string) (int, string) {
+	value = strings.TrimSpace(value)
+	if len(value) == 0 {
+		return fallback, ""
+	}
+
+	number, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback, fmt.Sprintf("%s '%s' isn't a number; used %d", name, value, fallback)
+	}
+
+	if number < min {
+		return min, fmt.Sprintf("%s raised to %d", name, min)
+	}
+
+	if number > max {
+		return max, fmt.Sprintf("%s lowered to the maximum of %d", name, max)
+	}
+
+	return number, ""
+}
+
+func agentAppendNote(notes []string, note string) []string {
+	if len(note) > 0 {
+		notes = append(notes, note)
+	}
+
+	return notes
+}
+
+func agentIsTrue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "yes", "1", "y", "on":
+		return true
+	}
+
+	return false
+}
+
+func agentParseList(value string) []string {
+	value = strings.TrimSpace(value)
+	if len(value) == 0 {
+		return []string{}
+	}
+
+	items := []string{}
+	if json.Unmarshal([]byte(value), &items) != nil {
+		items = strings.Split(strings.Trim(value, "[]"), ",")
+	}
+
+	list := []string{}
+	for _, item := range items {
+		if item = strings.Trim(strings.TrimSpace(item), `"'`); len(item) > 0 {
+			list = append(list, item)
+		}
+	}
+
+	return list
+}
+
+// Execution and result timestamps are seconds in some places and milliseconds in others
+func agentUnixSeconds(value int64) int64 {
+	if value > 100000000000 {
+		return value / 1000
+	}
+
+	return value
+}
+
+func agentTimeLabel(unix int64) string {
+	if unix <= 0 {
+		return "unknown"
+	}
+
+	at := time.Unix(agentUnixSeconds(unix), 0).UTC()
+	ago := time.Since(at)
+	switch {
+	case ago < 0:
+		return at.Format(time.RFC3339)
+	case ago < time.Minute:
+		return fmt.Sprintf("%s (just now)", at.Format(time.RFC3339))
+	case ago < time.Hour:
+		return fmt.Sprintf("%s (%dm ago)", at.Format(time.RFC3339), int(ago.Minutes()))
+	case ago < 48*time.Hour:
+		return fmt.Sprintf("%s (%dh ago)", at.Format(time.RFC3339), int(ago.Hours()))
+	}
+
+	return fmt.Sprintf("%s (%dd ago)", at.Format(time.RFC3339), int(ago.Hours()/24))
+}
+
+func agentToInt(value interface{}) int {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed)
+	case string:
+		number, _ := strconv.Atoi(strings.TrimSpace(typed))
+		return number
+	}
+
+	return 0
+}
+
+func agentFirstString(object map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		switch typed := object[key].(type) {
+		case string:
+			if len(strings.TrimSpace(typed)) > 0 {
+				return typed
+			}
+		case nil:
+			continue
+		default:
+			marshalled, _ := json.Marshal(typed)
+			if text := string(marshalled); text != "null" && text != "{}" && text != "[]" {
+				return agentToolTruncate(text, 300)
+			}
+		}
+	}
+
+	return ""
+}
+
+func agentFirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if len(strings.TrimSpace(value)) > 0 {
+			return value
+		}
+	}
+
+	return ""
+}
+
+func agentSortedKeys(object map[string]interface{}, max int) []string {
+	keys := []string{}
+	for key := range object {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+	if len(keys) > max {
+		keys = keys[:max]
+	}
+
+	return keys
+}
+
+func agentLevenshtein(a, b string) int {
+	previous := make([]int, len(b)+1)
+	for j := range previous {
+		previous[j] = j
+	}
+
+	for i := 1; i <= len(a); i++ {
+		current := make([]int, len(b)+1)
+		current[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+
+			current[j] = previous[j] + 1
+			if current[j-1]+1 < current[j] {
+				current[j] = current[j-1] + 1
+			}
+			if previous[j-1]+cost < current[j] {
+				current[j] = previous[j-1] + cost
+			}
+		}
+		previous = current
+	}
+
+	return previous[len(b)]
+}
+
+// =============================================================================
+// END WORKFLOW BUILDER AGENT TOOLS
+// =============================================================================
 
 // Injects the header in all requests
 func RequestMiddleware(next http.Handler) http.Handler {

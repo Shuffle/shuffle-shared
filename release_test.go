@@ -3806,3 +3806,223 @@ func TestWorkflowReaderCannotCreateOrSave(t *testing.T) {
 		}
 	}
 }
+
+// Workflow builder agent tools (shared.go, WORKFLOW BUILDER AGENT TOOLS). Uses a real
+// failure: Google Sheets answered 400 because the body used $create_list instead of
+// $create_list.message, while Shuffle marked the node SUCCESS.
+func TestWorkflowBuilderAgentTools(t *testing.T) {
+	sheetsResult := `{"status": 400, "body": {"error": {"code": 400, "message": "Invalid JSON payload received. Unknown name \"success\" at 'data.values': Cannot find field.", "status": "INVALID_ARGUMENT"}}, "success": true}`
+	pythonResult := `{"success": true, "message": "[['Invoice received', 'billing@example.com']]"}`
+
+	t.Run("real node status", func(t *testing.T) {
+		cases := []struct {
+			result, status, wantStatus, wantKind, wantText string
+		}{
+			{sheetsResult, "SUCCESS", "FAILED", "http", "Unknown name"},
+			{`{"status": 401, "body": {"error": "invalid_token"}}`, "SUCCESS", "FAILED", "auth", "HTTP 401"},
+			{`{"success": false, "reason": "Bad input"}`, "SUCCESS", "FAILED", "app", "Bad input"},
+			{"Traceback (most recent call last):\n  File x\nNameError: name 'rows' is not defined", "SUCCESS", "FAILED", "python", "NameError"},
+			{pythonResult, "SUCCESS", "OK", "", ""},
+			{"", "SKIPPED", "SKIPPED", "", ""},
+		}
+
+		for _, c := range cases {
+			status, errorText, kind, _ := analyzeAgentNodeResult(ActionResult{Result: c.result, Status: c.status})
+			if status != c.wantStatus || kind != c.wantKind || !strings.Contains(errorText, c.wantText) {
+				t.Errorf("analyzeAgentNodeResult(%.40q) = %s/%s/%q, want %s/%s containing %q", c.result, status, kind, errorText, c.wantStatus, c.wantKind, c.wantText)
+			}
+		}
+	})
+
+	workflow := Workflow{
+		ID:    "87815d1a-8fd5-4b71-abc2-4f4af3a9c307",
+		Start: "filter",
+		Actions: []Action{
+			{ID: "filter", Label: "Filter_Mail", AppName: "Shuffle Tools", Name: "filter_list"},
+			{ID: "python", Label: "Create_List", AppName: "Shuffle Tools", Name: "execute_python", Parameters: []WorkflowAppActionParameter{{Name: "code", Value: "print(rows)"}}},
+			{ID: "sheets", Label: "Save_To_GSheet", AppName: "Google_Sheets", Name: "post_append_values_to_spreadsheet", Parameters: []WorkflowAppActionParameter{
+				{Name: "body", Value: `{"values": $create_list, "raw": $create_list.message, "typo": $create_lst}`},
+				{Name: "access_token", Value: "ya29.a0AehfTOkIkeEv6fmAjYZOxqV-5RhkFHLRRnApd8mcg99Zx7kEvzCOztVfobDZ4pjmeg8o1pQ"},
+			}},
+			{ID: "orphan", Label: "Orphan", AppName: "Shuffle Tools", Name: "repeat_back_to_me"},
+		},
+		Branches: []Branch{{ID: "b1", SourceID: "filter", DestinationID: "python"}, {ID: "b2", SourceID: "python", DestinationID: "sheets"}},
+	}
+	run := WorkflowExecution{
+		ExecutionId: "a4ccd183-3bdd-45a3-b2ef-3263be550c27",
+		Status:      "FINISHED",
+		Workflow:    workflow,
+		Results: []ActionResult{
+			{Action: workflow.Actions[0], Status: "SUCCESS", Result: `{"success": true}`, StartedAt: 1},
+			{Action: workflow.Actions[1], Status: "SUCCESS", Result: pythonResult, StartedAt: 2},
+			{Action: workflow.Actions[2], Status: "SUCCESS", Result: sheetsResult, StartedAt: 3},
+		},
+	}
+
+	t.Run("run summary", func(t *testing.T) {
+		summary := summarizeAgentRun(&run)
+		if summary.RealStatus != "FAILED" || len(summary.Failed) != 1 || summary.Failed[0].Action.Label != "Save_To_GSheet" {
+			t.Fatalf("FINISHED run with a 400 should be FAILED on Save_To_GSheet, got %s %+v", summary.RealStatus, summary.Failed)
+		}
+
+		last := summary.Outcomes[len(summary.Outcomes)-1]
+		if last.Action.Label != "Orphan" || last.RealStatus != "NOT_RUN" || last.NotRunReason != "never reached" {
+			t.Errorf("unconnected node should be NOT_RUN/never reached, got %+v", last)
+		}
+	})
+
+	t.Run("references", func(t *testing.T) {
+		refs := map[string]map[string]interface{}{}
+		for _, ref := range describeAgentRefs(workflow.Actions[2].Parameters, &workflow, &run) {
+			refs[ref["ref"].(string)] = ref
+		}
+
+		if hint, _ := refs["$create_list"]["hint"].(string); !strings.Contains(hint, "$create_list.message") {
+			t.Errorf("$create_list should point to $create_list.message, got %#v", refs["$create_list"])
+		}
+
+		if hint, _ := refs["$create_list.message"]["hint"].(string); !strings.Contains(hint, "json.dumps") {
+			t.Errorf("$create_list.message should flag the Python quotes, got %#v", refs["$create_list.message"])
+		}
+
+		if suggestion, _ := refs["$create_lst"]["did_you_mean"].(string); !strings.Contains(suggestion, "$create_list") {
+			t.Errorf("$create_lst should suggest $create_list, got %#v", refs["$create_lst"])
+		}
+	})
+
+	t.Run("validation", func(t *testing.T) {
+		validation := validateWorkflowForAgent(context.Background(), &workflow, &run)
+		codes := map[string]bool{}
+		for _, issue := range validation["issues"].([]map[string]string) {
+			codes[issue["code"]] = true
+			if strings.Contains(issue["problem"], "Ok3Kev") {
+				t.Errorf("secret leaked into the issue: %s", issue["problem"])
+			}
+		}
+
+		for _, code := range []string{"hardcoded_secret", "bad_reference", "reference_shape", "unreachable"} {
+			if !codes[code] {
+				t.Errorf("expected a %s issue, got %v", code, codes)
+			}
+		}
+
+		if validation["ok"] != false {
+			t.Errorf("unknown reference should be an error, got %#v", validation)
+		}
+
+		// Create_List changed after the run, so the run's output shape is no evidence anymore
+		fixed := workflow
+		fixed.Actions = append([]Action{}, workflow.Actions...)
+		fixed.Actions[1].Parameters = []WorkflowAppActionParameter{{Name: "code", Value: "print(json.dumps(rows))"}}
+		for _, issue := range validateWorkflowForAgent(context.Background(), &fixed, &run)["issues"].([]map[string]string) {
+			if issue["code"] == "reference_shape" {
+				t.Errorf("shape warning from a run that predates the node's change: %s", issue["problem"])
+			}
+		}
+
+		if changed := agentChangedSinceRun(&run, &fixed); len(changed) != 1 || !strings.Contains(changed[0], "Create_List") {
+			t.Errorf("expected only Create_List to have changed since the run, got %v", changed)
+		}
+	})
+
+	t.Run("field names", func(t *testing.T) {
+		tool, legacy, ok := findAgentWorkflowTool("get_workflow_execution")
+		if !ok || !legacy || tool.Name != "get_workflow_run" {
+			t.Fatalf("get_workflow_execution should be a legacy alias of get_workflow_run, got %s %t %t", tool.Name, legacy, ok)
+		}
+
+		fields, ignored, workflowID := normalizeAgentToolFields(map[string]string{
+			"executionId": "abc",
+			"body":        `{"nodeName": "Create_List", "max_chars": 3000}`,
+			"workflow_id": "other",
+			"colour":      "blue",
+		}, tool)
+		if fields["executionid"] != "abc" || fields["node"] != "Create_List" || fields["maxchars"] != "3000" || workflowID != "other" || len(ignored) != 1 || ignored[0] != "colour" {
+			t.Errorf("unexpected normalization: %#v, ignored %v, workflow %q", fields, ignored, workflowID)
+		}
+	})
+
+	t.Run("in-process decisions", func(t *testing.T) {
+		builderAgent := WorkflowExecution{Workflow: Workflow{Actions: []Action{{AppName: "AI Agent", Parameters: []WorkflowAppActionParameter{{Name: "template", Value: "edit-workflow"}}}}}}
+		otherAgent := WorkflowExecution{Workflow: Workflow{Actions: []Action{{AppName: "AI Agent", Parameters: []WorkflowAppActionParameter{{Name: "template", Value: "incident-response"}}}}}}
+		cases := []struct {
+			name      string
+			execution WorkflowExecution
+			decision  AgentDecision
+			want      bool
+		}{
+			{"new run tool", builderAgent, AgentDecision{Tool: "shuffle_workflows_builder", Action: "get_workflow_run"}, true},
+			{"workflow edit", otherAgent, AgentDecision{Tool: "shuffle_workflows_builder", Action: "put_agent_update"}, true},
+			{"old name, builder agent", builderAgent, AgentDecision{Tool: "shuffle_workflows_builder", Action: "get_workflow_execution"}, true},
+			{"old name, other agent keeps the app path", otherAgent, AgentDecision{Tool: "shuffle_workflows_builder", Action: "get_workflow_execution"}, false},
+			{"running a workflow keeps the app path", builderAgent, AgentDecision{Tool: "shuffle_workflows_builder", Action: "post_run_workflow"}, false},
+			{"regular app", builderAgent, AgentDecision{Tool: "gmail", Action: "send_mail"}, false},
+		}
+
+		for _, c := range cases {
+			if _, got := getInProcessAgentRequest(c.execution, c.decision); got != c.want {
+				t.Errorf("%s: in-process = %t, want %t", c.name, got, c.want)
+			}
+		}
+	})
+
+	t.Run("run that never started", func(t *testing.T) {
+		started := func(ago time.Duration) WorkflowExecution {
+			return WorkflowExecution{ExecutionId: "x", Status: "EXECUTING", StartedAt: time.Now().Add(-ago).Unix(), Workflow: workflow}
+		}
+
+		notStarted := started(3 * time.Minute)
+		summary := summarizeAgentRun(&notStarted)
+		if summary.RealStatus != "NOT_STARTED" || !summary.didNotFinishCleanly() || summary.Outcomes[0].RealStatus != "NOT_RUN" || !agentRunMatchesStatus(summary, "stuck") {
+			t.Errorf("3 minutes without results should be NOT_STARTED, got %s %+v", summary.RealStatus, summary.Outcomes[0])
+		}
+
+		starting := started(30 * time.Second)
+		if summary := summarizeAgentRun(&starting); summary.RealStatus != "EXECUTING" || summary.Outcomes[0].RealStatus != "PENDING" {
+			t.Errorf("a run that just started should be EXECUTING, got %s", summary.RealStatus)
+		}
+
+		progressing := started(3 * time.Minute)
+		progressing.Results = []ActionResult{{Action: workflow.Actions[0], Status: "SUCCESS", Result: `{"success": true}`, StartedAt: time.Now().Unix(), CompletedAt: time.Now().Unix()}}
+		if summary := summarizeAgentRun(&progressing); summary.RealStatus != "EXECUTING" {
+			t.Errorf("a long run with results is running, not NOT_STARTED, got %s", summary.RealStatus)
+		}
+	})
+
+	t.Run("time window", func(t *testing.T) {
+		now := time.Unix(1793700000, 0)
+		fallback := now.Add(-24 * time.Hour)
+		if parsed, note := parseAgentToolTime("", fallback, now); !parsed.Equal(fallback) || note != "" {
+			t.Errorf("empty since should default to 24h")
+		}
+		if parsed, _ := parseAgentToolTime("7d", fallback, now); !parsed.Equal(now.Add(-7 * 24 * time.Hour)) {
+			t.Errorf("7d parsed to %s", parsed)
+		}
+		if parsed, _ := parseAgentToolTime("1793600000000", fallback, now); parsed.Unix() != 1793600000 {
+			t.Errorf("millisecond timestamps should work, got %d", parsed.Unix())
+		}
+		if _, note := parseAgentToolTime("yesterday-ish", fallback, now); note == "" {
+			t.Errorf("unreadable time should say so")
+		}
+	})
+
+	t.Run("diff", func(t *testing.T) {
+		changed := workflow
+		changed.Actions = append([]Action{}, workflow.Actions...)
+		changed.Actions[1].Parameters = []WorkflowAppActionParameter{{Name: "code", Value: "print(json.dumps(rows))"}}
+		changed.Actions = append(changed.Actions, Action{ID: "new", Label: "Notify"})
+		changed.Branches = append(append([]Branch{}, workflow.Branches...), Branch{ID: "b3", SourceID: "sheets", DestinationID: "new"})
+
+		diff := diffAgentWorkflows(&workflow, &changed, "")
+		summary := strings.Join(diff.Lines, " | ")
+		for _, want := range []string{"+node Notify", "~Create_List: code", "+branch Save_To_GSheet -> Notify"} {
+			if !strings.Contains(summary, want) {
+				t.Errorf("diff should contain %q, got %s", want, summary)
+			}
+		}
+
+		if same := diffAgentWorkflows(&workflow, &workflow, ""); same.Count != 0 {
+			t.Errorf("identical workflows should have no diff, got %v", same.Lines)
+		}
+	})
+}
