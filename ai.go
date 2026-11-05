@@ -9705,7 +9705,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 						}
 					}
 
-					// Run history, versions and validation, for the workflow builder agent only (shared.go)
 					if strings.Contains(trimmedActionStr, agentToolBuilderName) && isWorkflowBuilderTemplate(template) {
 						sortedAppActions = withAgentWorkflowToolActions(sortedAppActions)
 					}
@@ -9868,7 +9867,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	oldAgentOutput := AgentOutput{}
 	previousAnswers := ""
 	continuationMessage := "" // Tracks user continuation text (new message sent to a finished agent)
-	workflowChangedNote := ""  // Set on a continuation when the edited workflow changed outside the chat
+	workflowChangedNote := ""
 
 	marshalledDecisions := []byte{}
 	relevantDecisions := []AgentDecision{}
@@ -10207,8 +10206,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 						continuationMessage = field.Answer
 						foundContinuation = true
 
-						// The workflow may have been reverted or edited outside the chat since the agent last
-						// looked. Without being told, it answers the follow-up from its memory of the old one.
+						// Without this, the agent answers from its memory of a workflow that was since reverted or edited
 						isWorkflowEdit := template == "workflow-edit" || template == "edit-workflow" || template == "build-workflows" || template == "workflow-builder"
 						if isWorkflowEdit && len(execution.ExecutionArgument) == 36 && AgentWorkflowChangedSinceSeen(ctx, execution.ExecutionArgument) {
 							workflowChangedNote = fmt.Sprintf("SYSTEM NOTE: Workflow %s was changed outside this chat since you last read or edited it (for example reverted or edited by the user). What you saw before may be out of date. Call get_minimal_workflow before answering about the workflow or changing it.", execution.ExecutionArgument)
@@ -11269,8 +11267,7 @@ data_filter:
 		// Parse decisions using the refactored helper function
 		mappedDecisions, parsingErr := parseAgentDecisions(choicesString)
 
-		// In-process actions run right away and never honor a delay (getInProcessAgentRequest).
-		// Cleared here, before the decision is stored, so nothing treats it as scheduled.
+		// In-process actions run right away, so a delay would leave them WAITING forever
 		for idx := range mappedDecisions {
 			if _, inProcess := getInProcessAgentRequest(execution, mappedDecisions[idx]); inProcess && len(mappedDecisions[idx].Delay) > 0 && mappedDecisions[idx].Delay != "0" {
 				mappedDecisions[idx].Delay = "0"

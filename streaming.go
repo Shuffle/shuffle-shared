@@ -508,8 +508,7 @@ func pruneStreamOpsBeforeSave(ctx context.Context, workflowID string, prevSaveSe
 	}
 }
 
-// markStreamSaved moves the replay baseline to the latest op, like a stream "save" op does,
-// for saves that don't send one (the agent, a revert, the API)
+// Like a stream "save" op, for saves that don't send one (the agent, a revert, the API)
 func markStreamSaved(ctx context.Context, workflowID string) {
 	seq := currentStreamSeq(ctx, workflowID)
 	if seq <= lastStreamSaveSeq(ctx, workflowID) {

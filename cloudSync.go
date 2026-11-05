@@ -3076,7 +3076,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 				}
 			} 
 
-			// In-process actions already ran, delay or not: nothing will come back later to finish them
+			// In-process actions already ran; nothing comes back later to finish them
 			if parsedDelay > 0 && ranInProcess {
 				log.Printf("[DEBUG][%s] AI Agent: ignored delay %ds on in-process action '%s', it ran immediately", execution.ExecutionId, parsedDelay, decision.Action)
 				parsedDelay = 0

@@ -5119,8 +5119,6 @@ type WorkflowSearch struct {
 	IgnoreOrg  bool `json:"ignore_org"`
 	SuborgRuns bool `json:"suborg_runs" default:"false"`
 
-	// Light: only what a list of runs shows (agent chat history), fetched in one go and
-	// without refreshing EXECUTING runs from cache
 	Light bool `json:"light"`
 }
 
@@ -6360,7 +6358,6 @@ type WorkflowSetOpsResponse struct {
 	Error             string            `json:"error,omitempty"`
 	FailedAtOp        int               `json:"failed_at_op,omitempty"`
 
-	// Issues in the workflow after the operations, for the agent to fix (validateWorkflowForAgent)
 	Validation map[string]interface{} `json:"validation,omitempty"`
 }
 

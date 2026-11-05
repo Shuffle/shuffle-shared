@@ -9368,7 +9368,6 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 		// Actively used keys
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_2", nameKey, workflow.ID))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflow.ID))
-		// Agent chat revert
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflow.ID))
 	}
 
@@ -18332,7 +18331,6 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 
 		//return executions, "", errors.New("Not implemented yet")
 	} else {
-		// Light searches take the whole page at once: 5 per round trip made 50 agent chats ~10 trips
 		pageSize := 5
 		if search.Light {
 			pageSize = maxLimit
@@ -18540,7 +18538,6 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 			continue
 		}
 
-		// A light list doesn't show live status; each refresh is another execution read
 		if execution.Status == "EXECUTING" && !search.Light {
 			// Get the right one from cache
 			newexec, err := GetWorkflowExecution(ctx, execution.ExecutionId)

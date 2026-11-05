@@ -7256,7 +7256,6 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// The first revision, so an agent chat started before any save can still be reverted
 	SetWorkflowRevision(ctx, workflow)
 
 	// Cleans up cache for the users
@@ -10141,15 +10140,11 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Name: user.ActiveOrg.Name,
 	}
 
-	// Not in a goroutine: GetWorkflow copies triggers from the latest revision when a
-	// workflow has none, so a stale one resurrects triggers this save just removed
+	// Not in a goroutine: GetWorkflow restores missing triggers from the latest revision
 	SetWorkflowRevision(ctx, workflow)
 
-	// The agent reads its unsaved draft before the saved workflow, so a draft from before
-	// this save would hide it from the agent, and its next save would overwrite this one
+	// The agent reads its draft first, so a stale one would hide this save and later overwrite it
 	DeleteCache(ctx, fmt.Sprintf("workflow_ops_cache_%s", workflow.ID))
-	// Editors that load the workflow from now on must not replay stream edits from before
-	// this save: they're in it, or it undid them (a revert)
 	markStreamSaved(ctx, workflow.ID)
 
 	go func() {
@@ -34558,8 +34553,6 @@ func AssignAuthEverywhere(ctx context.Context, auth *AppAuthenticationStorage, u
 	return nil
 }
 
-// lightWorkflowRun keeps what a list of runs shows: ids, status, times, the argument, and
-// for agent runs only the first message (results otherwise carry the whole conversation)
 func lightWorkflowRun(run WorkflowExecution) WorkflowExecution {
 	light := WorkflowExecution{
 		Type:              run.Type,
@@ -38249,9 +38242,7 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(responseData)
 }
 
-// agentWorkflowFingerprint is what the agent's picture of a workflow depends on: its nodes, their
-// parameter values and the branches. Positions and metadata are left out, so saving it unchanged
-// (the editor saves before every chat message) doesn't count as a change.
+// Leaves out positions and metadata: the editor saves before every chat message, which isn't a change
 func agentWorkflowFingerprint(workflow Workflow) string {
 	paramValues := func(params []WorkflowAppActionParameter) string {
 		values := []string{}
@@ -38280,16 +38271,12 @@ func agentWorkflowSeenKey(workflowID string) string {
 	return fmt.Sprintf("agent_workflow_seen_%s", workflowID)
 }
 
-// rememberAgentWorkflowView records what the agent last read or wrote, so a follow-up
-// message can tell whether the workflow changed outside the chat since
 func rememberAgentWorkflowView(ctx context.Context, workflow Workflow) {
 	if err := SetCache(ctx, agentWorkflowSeenKey(workflow.ID), []byte(agentWorkflowFingerprint(workflow)), 60*24); err != nil {
 		log.Printf("[WARNING] Failed remembering the agent's view of workflow %s: %s", workflow.ID, err)
 	}
 }
 
-// AgentWorkflowChangedSinceSeen: whether the saved workflow differs from what the agent last
-// read or wrote. An unsaved draft of the agent's own counts as what it saw. Unknown counts as changed.
 func AgentWorkflowChangedSinceSeen(ctx context.Context, workflowID string) bool {
 	if draft, err := GetCache(ctx, fmt.Sprintf("workflow_ops_cache_%s", workflowID)); err == nil && draft != nil {
 		return false
@@ -38748,7 +38735,6 @@ type workflowBuilderRequest struct {
 	Body    []byte
 	Handler http.HandlerFunc
 
-	// Builder agent tools (WORKFLOW BUILDER AGENT TOOLS section) need the agent's session, so their handler is set when run
 	AgentTool   string
 	LegacyAlias bool
 }
@@ -38757,9 +38743,7 @@ func normalizeToolName(name string) string {
 	return strings.ToLower(strings.NewReplacer("_", "", " ", "", "-", "").Replace(strings.TrimSpace(name)))
 }
 
-// Only the actions that read or write workflow content, plus the builder agent's
-// run/version/validation tools (WORKFLOW BUILDER AGENT TOOLS section). Anything else
-// the builder app can do (running workflows) keeps the normal app path.
+// Only the actions that read or write workflow content, and the agent tools. Running workflows keeps the normal app path.
 func getWorkflowBuilderRequest(decision AgentDecision) (workflowBuilderRequest, bool) {
 	action := normalizeToolName(decision.Action)
 	tool := normalizeToolName(decision.Tool)
@@ -39232,7 +39216,6 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		}
 
 		SetWorkflowRevision(ctx, *workflow)
-		// As saved, after the hydration above changed it
 		rememberAgentWorkflowView(ctx, *workflow)
 
 		// Invalidate the ops cache now that DB is the real source.
@@ -39366,7 +39349,6 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 }
 
 // streamWorkflowOperations sends stream ops to the streaming API endpoint.
-// saved: the ops were saved to the workflow, so editors loading it later mustn't replay them
 func streamWorkflowOperations(ctx context.Context, request *http.Request, workflowID string, streamOps []StreamWorkflowOperation, saved bool) {
 	if len(streamOps) == 0 {
 		return
@@ -39393,7 +39375,6 @@ func streamWorkflowOperations(ctx context.Context, request *http.Request, workfl
 		log.Printf("[WARNING] Failed to stream %d ops for workflow %s: %s", len(streamOps), workflowID, err)
 	}
 
-	// After they're in the stream, so the baseline covers them
 	if saved {
 		markStreamSaved(ctx, workflowID)
 	}
@@ -40255,7 +40236,6 @@ func opMoveNode(wf *Workflow, op *WorkflowOperation) error {
 func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
 	nodeType := strings.ToLower(strings.TrimSpace(op.NodeType))
 
-	// node_type picks where to look; without it, both
 	if nodeType != "trigger" && findActionIndexByID(wf, op.ID) != -1 {
 		return deleteActionFromWorkflow(wf, op.ID)
 	}
@@ -40263,7 +40243,6 @@ func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
 		return deleteTriggerFromWorkflow(wf, op.ID)
 	}
 
-	// An error, not a silent success: the agent must see that what it wanted removed isn't there
 	return fmt.Errorf("node %s not found in the workflow", op.ID)
 }
 
@@ -40672,27 +40651,7 @@ func canReach(wf *Workflow, from, to string) bool {
 	return false
 }
 
-// =============================================================================
-// WORKFLOW BUILDER AGENT TOOLS: run history, saved versions, validation
-// =============================================================================
-//
-// Extra actions on the shuffle_workflows_builder tool. They run in-process like
-// put_agent_update (see getWorkflowBuilderRequest), only for the workflow builder
-// agent, and only on the workflow its session edits.
-//
-//   search_workflow_runs     find runs by status, failing node, text, time window, source
-//   get_workflow_run         one run: real status per node, errors, what each $ref resolved to
-//   list_workflow_revisions  saved versions with what changed in each
-//   compare_workflow         diff two versions (current, before_my_changes, a run, a revision)
-//   revert_workflow          restore a saved version, whole workflow or single nodes
-//   validate_workflow        static checks, also attached to every put_agent_update response
-//
-// Every response carries "next": what to call or do next. Wrong calls (unknown node,
-// wrong ID, empty time window) answer with a nudge instead of a bare error, and with
-// HTTP 200, as a failed call makes the agent retry the same thing.
-//
-// Sections below: registry & dispatch -> session scope -> run analysis -> $ref
-// resolution -> run tools -> version tools -> validation -> small helpers.
+// Workflow builder agent tools. Mistakes answer with HTTP 200 and a "next" hint: a failed call makes the agent retry the same thing.
 
 const (
 	agentToolBuilderName    = "shuffle_workflows_builder"
@@ -40705,7 +40664,6 @@ const (
 	agentToolNotStartedAfter = 2 * time.Minute
 )
 
-// ----- Registry & dispatch -----
 
 type agentWorkflowTool struct {
 	Name        string
@@ -40795,7 +40753,6 @@ func getAgentWorkflowTools() []agentWorkflowTool {
 	}
 }
 
-// Returns the tool for a normalized action name, and whether it matched an older alias
 func findAgentWorkflowTool(action string) (agentWorkflowTool, bool, bool) {
 	action = normalizeToolName(action)
 	for _, tool := range getAgentWorkflowTools() {
@@ -40813,8 +40770,7 @@ func findAgentWorkflowTool(action string) (agentWorkflowTool, bool, bool) {
 	return agentWorkflowTool{}, false, false
 }
 
-// Adds the agent tools to the builder's action list in the prompt. The older
-// execution actions are hidden there, as get_workflow_run now answers them.
+// The older execution actions are hidden, as get_workflow_run answers them
 func withAgentWorkflowToolActions(actions []WorkflowAppAction) []WorkflowAppAction {
 	hidden := map[string]bool{}
 	for _, tool := range getAgentWorkflowTools() {
@@ -40848,8 +40804,6 @@ func (builderRequest workflowBuilderRequest) usableBy(execution WorkflowExecutio
 	return !builderRequest.LegacyAlias || isWorkflowBuilderAgent(execution)
 }
 
-// The decision runs inside the backend instead of as an app call. Such decisions run
-// right away and ignore "delay", so they must never be left WAITING for a scheduled result.
 func getInProcessAgentRequest(execution WorkflowExecution, decision AgentDecision) (workflowBuilderRequest, bool) {
 	builderRequest, ok := getWorkflowBuilderRequest(decision)
 	if !ok || !builderRequest.usableBy(execution) {
@@ -40859,7 +40813,7 @@ func getInProcessAgentRequest(execution WorkflowExecution, decision AgentDecisio
 	return builderRequest, true
 }
 
-// Field names the model tends to use instead of the documented ones. Keys are normalized.
+// Field names the model uses instead of the documented ones
 var agentToolFieldAliases = map[string]string{
 	"id": "executionid", "runid": "executionid", "run": "executionid", "execution": "executionid", "exec": "executionid", "executionids": "executionid",
 	"nodeid": "node", "nodelabel": "node", "nodename": "node", "label": "node", "actionid": "node", "actionlabel": "node", "step": "node", "nodes": "nodes",
@@ -40873,8 +40827,6 @@ var agentToolFieldAliases = map[string]string{
 	"trigger": "source", "triggertype": "source",
 }
 
-// Normalizes the decision's fields to the tool's parameter names. Unknown fields
-// are reported back, and a workflow_id other than the session's is flagged.
 func normalizeAgentToolFields(raw map[string]string, tool agentWorkflowTool) (map[string]string, []string, string) {
 	merged := map[string]string{}
 	for key, value := range raw {
@@ -40939,7 +40891,6 @@ func normalizeAgentToolFields(raw map[string]string, tool agentWorkflowTool) (ma
 	return fields, ignored, workflowID
 }
 
-// Runs an agent tool as the user who started the agent, on the session's workflow
 func agentWorkflowToolHandler(agentExecution WorkflowExecution, toolName string) http.HandlerFunc {
 	return func(resp http.ResponseWriter, request *http.Request) {
 		writeResult := func(result map[string]interface{}) {
@@ -41022,7 +40973,6 @@ func agentToolParamNames(tool agentWorkflowTool) string {
 	return strings.Join(names, ", ")
 }
 
-// ----- Session scope -----
 
 func isWorkflowBuilderTemplate(template string) bool {
 	switch strings.ToLower(strings.TrimSpace(template)) {
@@ -41070,8 +41020,6 @@ func getAgentDecisions(execution WorkflowExecution) []AgentDecision {
 	return []AgentDecision{}
 }
 
-// The workflow the session edits: the agent's workflow_id, the execution argument,
-// or a workflow the agent created in this session.
 func getAgentSessionWorkflowID(execution WorkflowExecution) string {
 	if workflowID := getAgentNodeParam(execution, "workflow_id"); len(workflowID) == 36 {
 		return workflowID
@@ -41100,7 +41048,6 @@ func getAgentSessionWorkflowID(execution WorkflowExecution) string {
 	return ""
 }
 
-// ----- Run analysis -----
 
 type agentNodeOutcome struct {
 	Action       Action
@@ -41121,8 +41068,7 @@ type agentRunSummary struct {
 
 var agentAuthErrorPattern = regexp.MustCompile(`(?i)(invalid[_ ]?(grant|token|credentials?|api[_ ]?key)|unauthori[sz]ed|unauthenticated|expired[_ ]?token|token[_ ]?expired|access[_ ]?denied|permission[_ ]?denied|forbidden)`)
 
-// What really happened in a node: Shuffle marks it SUCCESS whenever the app ran,
-// even when the API it called answered 400 or the app reported success:false.
+// Shuffle marks a node SUCCESS whenever the app ran, even if its API answered 400 or success:false
 func analyzeAgentNodeResult(result ActionResult) (string, string, string, int) {
 	status := strings.ToUpper(strings.TrimSpace(result.Status))
 	switch status {
@@ -41202,7 +41148,6 @@ func summarizeAgentRun(execution *WorkflowExecution) agentRunSummary {
 		resultByID[execution.Results[i].Action.ID] = &execution.Results[i]
 	}
 
-	// Nodes that ran, in the order they started
 	ran := []agentNodeOutcome{}
 	for i := range execution.Results {
 		result := &execution.Results[i]
@@ -41245,7 +41190,6 @@ func summarizeAgentRun(execution *WorkflowExecution) agentRunSummary {
 	// Running for a while without a single node result: it was most likely never dispatched
 	notStarted := stillRunning && len(ran) == 0 && time.Since(time.Unix(agentUnixSeconds(execution.StartedAt), 0)) > agentToolNotStartedAfter
 
-	// Nodes that didn't run, with the likely reason
 	notRun := []agentNodeOutcome{}
 	for _, action := range execution.Workflow.Actions {
 		if _, ok := outcomeByID[action.ID]; ok {
@@ -41352,7 +41296,7 @@ func normalizeAgentRunSource(source string) string {
 	return source
 }
 
-// Newest first. Lists can come back with results stripped, so runs are loaded one by one when needed.
+// Lists can come back with results stripped, so runs are loaded one by one when needed
 func getAgentWorkflowRuns(ctx context.Context, workflowID string, amount int) ([]WorkflowExecution, error) {
 	executions, _, err := GetAllWorkflowExecutionsV2(ctx, workflowID, amount, "")
 	if err != nil {
@@ -41388,7 +41332,6 @@ func loadFullAgentRun(ctx context.Context, execution WorkflowExecution) *Workflo
 	return &execution
 }
 
-// Copy with auth tokens and secret parameters removed, safe to hand to the model
 func sanitizedAgentRunCopy(execution *WorkflowExecution) *WorkflowExecution {
 	runCopy := *execution
 	runCopy.Results = append([]ActionResult{}, execution.Results...)
@@ -41456,8 +41399,7 @@ func agentRunRow(summary agentRunSummary, current *Workflow) map[string]interfac
 	return row
 }
 
-// What changed in the workflow since a run, by content: the chat saves the workflow
-// whenever an agent starts, so the last-saved time alone flags nearly every run.
+// By content: the chat saves whenever an agent starts, so the save time flags nearly every run
 func agentChangedSinceRun(execution *WorkflowExecution, current *Workflow) []string {
 	if current == nil || len(execution.Workflow.Actions) == 0 {
 		return []string{}
@@ -41466,7 +41408,6 @@ func agentChangedSinceRun(execution *WorkflowExecution, current *Workflow) []str
 	return diffAgentWorkflows(&execution.Workflow, current, "").Lines
 }
 
-// The "never run" nudge, with the webhook URL when there is one
 func agentNeverRunProblem(workflow *Workflow) map[string]interface{} {
 	why := "Nothing has run yet. Ask the user to trigger the workflow, then check the run with get_workflow_run."
 	for _, trigger := range workflow.Triggers {
@@ -41484,7 +41425,6 @@ func agentNeverRunProblem(workflow *Workflow) map[string]interface{} {
 	return agentToolProblem("This workflow has never run.", why, nil)
 }
 
-// Finds a node by ID or label, ignoring case, spaces and underscores
 func findAgentNode(actions []Action, name string) *Action {
 	wanted := normalizeToolName(strings.TrimPrefix(strings.TrimSpace(name), "$"))
 	if len(wanted) == 0 {
@@ -41533,7 +41473,6 @@ func agentNodeList(actions []Action) []map[string]string {
 	return nodes
 }
 
-// The unknown-node nudge: closest match, the nodes that do exist, and get_minimal_workflow
 func agentUnknownNodeProblem(name string, actions []Action, where string, workflowID string) map[string]interface{} {
 	problem := fmt.Sprintf("No node '%s' %s.", name, where)
 	if closest := closestAgentNodeLabel(actions, name); len(closest) > 0 {
@@ -41545,7 +41484,6 @@ func agentUnknownNodeProblem(name string, actions []Action, where string, workfl
 	return result
 }
 
-// ----- $ref resolution: what each variable in a node's parameters resolves to -----
 
 var agentRefPattern = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)((?:\.[A-Za-z0-9_#\-]+)*)`)
 
@@ -41555,8 +41493,6 @@ func agentRefName(label string) string {
 	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(label), " ", "_"))
 }
 
-// Describes every $ref in the parameters. With a run it says what each resolved to;
-// without one it only checks that the name exists.
 func describeAgentRefs(params []WorkflowAppActionParameter, workflow *Workflow, run *WorkflowExecution) []map[string]interface{} {
 	refs := []map[string]interface{}{}
 	seen := map[string]bool{}
@@ -41774,7 +41710,6 @@ func agentShortType(value interface{}) string {
 	return fmt.Sprintf("%T", value)
 }
 
-// Points out the usual reference mistakes
 func agentRefShapeHint(fullRef string, path []string, value interface{}) string {
 	if object, ok := value.(map[string]interface{}); ok && len(path) == 0 {
 		if _, hasSuccess := object["success"]; hasSuccess {
@@ -41814,7 +41749,6 @@ func agentParseMaybeJSON(text string) interface{} {
 	return text
 }
 
-// ----- Run tools -----
 
 func runAgentSearchWorkflowRuns(tc agentToolContext, fields map[string]string) map[string]interface{} {
 	notes := []string{}
@@ -42043,7 +41977,6 @@ func runAgentGetWorkflowRun(tc agentToolContext, fields map[string]string) map[s
 		runInfo["older_version"] = fmt.Sprintf("The workflow changed after this run (%s), so the run doesn't show those changes. Don't redo fixes that are already in place; ask the user to re-run to check them.", agentSummaryLines(changed, 4))
 	}
 
-	// One node in full detail
 	nodeFilter := strings.TrimSpace(fields["node"])
 	var focus *Action
 	if len(nodeFilter) > 0 {
@@ -42159,7 +42092,6 @@ func runAgentGetWorkflowRun(tc agentToolContext, fields map[string]string) map[s
 	return result
 }
 
-// Resolves latest, latest_failed or a run ID to a run of the session's workflow
 func resolveAgentRun(tc agentToolContext, ref string) (*WorkflowExecution, string, map[string]interface{}) {
 	ref = strings.TrimSpace(ref)
 	normalized := normalizeToolName(ref)
@@ -42217,7 +42149,6 @@ func resolveAgentRun(tc agentToolContext, ref string) (*WorkflowExecution, strin
 	return execution, "", nil
 }
 
-// ----- Version tools: list, compare, revert -----
 
 func getAgentWorkflowRevisions(ctx context.Context, workflowID string) []Workflow {
 	revisions, err := ListWorkflowRevisions(ctx, workflowID, 100)
@@ -42232,7 +42163,6 @@ func getAgentWorkflowRevisions(ctx context.Context, workflowID string) []Workflo
 	return revisions
 }
 
-// The newest saved version from at or before a time, like the chat's revert does
 func agentRevisionAtOrBefore(revisions []Workflow, unixSeconds int64) *Workflow {
 	for i := range revisions {
 		if agentUnixSeconds(revisions[i].Edited) <= unixSeconds {
@@ -42243,8 +42173,6 @@ func agentRevisionAtOrBefore(revisions []Workflow, unixSeconds int64) *Workflow 
 	return nil
 }
 
-// Resolves current, before_my_changes, last_successful_run, last_failed_run,
-// a revision_id or an execution_id to a version of the workflow
 func resolveAgentWorkflowVersion(tc agentToolContext, ref string, revisions []Workflow) (*Workflow, string, map[string]interface{}) {
 	ref = strings.TrimSpace(ref)
 	normalized := normalizeToolName(ref)
@@ -42323,7 +42251,6 @@ type agentWorkflowDiff struct {
 	Count   int
 }
 
-// Diff by meaning: nodes, parameters, branches, triggers, variables. Positions are ignored.
 func diffAgentWorkflows(from, to *Workflow, nodeFilter string) agentWorkflowDiff {
 	diff := agentWorkflowDiff{Changes: map[string]interface{}{}}
 	labelFor := map[string]string{}
@@ -42716,7 +42643,6 @@ func runAgentRevertWorkflow(tc agentToolContext, fields map[string]string) map[s
 	skipped := []string{}
 
 	if len(nodes) > 0 {
-		// Only the listed nodes: their settings come back, everything else stays
 		reverted.Actions = append([]Action{}, current.Actions...)
 		for _, name := range nodes {
 			targetAction := findAgentNode(target.Actions, name)
@@ -42811,8 +42737,6 @@ func runAgentRevertWorkflow(tc agentToolContext, fields map[string]string) map[s
 	return result
 }
 
-// Saves through the regular workflow save, the same one the chat's revert button uses,
-// then drops the agent's draft cache so the next put_agent_update starts from it.
 func saveAgentRevertedWorkflow(tc agentToolContext, workflow *Workflow) error {
 	body, err := json.Marshal(workflow)
 	if err != nil {
@@ -42833,7 +42757,6 @@ func saveAgentRevertedWorkflow(tc agentToolContext, workflow *Workflow) error {
 	return nil
 }
 
-// ----- Validation -----
 
 var agentSecretPatterns = []struct {
 	Name    string
@@ -42849,7 +42772,6 @@ var agentSecretPatterns = []struct {
 	{"bearer token", regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9_\-\.=]{20,}`)},
 }
 
-// Returns the kind of secret and a masked preview, or empty strings
 func agentFindSecret(value string) string {
 	for _, secret := range agentSecretPatterns {
 		if found := secret.Pattern.FindString(value); len(found) > 0 {
@@ -42873,8 +42795,7 @@ func agentLatestRun(ctx context.Context, workflowID string) *WorkflowExecution {
 	return loadFullAgentRun(ctx, executions[0])
 }
 
-// Static checks on a workflow. Never blocks a save: the agent gets the issues and fixes them.
-// With a recent run, $refs are also checked against what that run produced.
+// Never blocks a save: the agent gets the issues and fixes them
 func validateWorkflowForAgent(ctx context.Context, workflow *Workflow, latestRun *WorkflowExecution) map[string]interface{} {
 	issues := []map[string]string{}
 	errorCount, warningCount := 0, 0
@@ -43037,7 +42958,6 @@ func runAgentValidateWorkflow(tc agentToolContext, fields map[string]string) map
 	return result
 }
 
-// ----- Small helpers -----
 
 func agentToolProblem(problem, why string, call map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{"success": false, "problem": problem, "next": agentToolNext(why, call)}
@@ -43052,7 +42972,6 @@ func agentToolNext(why string, call map[string]interface{}) map[string]interface
 	return next
 }
 
-// A decision the agent can copy as-is. fields are key, value pairs.
 func agentToolCall(tool, action string, fields ...string) map[string]interface{} {
 	callFields := []map[string]string{}
 	for i := 0; i+1 < len(fields); i += 2 {
@@ -43274,9 +43193,6 @@ func agentLevenshtein(a, b string) int {
 	return previous[len(b)]
 }
 
-// =============================================================================
-// END WORKFLOW BUILDER AGENT TOOLS
-// =============================================================================
 
 // Injects the header in all requests
 func RequestMiddleware(next http.Handler) http.Handler {
