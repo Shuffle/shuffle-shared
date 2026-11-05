@@ -3504,6 +3504,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 					}
 				}
 
+				restoreDistributedWorkflowBranches(ctx, workflow)
 				if len(skipHealth) == 0 || (len(skipHealth) > 0 && !skipHealth[0]) {
 					healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow)
 					if err != nil {
@@ -3622,8 +3623,8 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 	newWorkflow := FixWorkflowPosition(ctx, *workflow)
 	workflow = &newWorkflow
 
+	restoreDistributedWorkflowBranches(ctx, workflow)
 	if len(skipHealth) == 0 || (len(skipHealth) > 0 && !skipHealth[0]) {
-
 		healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow)
 		if err != nil {
 			if !strings.Contains(err.Error(), "Org ID not set") {
@@ -3651,6 +3652,51 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 	}
 
 	return workflow, nil
+}
+
+// Recover inherited connections on reads without overwriting concurrently edited child settings.
+func restoreDistributedWorkflowBranches(ctx context.Context, workflow *Workflow) {
+	if workflow.ParentWorkflowId == "" || workflow.ParentWorkflowId == workflow.ID || workflow.OrgId == "" || len(workflow.Branches) != 0 {
+		return
+	}
+
+	// Read only the stored parent graph; avoid stale cache and recursive child recovery.
+	parent := &Workflow{}
+	var err error
+	if project.DbType == "opensearch" {
+		parent, err = getWorkflowByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix("workflow")), workflow.ParentWorkflowId)
+	} else {
+		err = project.Dbclient.Get(ctx, datastore.NameKey("workflow", strings.ToLower(workflow.ParentWorkflowId), nil), parent)
+	}
+	if err != nil || parent.ID != workflow.ParentWorkflowId || parent.OrgId == workflow.OrgId || !ArrayContains(parent.SuborgDistribution, workflow.OrgId) {
+		return
+	}
+
+	controlledNodes := make(map[string]bool)
+	for _, action := range workflow.Actions {
+		if action.ParentControlled {
+			controlledNodes[action.ID] = true
+		}
+	}
+	for _, trigger := range workflow.Triggers {
+		if trigger.ParentControlled && trigger.ReplacementForTrigger != "" {
+			controlledNodes[trigger.ID] = true
+		}
+	}
+
+	branches := make([]Branch, 0, len(parent.Branches))
+	for _, branch := range parent.Branches {
+		branch = mapParentBranchToChildTriggers(branch, workflow.Triggers)
+		if !controlledNodes[branch.SourceID] || !controlledNodes[branch.DestinationID] {
+			return
+		}
+		branch.ParentControlled = true
+		branches = append(branches, branch)
+	}
+	if len(branches) > 0 {
+		workflow.Branches = branches
+		log.Printf("[INFO] Recovered %d inherited connections for distributed workflow %s from parent %s", len(branches), workflow.ID, parent.ID)
+	}
 }
 
 func getWorkflowByAliasSearch(ctx context.Context, aliasName, id string) (*Workflow, error) {
@@ -5307,6 +5353,7 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 	}
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
+	defer DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
 	if len(value) == 0 {
 		//log.Printf("[WARNING] Couldn't delete %s because value (id) must be longer than 0", entity)
 		return errors.New("Value to delete must be larger than 0")
@@ -5314,6 +5361,10 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 
 	if project.DbType == "opensearch" {
 		//log.Printf("[DEBUG] Deleting from index '%s' with item '%s' from opensearch", entity, value)
+		// A document delete targets only the write index; older copies remain searchable after rollover.
+		if ArrayContains(GetOpensearchBaseIndexes(), entity) {
+			return deleteDocumentByQueryAcrossAlias(ctx, strings.ToLower(GetESIndexPrefix(entity)), value)
+		}
 
 		resp, err := project.Es.Document.Delete(ctx, opensearchapi.DocumentDeleteReq{
 			Index:      strings.ToLower(GetESIndexPrefix(entity)),
@@ -5401,9 +5452,11 @@ func deleteDocumentByQueryAcrossAlias(ctx context.Context, aliasName, documentID
 		return err
 	}
 
+	refresh := true
 	resp, err := project.Es.Document.DeleteByQuery(ctx, opensearchapi.DocumentDeleteByQueryReq{
 		Indices: []string{aliasName},
 		Body:    bytes.NewReader(queryBytes),
+		Params:  opensearchapi.DocumentDeleteByQueryParams{Refresh: &refresh},
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "not_found") {
@@ -5427,6 +5480,10 @@ func deleteDocumentByQueryAcrossAlias(ctx context.Context, aliasName, documentID
 		}
 
 		return fmt.Errorf("delete by query failed with status %d: %s", res.StatusCode, string(responseData))
+	}
+
+	if resp.TimedOut || resp.VersionConflicts > 0 || len(resp.Failures) > 0 {
+		return fmt.Errorf("incomplete delete for %s/%s: timed_out=%v version_conflicts=%d failures=%d", aliasName, documentID, resp.TimedOut, resp.VersionConflicts, len(resp.Failures))
 	}
 
 	return nil
@@ -9619,19 +9676,20 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 
 	trimOversizedWorkflowImages(&workflow)
 
-	// Tet ID to be an md5 for name+ID+action+triggers+variables
+	// Include connections so a branch-only edit cannot overwrite its previous revision.
 	// this makes sure overwrites don't happen, and duplicates aren't kept
 	// json marshal actions
 	actionData, actionerr := json.Marshal(workflow.Actions)
+	branchData, brancherr := json.Marshal(workflow.Branches)
 	triggerData, triggererr := json.Marshal(workflow.Triggers)
 	variableData, variableerr := json.Marshal(workflow.WorkflowVariables)
 
-	if actionerr != nil || triggererr != nil || variableerr != nil {
+	if actionerr != nil || brancherr != nil || triggererr != nil || variableerr != nil {
 		log.Printf("[WARNING] Failed marshalling in set workflow revision: %s", actionerr)
 		return nil
 	}
 
-	workflowHashString := fmt.Sprintf("%s_%s_%s_%s_%s", workflow.Name, workflow.ID, string(actionData), string(triggerData), string(variableData))
+	workflowHashString := fmt.Sprintf("%s_%s_%s_%s_%s_%s", workflow.Name, workflow.ID, string(actionData), string(branchData), string(triggerData), string(variableData))
 	// md5 of workflowHashString
 	hasher := md5.New()
 	hasher.Write([]byte(workflowHashString))
@@ -9672,8 +9730,8 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflow.ID))
 
 		// For workflow revision backups
-		go DeleteCache(ctx, fmt.Sprintf("%s_%s_1", nameKey, workflow.ID))
-		go DeleteCache(ctx, fmt.Sprintf("%s_%s_200", nameKey, workflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_1", nameKey, workflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_200", nameKey, workflow.ID))
 		// Actively used keys
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_2", nameKey, workflow.ID))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflow.ID))
@@ -19666,7 +19724,7 @@ func InitOpensearchIndexes() {
 	log.Printf("[INFO] Configuring Opensearch indexes for scaling")
 
 	ctx := context.Background()
-	opensearchUrl := strings.TrimRight(os.Getenv("SHUFFLE_OPENSEARCH_URL"), "/")
+	opensearchUrl := strings.TrimRight(strings.TrimSpace(strings.Split(os.Getenv("SHUFFLE_OPENSEARCH_URL"), ",")[0]), "/")
 	if len(opensearchUrl) == 0 {
 		opensearchUrl = "https://shuffle-opensearch:9200"
 	}
@@ -19804,36 +19862,7 @@ func InitOpensearchIndexes() {
 				log.Printf("[WARNING] Error creating index %s: %s", index, err)
 			}
 
-			// Make sure if the resource exist it is part of correct alias
-			if strings.Contains(fmt.Sprintf("%s", err), "resource_already_exists_exception") {
-				body := fmt.Sprintf(`{
-				  "actions": [
-				    {
-				      "add": {
-				        "index": "%s",
-				        "alias": "%s",
-				        "is_write_index": true
-				      }
-				    }
-				  ]
-				}`, initialIndexName, index)
-
-				aliasResp, aerr := project.Es.Aliases(ctx, opensearchapi.AliasesReq{
-					Body: strings.NewReader(body),
-				})
-				if aerr != nil {
-					log.Printf("[WARNING] Failed to ensure alias %s for index %s: %s", index, initialIndexName, aerr)
-					return
-				}
-
-				res := aliasResp.Inspect().Response
-				defer res.Body.Close()
-
-				if res.StatusCode >= 300 {
-					log.Printf("[WARNING] Alias enforcement failed: %s", res.String())
-					return
-				}
-			}
+			// Prefix repair already handles aliases; never reset a rolled writer to 000001.
 		} else {
 			if res.IsError() {
 				if !strings.Contains(res.String(), "resource_already_exists_exception") {

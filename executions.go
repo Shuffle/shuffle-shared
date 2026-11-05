@@ -2,6 +2,7 @@ package shuffle
 
 import (
 	//"github.com/goccy/go-json"
+	"bytes"
 	"encoding/json"
 	"context"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"math/rand"
+	"net"
 	"io/ioutil"
 
 	"cloud.google.com/go/datastore"
@@ -542,28 +544,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				//log.Printf("HANDLE HERE: %s", tmpResult.Status)
 
 				if changed && (tmpResult.Status == "SUCCESS" || tmpResult.Status == "FAILURE") {
-					// Making sure we don't infinite loop :)
-					// Keeping for 1 minute, as that's the rerun period
-					cacheKey := fmt.Sprintf("%s_%s_sent", workflowExecution.ExecutionId, tmpResult.Action.ID)
-					cache, err := GetCache(ctx, cacheKey)
-					if err == nil && cache != nil {
-						//SetCache(ctx, cacheKey, []byte("1"), 1)
-
-						result = tmpResult
-					} else {
-						SetCache(ctx, cacheKey, []byte("1"), 1)
-
-						log.Printf("[DEBUG][%s] Found waiting result for %s, now with status %s. Sending request to self for the full response of it", workflowExecution.ExecutionId, result.Action.ID, tmpResult.Status)
-
-						// Forcing a resend to handle transaction normally
-						actionData, err := json.Marshal(tmpResult)
-						if err == nil {
-							ResendActionResult(actionData, 4)
-						} else {
-							//result = tmpResult
-						}
-					}
-
+					// Merge under the caller's lock; a self-request would re-enter it.
+					result = tmpResult
+					dbsave = true
 				} else {
 					//result = tmpResult
 				}
@@ -601,7 +584,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 	// Check for failures before setting to finished
 	// Update execution parent
-	if workflowExecution.Status == "EXECUTING" {
+	if workflowExecution.Status == "EXECUTING" && workflowExecution.Workflow.Configuration.ExitOnError {
 
 		for _, result := range workflowExecution.Results {
 			if result.Status == "FAILURE" || result.Status == "ABORTED" {
@@ -766,9 +749,9 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	// FIXME: This right here has caused more problems during dev than anything
-	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" || standalone || os.Getenv("STANDALONE") == "true") && !strings.Contains(strings.ToLower(hostname), "backend") {
+	if project.Environment == "worker" || standalone || os.Getenv("STANDALONE") == "true" || (project.Environment == "" && os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && !strings.Contains(strings.ToLower(hostname), "backend")) {
 		if debug {
-			log.Printf("[DEBUG] Not saving execution to DB (just cache), since we are running in swarm or standalone mode.")
+			log.Printf("[DEBUG] Not saving execution to DB (just cache), since we are running in a worker or standalone mode.")
 		}
 
 		return nil
@@ -923,6 +906,18 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 				}
 			}
 
+			var timeout net.Error
+			if err != nil && errors.As(err, &timeout) && timeout.Timeout() {
+				// A lost write acknowledgement is successful only if the exact snapshot is durable.
+				stored, readErr := getWorkflowExecutionByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), workflowExecution.ExecutionId)
+				if readErr == nil {
+					storedData, marshalErr := json.Marshal(stored)
+					if marshalErr == nil && bytes.Equal(storedData, executionData) {
+						log.Printf("[INFO][%s] Verified persisted execution after write acknowledgement timed out", workflowExecution.ExecutionId)
+						err = nil
+					}
+				}
+			}
 			if err != nil {
 				log.Printf("[ERROR] Failed saving new execution %s: %s", workflowExecution.ExecutionId, err)
 				return err
@@ -1144,7 +1139,7 @@ func GetWorkflowExecution(ctx context.Context, id string, bypassCache ...bool) (
 		}
 	}
 
-	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" || standalone || os.Getenv("STANDALONE") == "true") && project.Environment != "cloud" {
+	if ((project.Environment == "" && os.Getenv("SHUFFLE_SWARM_CONFIG") == "run") || project.Environment == "worker" || standalone || os.Getenv("STANDALONE") == "true") && project.Environment != "cloud" {
 		return workflowExecution, errors.New("ExecutionId doesn't exist in cache")
 	}
 

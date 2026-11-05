@@ -9239,9 +9239,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			SetGitWorkflow(ctx, childWorkflow, &passedOrg)
 		}
 
-		go DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", oldWorkflow.ID))
-		go DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", childWorkflow.ID))
-		go DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", parentWorkflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", oldWorkflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", childWorkflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", parentWorkflow.ID))
 	}
 }
 
@@ -11414,7 +11414,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 		log.Printf("[ERROR] Failed getting workflows for suborg %s: %s", subOrgId, err)
 	} else {
 		for _, foundWorkflow := range childOrgWorkflows {
-			if foundWorkflow.Name == workflow.Name {
+			if foundWorkflow.Name == workflow.Name && foundWorkflow.ParentWorkflowId == workflow.ID {
 				log.Printf("[ERROR] Found a workflow with the same ID (%s) in suborg %s (%s).", foundWorkflow.ID, subOrgId, foundWorkflow.Name)
 				return &foundWorkflow, nil
 			}
@@ -11475,7 +11475,15 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 		}
 	}
 
-	newWf := workflow
+	// Child trigger, branch and auth rewrites must not mutate the parent's slices.
+	encodedWorkflow, err := json.Marshal(workflow)
+	if err != nil {
+		return nil, err
+	}
+	newWf := Workflow{}
+	if err := json.Unmarshal(encodedWorkflow, &newWf); err != nil {
+		return nil, err
+	}
 	newWf.ID = newId
 
 	newWf.SuborgDistribution = []string{}
@@ -17946,6 +17954,10 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		resultUrl,
 		bytes.NewBuffer([]byte(data)),
 	)
+	if err != nil {
+		return err
+	}
+	req = req.WithContext(ctx)
 
 	newresp, err := topClient.Do(req)
 	if err != nil {
@@ -17969,6 +17981,12 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	if err != nil {
 		log.Printf("[ERROR] Failed newexecutuion parent unmarshal: %s", err)
 		return err
+	}
+	if newExecution.ExecutionId != executionParent || newExecution.Authorization != parentAuth {
+		return errors.New("parent callback lookup returned a different execution or authorization")
+	}
+	if newExecution.Status == "FINISHED" || newExecution.Status == "FAILURE" || newExecution.Status == "ABORTED" {
+		return nil
 	}
 
 	foundResult := ActionResult{}
@@ -18068,12 +18086,10 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		// Saved for each subflow ID -> parentNode
 		subflowResultCacheId := fmt.Sprintf("%s_%s_subflowresult", subflowExecutionId, parentNode)
 
-		if len(returnValue) > 0 {
-			err = SetCache(ctx, subflowResultCacheId, []byte(returnValue), 61)
-			if err != nil {
-				log.Printf("[ERROR] Failed setting subflow loop cache result for action in parsed exec results %s: %s", subflowResultCacheId, err)
-				return err
-			}
+		err = SetCache(ctx, subflowResultCacheId, []byte(returnValue), 61)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting subflow loop cache result for action in parsed exec results %s: %s", subflowResultCacheId, err)
+			return err
 		}
 
 		// Every time we get here, we need to both SET the value in cache AND look for other values in cache to make sure the list is good.
@@ -18117,10 +18133,8 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 					//log.Printf("[DEBUG] Set the result for the node! Run update with %s", res)
 					finishedSubflows += 1
 				} else {
-					res.ResultSet = true
-
 					// Overutilization of cache :>
-					if !res.ResultSet || len(res.Result) == 0 {
+					if !res.ResultSet {
 						subflowResultCacheId = fmt.Sprintf("%s_%s_subflowresult", res.ExecutionId, parentNode)
 
 						cache, err := GetCache(ctx, subflowResultCacheId)
@@ -18227,7 +18241,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 			actionValue := SubflowData{
 				Success:       true,
-				ExecutionId:   "",
+				ExecutionId:   subflowExecutionId,
 				Authorization: "",
 				Result:        returnValue,
 			}
@@ -18255,7 +18269,9 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 			// Keep the original info
 			// Where is it kept? :thinking:
+			actionValue.ExecutionId = subflowExecutionId
 			actionValue.Result = returnValue
+			actionValue.ResultSet = true
 			parsedActionValue, err := json.Marshal(actionValue)
 			if err != nil {
 				log.Printf("[ERROR] Failed updating resultData (1): %s", err)
@@ -18304,9 +18320,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 				foundResult.ExecutionId = executionParent
 				foundResult.Result = string(parsedActionValue)
 
-				if foundResult.Status == "" {
-					foundResult.Status = "SUCCESS"
-				}
+				foundResult.Status = "SUCCESS"
 
 				resultData, err = json.Marshal(foundResult)
 				if err != nil {
@@ -18363,22 +18377,39 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			return err
 		}
 
-		newresp, err := topClient.Do(req)
-		if err != nil {
-			log.Printf("[ERROR] Error running subflow (%s) request: %s", subflowExecutionId, err)
-			return err
-		}
-
-		defer newresp.Body.Close()
-		if newresp.StatusCode != 200 {
-			body, err := ioutil.ReadAll(newresp.Body)
-			if err != nil {
-				log.Printf("[INFO][%s] Failed reading body after subflow request: %s", subflowExecutionId, err)
+		req.Header.Set("Content-Type", "application/json")
+		var deliveryErr error
+		for attempt := 0; attempt < 5; attempt++ {
+			if err := ctx.Err(); err != nil {
 				return err
+			}
+			attemptReq := req.Clone(ctx)
+			attemptReq.Body, err = req.GetBody()
+			if err != nil {
+				return err
+			}
+			response, err := topClient.Do(attemptReq)
+			if err != nil {
+				deliveryErr = err
 			} else {
-				log.Printf("[ERROR][%s] Failed forwarding subflow request of length %d\n: %s", subflowExecutionId, len(resultData), string(body))
+				var acknowledgement struct {
+					Success bool `json:"success"`
+				}
+				decodeErr := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&acknowledgement)
+				response.Body.Close()
+				if response.StatusCode == http.StatusOK && decodeErr == nil && acknowledgement.Success {
+					return nil
+				}
+				deliveryErr = fmt.Errorf("parent callback was not accepted (HTTP %d)", response.StatusCode)
+				if response.StatusCode >= 400 && response.StatusCode < 500 && response.StatusCode != http.StatusTooManyRequests {
+					return deliveryErr
+				}
+			}
+			if attempt < 4 {
+				time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
 			}
 		}
+		return deliveryErr
 	} else {
 		log.Printf("[INFO][%s] NOT sending request to parent %s because data len is %d and sendRequest is %t", subflowExecutionId, executionParent, len(resultData), sendRequest)
 
@@ -19413,6 +19444,57 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 		return &workflowExecution, true, nil
 	}
+	// A completed app call can still have failed to start the child workflow.
+	if actionResult.Action.AppName == "shuffle-subflow" && actionResult.Action.Name != "run_userinput" && actionResult.Status == "SUCCESS" && strings.HasPrefix(strings.TrimSpace(actionResult.Result), "{") {
+		if parsed, changed := parseSubflowResults(ctx, actionResult); changed && parsed.Status == "FAILURE" {
+			actionResult = parsed
+		}
+	}
+	// Child callbacks can arrive out of order; never erase a completed sibling.
+	if actionResult.Action.AppName == "shuffle-subflow" && (actionResult.Status == "WAITING" || actionResult.Status == "SUCCESS") {
+		var incoming []SubflowData
+		if json.Unmarshal([]byte(actionResult.Result), &incoming) == nil && len(incoming) > 0 {
+			positions := make(map[string]int, len(incoming))
+			for index, child := range incoming {
+				positions[child.ExecutionId] = index
+			}
+			for _, existing := range workflowExecution.Results {
+				if existing.Action.ID != actionResult.Action.ID {
+					continue
+				}
+				var previous []SubflowData
+				if json.Unmarshal([]byte(existing.Result), &previous) != nil {
+					break
+				}
+				for _, child := range previous {
+					if index, found := positions[child.ExecutionId]; found {
+						if child.ResultSet || child.Result != "" {
+							incoming[index] = child
+						}
+					} else {
+						positions[child.ExecutionId] = len(incoming)
+						incoming = append(incoming, child)
+					}
+				}
+				break
+			}
+			allFinished := true
+			for _, child := range incoming {
+				if !child.ResultSet && child.Result == "" {
+					allFinished = false
+					break
+				}
+			}
+			if allFinished {
+				actionResult.Status = "SUCCESS"
+			}
+			merged, err := json.Marshal(incoming)
+			if err != nil {
+				return &workflowExecution, false, err
+			}
+			actionResult.Result = string(merged)
+		}
+	}
 
 	// 1. CHECK cache if it happened in another?
 	// 2. Set cache
@@ -19671,7 +19753,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// Should NOT run with all this if the action is SKIPPED
 			// Cache when SKIPPED - this is to handle the case where the subflow is skipped (condition) and the result is not set
 
-			if actionResult.Status == "SKIPPED" {
+			if actionResult.Status == "SKIPPED" || actionResult.Status == "FAILURE" || actionResult.Status == "ABORTED" {
 				setCache = true
 			} else {
 				for _, param := range actionResult.Action.Parameters {
@@ -20598,8 +20680,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			workflowExecution.Result = lastResult
-			workflowExecution.Status = "FINISHED"
+			if workflowExecution.Status != "FAILURE" && workflowExecution.Status != "ABORTED" {
+				workflowExecution.Result = lastResult
+				workflowExecution.Status = "FINISHED"
+			}
 			workflowExecution.CompletedAt = int64(time.Now().Unix())
 			if workflowExecution.LastNode == "" {
 				workflowExecution.LastNode = actionResult.Action.ID
@@ -20748,8 +20832,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				log.Printf("[INFO][%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem", workflowExecution.ExecutionId, len(workflowExecution.Results))
 
-				// Finding the result, and removing it if it exists. "Sinkholing"
+				// Keep the child reference so a replacement worker can collect the
+				// existing child's result instead of starting that child again.
 				workflowExecution.Status = "EXECUTING"
+				actionResult.Status = "WAITING"
+				actionResult.CompletedAt = 0
 				newResults := []ActionResult{}
 				for _, result := range workflowExecution.Results {
 					if result.Action.ID == actionResult.Action.ID {
@@ -20759,10 +20846,17 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					newResults = append(newResults, result)
 				}
 
-				workflowExecution.Results = newResults
+				workflowExecution.Results = append(newResults, actionResult)
+				resultData, err := json.Marshal(actionResult)
+				if err != nil {
+					return &workflowExecution, true, err
+				}
+				if err := SetCache(ctx, fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID), resultData, 35); err != nil {
+					return &workflowExecution, true, err
+				}
 
 				// Returning as we are waiting for the subflow to finish
-				return &workflowExecution, dbSave, nil
+				return &workflowExecution, true, nil
 
 			} else {
 				var subflowDataList []SubflowData
@@ -24213,19 +24307,43 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 	if baseExecution.Authorization != execution.Authorization {
 		return errors.New("Bad authorization when validating execution")
 	}
-
-	// used to validate if it's actually the right marshal
+	// Normal action callbacks are not full snapshots and use the caller's transaction.
 	if len(baseExecution.Workflow.Actions) != len(execution.Workflow.Actions) {
 		return errors.New(fmt.Sprintf("Bad length of actions (probably normal app): %d", len(execution.Workflow.Actions)))
 	}
-
 	if len(baseExecution.Workflow.Triggers) != len(execution.Workflow.Triggers) {
 		return errors.New(fmt.Sprintf("Bad length of trigger: %d (probably normal app)", len(execution.Workflow.Triggers)))
+	}
+	if len(memcached) > 0 {
+		claimKey := fmt.Sprintf("workflowexecution_%s_update", execution.ExecutionId)
+		claimed := false
+		for attempt := 0; attempt < 300; attempt++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			claimed, err = ClaimCacheKey(claimKey, 120)
+			if err != nil || claimed {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err != nil || !claimed {
+			return fmt.Errorf("execution snapshot update is busy: %v", err)
+		}
+		defer DeleteCache(ctx, claimKey)
+		baseExecution, err = GetWorkflowExecution(ctx, execution.ExecutionId)
+		if err != nil {
+			return err
+		}
+		if baseExecution.Authorization != execution.Authorization {
+			return errors.New("Bad authorization when validating execution")
+		}
 	}
 
 	if baseExecution.Status == "FINISHED" || baseExecution.Status == "ABORTED" || baseExecution.Status == "FAILURE" {
 		log.Printf("[INFO][%s] Execution is already finished, not overriding", execution.ExecutionId)
-		return errors.New("Execution is already finished, not overriding")
+		// A worker may have written the terminal cache before the backend saved it.
+		return SetWorkflowExecution(ctx, *baseExecution, true)
 	}
 
 	if len(baseExecution.Results) > len(execution.Results) {
@@ -24244,6 +24362,26 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 		}
 	}
 
+	if !shouldReset {
+		completed := make(map[string]ActionResult, len(baseExecution.Results))
+		for _, result := range baseExecution.Results {
+			if result.Status == "SUCCESS" || result.Status == "FINISHED" || result.Status == "SKIPPED" || result.Status == "FAILURE" || result.Status == "ABORTED" {
+				completed[result.Action.ID] = result
+			}
+		}
+		for index, result := range execution.Results {
+			if saved, found := completed[result.Action.ID]; found {
+				execution.Results[index] = saved
+				delete(completed, result.Action.ID)
+			}
+		}
+		for _, result := range baseExecution.Results {
+			if _, missing := completed[result.Action.ID]; missing {
+				execution.Results = append(execution.Results, result)
+				delete(completed, result.Action.ID)
+			}
+		}
+	}
 	if execution.Status == "EXECUTING" {
 		//log.Printf("[INFO] Inside executing.")
 		extra := 0
@@ -24256,7 +24394,14 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 			}
 		}
 
-		if len(execution.Workflow.Actions)+extra == len(execution.Results) {
+		allFinished := len(execution.Workflow.Actions)+extra == len(execution.Results)
+		for _, result := range execution.Results {
+			if result.Status != "SUCCESS" && result.Status != "FINISHED" && result.Status != "SKIPPED" {
+				allFinished = false
+				break
+			}
+		}
+		if allFinished {
 			// 0x0elliot: remove log later
 			log.Printf("[INFO][%s] All actions have results (%d). Setting status to FINISHED. Actions: %d, Triggers: %d, Results: %d", execution.ExecutionId, len(execution.Workflow.Actions)+extra, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results))
 			execution.Status = "FINISHED"
@@ -24348,6 +24493,9 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 
 // Only returning error as the point is for the current workflow to update the parent workflow
 func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution) error {
+	if project.Environment == "onprem" && (execution.Status == "FINISHED" || execution.Status == "FAILURE" || execution.Status == "ABORTED") && execution.ExecutionParent != "" && execution.ExecutionSourceAuth != "" && execution.ExecutionSourceNode != "" {
+		return updateExecutionParent(ctx, execution.ExecutionParent, execution.Result, execution.ExecutionSourceAuth, execution.ExecutionSourceNode, execution.ExecutionId)
+	}
 	//log.Printf("IS IT SUBFLOW?")
 	if len(execution.ExecutionParent) > 0 && execution.Status != "EXECUTING" && (project.Environment == "onprem" || project.Environment == "cloud") {
 
@@ -34817,6 +34965,14 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 	var parentSubflowResult []SubflowData
 	err := json.Unmarshal([]byte(result.Result), &parentSubflowResult)
 	if err != nil {
+		var startup struct {
+			Success     *bool  `json:"success"`
+			ExecutionId string `json:"execution_id"`
+		}
+		if (result.Action.AppName == "shuffle-subflow" || result.Action.AppName == "Shuffle Workflow" || result.Action.AppName == "shuffle-subflow-v2") && json.Unmarshal([]byte(result.Result), &startup) == nil && startup.Success != nil && !*startup.Success && startup.ExecutionId == "" {
+			result.Status = "FAILURE"
+			return result, true
+		}
 		//log.Printf("[WARNING] Failed unmarshaling subflow result. This could be due to it not being a list: %s", err)
 		return result, false
 	}
@@ -34835,7 +34991,7 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 	failedCount := 0
 	for _, res := range parentSubflowResult {
 		// If value length = 0 for any, then check cache and add the result
-		if res.ResultSet && len(res.Result) > 0 {
+		if res.ResultSet {
 			//log.Printf("[DEBUG][%s] Got result set for subflow. Result: %#v", res.ExecutionId, res.Result)
 
 			newResults = append(newResults, res)
@@ -34858,13 +35014,9 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			//log.Printf("[DEBUG] Cachedata for other subflow: '%s'", string(cacheData))
-			if len(cacheData) > 0 {
-				res.Result = string(cacheData)
-				res.ResultSet = true
-				finishedSubflows += 1
-			} else {
-				DeleteCache(ctx, subflowResultCacheId)
-			}
+			res.Result = string(cacheData)
+			res.ResultSet = true
+			finishedSubflows += 1
 
 		} else {
 			// Get the workflow execution for the subflow
@@ -34874,12 +35026,12 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 			subflowExecution, err := GetWorkflowExecution(ctx, res.ExecutionId)
 			//log.Printf("[DEBUG][%s] Got subflow execution: %s", res.ExecutionId, subflowExecution.Status)
 
-			if err != nil {
-				log.Printf("[ERROR] Failed getting subflow execution: %s", subflowExecution.Status)
+			if err != nil || subflowExecution == nil {
+				log.Printf("[ERROR] Failed getting subflow execution %s: %v", res.ExecutionId, err)
 			} else {
 				if subflowExecution.Status == "EXECUTING" {
 					//DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", res.ExecutionId))
-				} else if subflowExecution.Status != "EXECUTING" {
+				} else if subflowExecution.Status == "FINISHED" || subflowExecution.Status == "ABORTED" || subflowExecution.Status == "FAILURE" || subflowExecution.Status == "SUCCESS" {
 					// Ensure it gets the last result based on CompletedAt
 					//log.Printf("[DEBUG] NOT EXECUTING!!")
 					foundResult := ActionResult{}

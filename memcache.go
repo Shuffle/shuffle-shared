@@ -15,6 +15,7 @@ import (
 type shuffleMemcacheServer struct {
 	address       string
 	client        *gomemcache.Client
+	selector      *gomemcache.ServerList
 	disabledUntil time.Time
 }
 
@@ -31,11 +32,14 @@ func newShuffleMemcacheClient(addresses ...string) *shuffleMemcacheClient {
 			continue
 		}
 
-		memcacheClient := gomemcache.New(address)
+		selector := &gomemcache.ServerList{}
+		_ = selector.SetServers(address)
+		memcacheClient := gomemcache.NewFromSelector(selector)
 		memcacheClient.Timeout = 2 * time.Second
 		client.servers = append(client.servers, &shuffleMemcacheServer{
-			address: address,
-			client:  memcacheClient,
+			address:  address,
+			client:   memcacheClient,
+			selector: selector,
 		})
 	}
 
@@ -71,6 +75,10 @@ func (client *shuffleMemcacheClient) disableServer(server *shuffleMemcacheServer
 	client.mutex.Unlock()
 
 	if !wasDisabled {
+		// New() resolves only once; refresh DNS after failures instead of keeping an empty or stale selector forever.
+		if err := server.selector.SetServers(server.address); err != nil {
+			log.Printf("[WARNING] Failed refreshing Memcached server address %s: %s", server.address, err)
+		}
 		log.Printf("[WARNING] Disabling unavailable Memcached server %s for 30 seconds: %s", server.address, err)
 	}
 }

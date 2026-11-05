@@ -3738,7 +3738,7 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 		return result, errors.New(result.Reason)
 	}
 
-	opensearchUrl := strings.TrimRight(os.Getenv("SHUFFLE_OPENSEARCH_URL"), "/")
+	opensearchUrl := strings.TrimRight(strings.TrimSpace(strings.Split(os.Getenv("SHUFFLE_OPENSEARCH_URL"), ",")[0]), "/")
 	if len(opensearchUrl) == 0 {
 		opensearchUrl = "https://shuffle-opensearch:9200"
 	}
