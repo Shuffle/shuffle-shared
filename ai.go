@@ -7831,9 +7831,11 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 func getTemplateContext(ctx context.Context, template string, execution WorkflowExecution) (string, string, []string, error) {
 	// FIXME: Handle dynamic templates here too, based on user input
 
-	switch template {
-	case "workflow-edit", "edit-workflow", "build-workflows", "workflow-builder":
+	if isWorkflowBuilderTemplate(template) {
 		return buildWorkflowEditContext(ctx, execution)
+	}
+
+	switch template {
 	case "computer-use", "host-monitor-control":
 		return buildComputerUseContext(ctx, execution)
 	case "incident-response", "incident-handler":
@@ -10207,10 +10209,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 						foundContinuation = true
 
 						// Without this, the agent answers from its memory of a workflow that was since reverted or edited
-						isWorkflowEdit := template == "workflow-edit" || template == "edit-workflow" || template == "build-workflows" || template == "workflow-builder"
-						if isWorkflowEdit && len(execution.ExecutionArgument) == 36 && AgentWorkflowChangedSinceSeen(ctx, execution.ExecutionArgument) {
-							workflowChangedNote = fmt.Sprintf("SYSTEM NOTE: Workflow %s was changed outside this chat since you last read or edited it (for example reverted or edited by the user). What you saw before may be out of date. Call get_minimal_workflow before answering about the workflow or changing it.", execution.ExecutionArgument)
-							log.Printf("[INFO][%s] AI Agent continuation: workflow %s changed outside the chat, telling the agent to re-read it", execution.ExecutionId, execution.ExecutionArgument)
+						if sessionWorkflowID := getAgentSessionWorkflowID(execution); isWorkflowBuilderTemplate(template) && len(sessionWorkflowID) > 0 && AgentWorkflowChangedSinceSeen(ctx, sessionWorkflowID) {
+							workflowChangedNote = fmt.Sprintf("SYSTEM NOTE: Workflow %s was changed outside this chat since you last read or edited it (for example reverted or edited by the user). What you saw before may be out of date. Call get_minimal_workflow before answering about the workflow or changing it.", sessionWorkflowID)
+							log.Printf("[INFO][%s] AI Agent continuation: workflow %s changed outside the chat, telling the agent to re-read it", execution.ExecutionId, sessionWorkflowID)
 						}
 						break
 					}
@@ -11266,13 +11267,6 @@ data_filter:
 
 		// Parse decisions using the refactored helper function
 		mappedDecisions, parsingErr := parseAgentDecisions(choicesString)
-
-		// In-process actions run right away, so a delay would leave them WAITING forever
-		for idx := range mappedDecisions {
-			if _, inProcess := getInProcessAgentRequest(execution, mappedDecisions[idx]); inProcess && len(mappedDecisions[idx].Delay) > 0 && mappedDecisions[idx].Delay != "0" {
-				mappedDecisions[idx].Delay = "0"
-			}
-		}
 
 		if len(mappedDecisions) == 0 {
 			if parsingErr == nil {

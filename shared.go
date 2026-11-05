@@ -38242,49 +38242,37 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(responseData)
 }
 
-// Leaves out positions and metadata: the editor saves before every chat message, which isn't a change
-func agentWorkflowFingerprint(workflow Workflow) string {
-	paramValues := func(params []WorkflowAppActionParameter) string {
-		values := []string{}
-		for _, param := range params {
-			values = append(values, param.Name+"="+param.Value)
-		}
-		sort.Strings(values)
-		return strings.Join(values, "\x00")
-	}
-
-	parts := []string{}
-	for _, action := range workflow.Actions {
-		parts = append(parts, fmt.Sprintf("a|%s|%s|%s|%s|%x", action.ID, action.Label, action.AppName, action.Name, md5.Sum([]byte(paramValues(action.Parameters)))))
-	}
-	for _, trigger := range workflow.Triggers {
-		parts = append(parts, fmt.Sprintf("t|%s|%s|%s|%x", trigger.ID, trigger.Label, trigger.TriggerType, md5.Sum([]byte(paramValues(trigger.Parameters)))))
-	}
-	for _, branch := range workflow.Branches {
-		parts = append(parts, fmt.Sprintf("b|%s|%s", branch.SourceID, branch.DestinationID))
-	}
-	sort.Strings(parts)
-	return fmt.Sprintf("%x", md5.Sum([]byte(strings.Join(parts, "\n"))))
-}
-
 func agentWorkflowSeenKey(workflowID string) string {
 	return fmt.Sprintf("agent_workflow_seen_%s", workflowID)
 }
 
+// Only what diffAgentWorkflows compares, without node images, to keep the cache entry small
 func rememberAgentWorkflowView(ctx context.Context, workflow Workflow) {
-	if err := SetCache(ctx, agentWorkflowSeenKey(workflow.ID), []byte(agentWorkflowFingerprint(workflow)), 60*24); err != nil {
+	seen := Workflow{ID: workflow.ID, Start: workflow.Start, Triggers: workflow.Triggers, Branches: workflow.Branches, WorkflowVariables: workflow.WorkflowVariables}
+	for _, action := range workflow.Actions {
+		action.LargeImage = ""
+		seen.Actions = append(seen.Actions, action)
+	}
+
+	data, err := json.Marshal(seen)
+	if err == nil {
+		err = SetCache(ctx, agentWorkflowSeenKey(workflow.ID), data, 60*24)
+	}
+	if err != nil {
 		log.Printf("[WARNING] Failed remembering the agent's view of workflow %s: %s", workflow.ID, err)
 	}
 }
 
+// By content, like compare_workflow: the editor saves before every chat message, which isn't a change
 func AgentWorkflowChangedSinceSeen(ctx context.Context, workflowID string) bool {
 	if draft, err := GetCache(ctx, fmt.Sprintf("workflow_ops_cache_%s", workflowID)); err == nil && draft != nil {
 		return false
 	}
 
-	seen, err := GetCache(ctx, agentWorkflowSeenKey(workflowID))
-	seenBytes, ok := seen.([]byte)
-	if err != nil || !ok || len(seenBytes) == 0 {
+	cached, err := GetCache(ctx, agentWorkflowSeenKey(workflowID))
+	data, ok := cached.([]byte)
+	seen := Workflow{}
+	if err != nil || !ok || json.Unmarshal(data, &seen) != nil {
 		return true
 	}
 
@@ -38292,7 +38280,7 @@ func AgentWorkflowChangedSinceSeen(ctx context.Context, workflowID string) bool 
 	if err != nil {
 		return true
 	}
-	return agentWorkflowFingerprint(*workflow) != string(seenBytes)
+	return diffAgentWorkflows(&seen, workflow, "").Count > 0
 }
 
 func GetWorkflowMinimal(resp http.ResponseWriter, request *http.Request) {
@@ -39141,7 +39129,6 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		log.Printf("[WARNING] Failed caching workflow: %s", cacheErr)
 		// Don't fail the request, cache is best-effort
 	}
-	rememberAgentWorkflowView(ctx, *workflow)
 
 	if shouldSaveDB {
 		env := workflow.ExecutionEnvironment
@@ -39216,7 +39203,6 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		}
 
 		SetWorkflowRevision(ctx, *workflow)
-		rememberAgentWorkflowView(ctx, *workflow)
 
 		// Invalidate the ops cache now that DB is the real source.
 		if delErr := DeleteCache(ctx, cacheKey); delErr != nil {
@@ -39321,6 +39307,8 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 			}(triggersToActivate, deletedTriggers, *workflow, user)
 		}
 	}
+
+	rememberAgentWorkflowView(ctx, *workflow)
 
 	// Build response
 	minWf := BuildMinimalWorkflow(workflow)
@@ -40653,9 +40641,12 @@ func canReach(wf *Workflow, from, to string) bool {
 
 // Workflow builder agent tools. Mistakes answer with HTTP 200 and a "next" hint: a failed call makes the agent retry the same thing.
 
+var (
+	agentToolBuilderName = strings.ToLower(workflowBuilderAppName)
+	agentToolAppsName    = shuffleAppsAppName
+)
+
 const (
-	agentToolBuilderName    = "shuffle_workflows_builder"
-	agentToolAppsName       = "shuffle_apps"
 	agentToolDefaultWindow  = 24 * time.Hour
 	agentToolMaxRunsScanned = 50
 	agentToolStuckAfter     = 10 * time.Minute
@@ -41314,6 +41305,34 @@ func getAgentWorkflowRuns(ctx context.Context, workflowID string, amount int) ([
 	return executions, nil
 }
 
+// The session's runs, or a problem saying why there are none
+func loadAgentRuns(tc agentToolContext, amount int) ([]WorkflowExecution, map[string]interface{}) {
+	executions, err := getAgentWorkflowRuns(tc.Ctx, tc.Workflow.ID, amount)
+	if err != nil && len(executions) == 0 {
+		return nil, agentToolProblem(fmt.Sprintf("Couldn't load the runs: %s", err), "Tell the user the run history couldn't be loaded right now.", nil)
+	}
+	if len(executions) == 0 {
+		return nil, agentNeverRunProblem(tc.Workflow)
+	}
+
+	return executions, nil
+}
+
+func findAgentRun(ctx context.Context, executions []WorkflowExecution, match func(agentRunSummary) bool) *WorkflowExecution {
+	for _, listed := range executions {
+		execution := loadFullAgentRun(ctx, listed)
+		if match(summarizeAgentRun(execution)) {
+			return execution
+		}
+	}
+
+	return nil
+}
+
+func (tc agentToolContext) ownsRun(execution *WorkflowExecution) bool {
+	return execution.WorkflowId == tc.Workflow.ID || execution.Workflow.ID == tc.Workflow.ID
+}
+
 func loadFullAgentRun(ctx context.Context, execution WorkflowExecution) *WorkflowExecution {
 	needsLoad := execution.ExecutionArgument == "too large" || (len(execution.Results) == 0 && len(execution.Workflow.Actions) > 0)
 	for _, result := range execution.Results {
@@ -41446,7 +41465,7 @@ func closestAgentNodeLabel(actions []Action, name string) string {
 	bestDistance := 1 << 30
 	for _, action := range actions {
 		candidate := normalizeToolName(action.Label)
-		distance := agentLevenshtein(wanted, candidate)
+		distance := editDistance(wanted, candidate)
 		if strings.Contains(candidate, wanted) || strings.Contains(wanted, candidate) {
 			distance = distance / 2
 		}
@@ -41777,13 +41796,9 @@ func runAgentSearchWorkflowRuns(tc agentToolContext, fields map[string]string) m
 	contains := strings.ToLower(strings.TrimSpace(fields["contains"]))
 	nodeFilter := strings.TrimSpace(fields["node"])
 
-	executions, err := getAgentWorkflowRuns(tc.Ctx, tc.Workflow.ID, agentToolMaxRunsScanned)
-	if err != nil && len(executions) == 0 {
-		return agentToolProblem(fmt.Sprintf("Couldn't load the runs: %s", err), "Tell the user the run history couldn't be loaded right now.", nil)
-	}
-
-	if len(executions) == 0 {
-		return agentNeverRunProblem(tc.Workflow)
+	executions, problem := loadAgentRuns(tc, agentToolMaxRunsScanned)
+	if problem != nil {
+		return problem
 	}
 
 	if len(nodeFilter) > 0 && findAgentNode(tc.Workflow.Actions, nodeFilter) == nil {
@@ -42101,29 +42116,19 @@ func resolveAgentRun(tc agentToolContext, ref string) (*WorkflowExecution, strin
 
 	switch normalized {
 	case "latest", "last", "newest", "recent", "latestrun", "lastrun", "mostrecent":
-		executions, err := getAgentWorkflowRuns(tc.Ctx, tc.Workflow.ID, 5)
-		if err != nil && len(executions) == 0 {
-			return nil, "", agentToolProblem(fmt.Sprintf("Couldn't load the runs: %s", err), "Tell the user the run history couldn't be loaded right now.", nil)
-		}
-		if len(executions) == 0 {
-			return nil, "", agentNeverRunProblem(tc.Workflow)
+		executions, problem := loadAgentRuns(tc, 5)
+		if problem != nil {
+			return nil, "", problem
 		}
 		return loadFullAgentRun(tc.Ctx, executions[0]), "", nil
 
 	case "latestfailed", "lastfailed", "failed", "latestfailure", "lastfailure", "latesterror", "lasterror":
-		executions, err := getAgentWorkflowRuns(tc.Ctx, tc.Workflow.ID, agentToolMaxRunsScanned)
-		if err != nil && len(executions) == 0 {
-			return nil, "", agentToolProblem(fmt.Sprintf("Couldn't load the runs: %s", err), "Tell the user the run history couldn't be loaded right now.", nil)
+		executions, problem := loadAgentRuns(tc, agentToolMaxRunsScanned)
+		if problem != nil {
+			return nil, "", problem
 		}
-		if len(executions) == 0 {
-			return nil, "", agentNeverRunProblem(tc.Workflow)
-		}
-
-		for _, listed := range executions {
-			execution := loadFullAgentRun(tc.Ctx, listed)
-			if summarizeAgentRun(execution).didNotFinishCleanly() {
-				return execution, "", nil
-			}
+		if execution := findAgentRun(tc.Ctx, executions, agentRunSummary.didNotFinishCleanly); execution != nil {
+			return execution, "", nil
 		}
 
 		return loadFullAgentRun(tc.Ctx, executions[0]), fmt.Sprintf("None of the last %d runs failed, so this is the latest run instead.", len(executions)), nil
@@ -42142,7 +42147,7 @@ func resolveAgentRun(tc agentToolContext, ref string) (*WorkflowExecution, strin
 		return nil, "", agentToolProblem(fmt.Sprintf("No run with ID %s.", ref), "List the recent runs to get a valid ID.", agentToolCall(agentToolBuilderName, "search_workflow_runs", "since", "7d"))
 	}
 
-	if execution.WorkflowId != tc.Workflow.ID && execution.Workflow.ID != tc.Workflow.ID {
+	if !tc.ownsRun(execution) {
 		return nil, "", agentToolProblem("That run belongs to a different workflow. You can only read runs of the workflow you're editing.", "List this workflow's runs instead.", agentToolCall(agentToolBuilderName, "search_workflow_runs"))
 	}
 
@@ -42189,13 +42194,12 @@ func resolveAgentWorkflowVersion(tc agentToolContext, ref string, revisions []Wo
 
 	findRun := func(wantFailed bool) (*Workflow, string, map[string]interface{}) {
 		executions, _ := getAgentWorkflowRuns(tc.Ctx, tc.Workflow.ID, agentToolMaxRunsScanned)
-		for _, listed := range executions {
-			execution := loadFullAgentRun(tc.Ctx, listed)
-			summary := summarizeAgentRun(execution)
-			if (wantFailed && summary.didNotFinishCleanly()) || (!wantFailed && summary.RealStatus == "FINISHED") {
-				what := fmt.Sprintf("run %s (%s)", execution.ExecutionId, agentTimeLabel(execution.StartedAt))
-				return versionForRun(execution, what)
-			}
+		match := func(summary agentRunSummary) bool { return summary.RealStatus == "FINISHED" }
+		if wantFailed {
+			match = agentRunSummary.didNotFinishCleanly
+		}
+		if execution := findAgentRun(tc.Ctx, executions, match); execution != nil {
+			return versionForRun(execution, fmt.Sprintf("run %s (%s)", execution.ExecutionId, agentTimeLabel(execution.StartedAt)))
 		}
 
 		kind := "finished without errors"
@@ -42234,7 +42238,7 @@ func resolveAgentWorkflowVersion(tc agentToolContext, ref string, revisions []Wo
 	if len(ref) == 36 {
 		execution, err := GetWorkflowExecution(tc.Ctx, ref)
 		if err == nil && execution != nil && len(execution.ExecutionId) > 0 {
-			if execution.WorkflowId != tc.Workflow.ID && execution.Workflow.ID != tc.Workflow.ID {
+			if !tc.ownsRun(execution) {
 				return nil, "", agentToolProblem("That run belongs to a different workflow.", "Use a run of the workflow you're editing.", agentToolCall(agentToolBuilderName, "search_workflow_runs"))
 			}
 
@@ -42743,15 +42747,22 @@ func saveAgentRevertedWorkflow(tc agentToolContext, workflow *Workflow) error {
 		return err
 	}
 
-	request := httptest.NewRequest("PUT", fmt.Sprintf("/api/v1/workflows/%s", workflow.ID), bytes.NewReader(body))
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", tc.Request.Header.Get("Authorization"))
-	request.Header.Set("Org-Id", tc.Request.Header.Get("Org-Id"))
+	apikey := strings.TrimSpace(strings.TrimPrefix(tc.Request.Header.Get("Authorization"), "Bearer"))
+	result := struct {
+		Success bool        `json:"success"`
+		Status  int         `json:"status"`
+		Body    interface{} `json:"body"`
+	}{}
+	json.Unmarshal(runWorkflowBuilderRequest(workflowBuilderRequest{
+		Method:  "PUT",
+		Path:    fmt.Sprintf("/api/v1/workflows/%s", workflow.ID),
+		Body:    body,
+		Handler: SaveWorkflow,
+	}, apikey, tc.Request.Header.Get("Org-Id")), &result)
 
-	recorder := httptest.NewRecorder()
-	SaveWorkflow(recorder, request)
-	if recorder.Code >= 300 {
-		return fmt.Errorf("status %d: %s", recorder.Code, agentToolTruncate(recorder.Body.String(), 300))
+	if !result.Success {
+		details, _ := json.Marshal(result.Body)
+		return fmt.Errorf("status %d: %s", result.Status, agentToolTruncate(string(details), 300))
 	}
 
 	return nil
@@ -43163,36 +43174,6 @@ func agentSortedKeys(object map[string]interface{}, max int) []string {
 
 	return keys
 }
-
-func agentLevenshtein(a, b string) int {
-	previous := make([]int, len(b)+1)
-	for j := range previous {
-		previous[j] = j
-	}
-
-	for i := 1; i <= len(a); i++ {
-		current := make([]int, len(b)+1)
-		current[0] = i
-		for j := 1; j <= len(b); j++ {
-			cost := 1
-			if a[i-1] == b[j-1] {
-				cost = 0
-			}
-
-			current[j] = previous[j] + 1
-			if current[j-1]+1 < current[j] {
-				current[j] = current[j-1] + 1
-			}
-			if previous[j-1]+cost < current[j] {
-				current[j] = previous[j-1] + cost
-			}
-		}
-		previous = current
-	}
-
-	return previous[len(b)]
-}
-
 
 // Injects the header in all requests
 func RequestMiddleware(next http.Handler) http.Handler {
