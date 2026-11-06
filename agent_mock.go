@@ -1212,7 +1212,202 @@ func test56_DataFilterFallbacks(step int) (string, error) {
 	}
 }
 
-// RunAgentDecisionMockHandler is retained as a minimal stub so cloudSync.go compiles without changes.
+// ============================================================================
+// Mock Tool Execution (AGENT_TEST_MODE=true)
+// ============================================================================
+
+// RunAgentDecisionMockHandler intercepts tool execution when AGENT_TEST_MODE=true
+// and returns deterministic mock tool responses in the same switch style as getMockAgentResponse.
 func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, error) {
-	return nil, "", decision.Tool, fmt.Errorf("legacy AGENT_TEST_MODE file mock is deprecated; use /api/v1/agent_tests")
+	testCase := getExecutionTestCase(execution)
+	tool := strings.ToLower(strings.TrimSpace(decision.Tool))
+	action := strings.ToLower(strings.TrimSpace(decision.Action))
+	action = strings.ReplaceAll(action, " ", "_")
+	debugUrl := fmt.Sprintf("/workflows/%s?execution_id=%s", execution.WorkflowId, execution.ExecutionId)
+
+	log.Printf("[DEBUG][%s] RunAgentDecisionMockHandler: test_case=%q tool=%q action=%q", execution.ExecutionId, testCase, decision.Tool, decision.Action)
+
+	if strings.Contains(tool, "shuffle_tools") || tool == "shuffle tools" {
+		return mockShuffleToolsDecision(testCase, action, decision.Fields, debugUrl)
+	}
+
+	switch tool {
+	case "ipinfoio":
+		return mockIpinfoioDecision(testCase, action, decision.Fields, debugUrl)
+	default:
+		return nil, debugUrl, decision.Tool, fmt.Errorf("RunAgentDecisionMockHandler: unmocked tool %q (action=%q, test_case=%q)", decision.Tool, decision.Action, testCase)
+	}
+}
+
+func mockIpinfoioDecision(testCase string, action string, fields []Valuereplace, debugUrl string) ([]byte, string, string, error) {
+	appName := "Ipinfoio"
+	if action != "get_ip_geo_info" {
+		return nil, debugUrl, appName, fmt.Errorf("Ipinfoio: unsupported or non-existent action %q", action)
+	}
+
+	ip := strings.TrimSpace(getDecisionFieldValue(fields, "ip"))
+	switch ip {
+	case "34.34.65.23": // test_04, test_15
+		raw := `{
+			"status": 200,
+			"body": {
+				"ip": "34.34.65.23",
+				"hostname": "23.65.34.34.bc.googleusercontent.com",
+				"city": "Groningen",
+				"region": "Groningen",
+				"country": "NL",
+				"loc": "53.2192,6.5667",
+				"org": "AS396982 Google LLC",
+				"postal": "9711",
+				"timezone": "Europe/Amsterdam"
+			},
+			"url": "https://ipinfo.io/34.34.65.23/geo?token=49dc03c69155d6",
+			"headers": {
+				"access-control-allow-origin": "*",
+				"content-type": "application/json",
+				"content-encoding": "gzip",
+				"date": "Thu, 05 Nov 2026 17:27:23 GMT",
+				"vary": "accept-encoding",
+				"via": "1.1 google",
+				"Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+				"Transfer-Encoding": "chunked"
+			},
+			"cookies": {},
+			"success": true
+		}`
+		return []byte(raw), debugUrl, appName, nil
+	default:
+		return nil, debugUrl, appName, fmt.Errorf("mockIpinfoioDecision: unmocked ip %q (test_case=%q)", ip, testCase)
+	}
+}
+
+func mockShuffleToolsDecision(testCase string, action string, fields []Valuereplace, debugUrl string) ([]byte, string, string, error) {
+	appName := "Shuffle Tools"
+	if action != "execute_python" {
+		return nil, debugUrl, appName, fmt.Errorf("Shuffle Tools: unsupported or non-existent action %q", action)
+	}
+
+	code := strings.TrimSpace(getDecisionFieldValue(fields, "code"))
+	if strings.HasPrefix(code, "print(1000 + ") && strings.HasSuffix(code, ")") { // test_20_worker_0..9
+		var workerIdx int
+		if _, err := fmt.Sscanf(code, "print(1000 + %d)", &workerIdx); err == nil {
+			return []byte(fmt.Sprintf(`{"success": true, "message": %d}`, 1000+workerIdx)), debugUrl, appName, nil
+		}
+	}
+
+	switch code {
+	case "print(68)": // test_02, test_04, test_09, test_10, test_11, test_12
+		return []byte(`{"success": true, "message": 68}`), debugUrl, appName, nil
+	case "print(1337 * 3)": // test_03
+		return []byte(`{"success": true, "message": 4011}`), debugUrl, appName, nil
+	case "print(111)": // test_05, test_36
+		return []byte(`{"success": true, "message": 111}`), debugUrl, appName, nil
+	case "print(222)": // test_05, test_36
+		return []byte(`{"success": true, "message": 222}`), debugUrl, appName, nil
+	case "print(10)": // test_06, test_09
+		return []byte(`{"success": true, "message": 10}`), debugUrl, appName, nil
+	case "print(20)": // test_06
+		return []byte(`{"success": true, "message": 20}`), debugUrl, appName, nil
+	case "print(42 * 2)": // test_07
+		return []byte(`{"success": true, "message": 84}`), debugUrl, appName, nil
+	case "print(1)": // test_13, test_31, test_44
+		return []byte(`{"success": true, "message": 1}`), debugUrl, appName, nil
+	case "print(2)": // test_13, test_31
+		return []byte(`{"success": true, "message": 2}`), debugUrl, appName, nil
+	case "print(3)": // test_31
+		return []byte(`{"success": true, "message": 3}`), debugUrl, appName, nil
+	case "print(999)": // test_14
+		return []byte(`{"success": true, "message": 999}`), debugUrl, appName, nil
+	case "print(777)": // test_16
+		return []byte(`{"success": true, "message": 777}`), debugUrl, appName, nil
+	case "print(314)": // test_21
+		return []byte(`{"success": true, "message": 314}`), debugUrl, appName, nil
+	case "print(505)": // test_26
+		return []byte(`{"success": true, "message": 505}`), debugUrl, appName, nil
+	case "print(11)": // test_28
+		return []byte(`{"success": true, "message": 11}`), debugUrl, appName, nil
+	case "print(22)": // test_28
+		return []byte(`{"success": true, "message": 22}`), debugUrl, appName, nil
+	case "print(808)": // test_29
+		return []byte(`{"success": true, "message": 808}`), debugUrl, appName, nil
+	case "print(303)": // test_30
+		return []byte(`{"success": true, "message": 303}`), debugUrl, appName, nil
+	case "print(616)": // test_35
+		return []byte(`{"success": true, "message": 616}`), debugUrl, appName, nil
+	case "print(100)": // test_38
+		return []byte(`{"success": true, "message": 100}`), debugUrl, appName, nil
+	case "print(200)": // test_38
+		return []byte(`{"success": true, "message": 200}`), debugUrl, appName, nil
+	case "print(300)": // test_38
+		return []byte(`{"success": true, "message": 300}`), debugUrl, appName, nil
+	case "print(400)": // test_38
+		return []byte(`{"success": true, "message": 400}`), debugUrl, appName, nil
+	case "print(500)": // test_38
+		return []byte(`{"success": true, "message": 500}`), debugUrl, appName, nil
+	case "print(600)": // test_38
+		return []byte(`{"success": true, "message": 600}`), debugUrl, appName, nil
+	case "print(700)": // test_38
+		return []byte(`{"success": true, "message": 700}`), debugUrl, appName, nil
+	case "print(9001)": // test_39_case_0
+		return []byte(`{"success": true, "message": 9001}`), debugUrl, appName, nil
+	case "print(9002)": // test_39_case_2
+		return []byte(`{"success": true, "message": 9002}`), debugUrl, appName, nil
+	case "print(9003)": // test_39_case_3
+		return []byte(`{"success": true, "message": 9003}`), debugUrl, appName, nil
+	case "print(401)": // test_39_case_4
+		return []byte(`{"success": true, "message": 401}`), debugUrl, appName, nil
+	case "print(402)": // test_39_case_4
+		return []byte(`{"success": true, "message": 402}`), debugUrl, appName, nil
+	case "print('PAYLOAD_' + ('X' * 8000) + '_END')": // test_40
+		payload := "PAYLOAD_" + strings.Repeat("X", 8000) + "_END"
+		return []byte(fmt.Sprintf(`{"success": true, "message": %q}`, payload)), debugUrl, appName, nil
+	case "print(10 * 5)": // test_41
+		return []byte(`{"success": true, "message": 50}`), debugUrl, appName, nil
+	case "print(701)": // test_48
+		return []byte(`{"success": true, "message": 701}`), debugUrl, appName, nil
+	case "print(702)": // test_48
+		return []byte(`{"success": true, "message": 702}`), debugUrl, appName, nil
+	case "print(4949)": // test_49
+		return []byte(`{"success": true, "message": 4949}`), debugUrl, appName, nil
+	case "print(5001)": // test_50
+		return []byte(`{"success": true, "message": 5001}`), debugUrl, appName, nil
+	case "print(5002)": // test_50
+		return []byte(`{"success": true, "message": 5002}`), debugUrl, appName, nil
+	case "print(5101)": // test_51
+		return []byte(`{"success": true, "message": 5101}`), debugUrl, appName, nil
+	case "print(5201)": // test_52
+		return []byte(`{"success": true, "message": 5201}`), debugUrl, appName, nil
+	case "print(5401)": // test_54
+		return []byte(`{"success": true, "message": 5401}`), debugUrl, appName, nil
+	case "print(5402)": // test_54
+		return []byte(`{"success": true, "message": 5402}`), debugUrl, appName, nil
+	case "import json; print(json.dumps({'totalCount': 42, 'items': [{'id': 'inc_1', 'severity': 'critical', 'extra_noise': 'prune_me_in_prompt'}]}))": // test_55
+		return []byte(`{"success": true, "message": {"totalCount": 42, "items": [{"id": "inc_1", "severity": "critical", "extra_noise": "prune_me_in_prompt"}]}}`), debugUrl, appName, nil
+	case "import json; print(json.dumps({'alpha_key': 'alpha_val_5601', 'beta_key': 'beta_val_5601'}))": // test_56 step 1
+		return []byte(`{"success": true, "message": {"alpha_key": "alpha_val_5601", "beta_key": "beta_val_5601"}}`), debugUrl, appName, nil
+	case "import json; print(json.dumps({'keep_only_this': 'val_1', 'unfiltered_extra': 'preserved_in_full_mode'}))": // test_56 step 2
+		return []byte(`{"success": true, "message": {"keep_only_this": "val_1", "unfiltered_extra": "preserved_in_full_mode"}}`), debugUrl, appName, nil
+	default:
+		return nil, debugUrl, appName, fmt.Errorf("mockShuffleToolsDecision: unmocked execute_python code %q (test_case=%q)", code, testCase)
+	}
+}
+
+func getExecutionTestCase(execution WorkflowExecution) string {
+	for _, action := range execution.Workflow.Actions {
+		for _, param := range action.Parameters {
+			if param.Name == "test_case" && len(strings.TrimSpace(param.Value)) > 0 {
+				return strings.TrimSpace(param.Value)
+			}
+		}
+	}
+	return ""
+}
+
+func getDecisionFieldValue(fields []Valuereplace, key string) string {
+	for _, f := range fields {
+		if strings.EqualFold(strings.TrimSpace(f.Key), key) {
+			return f.Value
+		}
+	}
+	return ""
 }
