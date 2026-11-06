@@ -4889,6 +4889,54 @@ func PushTarStreamToRegistry(r io.Reader, refStr string) error {
 	return nil
 }
 
+// Local development: SHUFFLE_APP_SPECS=/path/a.json,/path/b.json makes this backend use those specs
+// for their app IDs (the spec's "id") instead of the stored ones. Nothing is saved.
+// ponytail: re-read and regenerated on every call, cache by file mtime if it ever shows up in a profile
+func getLocalAppSpec(appId string) (string, bool) {
+	for _, path := range strings.Split(os.Getenv("SHUFFLE_APP_SPECS"), ",") {
+		path = strings.TrimSpace(path)
+		if len(path) == 0 {
+			continue
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			log.Printf("[WARNING] Failed reading local app spec %s: %s", path, err)
+			continue
+		}
+
+		spec := struct {
+			ID string `json:"id"`
+		}{}
+		if json.Unmarshal(data, &spec) == nil && spec.ID == appId {
+			return string(data), true
+		}
+	}
+
+	return "", false
+}
+
+func getLocalAppSpecActions(appId string) ([]WorkflowAppAction, bool) {
+	body, ok := getLocalAppSpec(appId)
+	if !ok {
+		return nil, false
+	}
+
+	swagger, err := openapi3.NewSwaggerLoader().LoadSwaggerFromData([]byte(body))
+	if err != nil {
+		log.Printf("[WARNING] Failed parsing local app spec for %s: %s", appId, err)
+		return nil, false
+	}
+
+	_, app, _, err := GenerateYaml(swagger, appId)
+	if err != nil || len(app.Actions) == 0 {
+		log.Printf("[WARNING] Failed generating actions from local app spec for %s: %v", appId, err)
+		return nil, false
+	}
+
+	return app.Actions, true
+}
+
 // Read-only version of LoadAppConfigFromMain: nothing is saved or built in this region
 func getPublicAppFromMain(ctx context.Context, appId string) (WorkflowApp, error) {
 	cacheKey := fmt.Sprintf("main_region_app_%s", appId)

@@ -2635,7 +2635,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 			//	log.Printf("[DEBUG][%s] DirectAppCall: result length %d, status %s", execution.ExecutionId, len(singleResult.Result), status)
 			//}
 
-			return []byte(singleResult.Result), debugUrl, resolvedAppName, []string{}, action.Name, nil
+			return withAppActionResource(resolvedAppId, action.Name, []byte(singleResult.Result)), debugUrl, resolvedAppName, []string{}, action.Name, nil
 		}
 
 		if len(singleResult.Errors) > 0 {
@@ -2661,7 +2661,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		return body, debugUrl, appName, []string{}, "", err
 	}
 
-	if builderRequest, ok := getInProcessAgentRequest(execution, decision); ok {
+	if builderRequest, ok := getWorkflowBuilderRequest(execution, decision); ok {
 		return runWorkflowBuilderDecisionInProcess(execution, decision, builderRequest)
 	}
 
@@ -3053,7 +3053,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			}
 
 			// Checked before running, as the handler may rename decision.Tool
-			_, ranInProcess := getInProcessAgentRequest(execution, decision)
+			_, ranInProcess := getWorkflowBuilderRequest(execution, decision)
 			rawResponse, debugUrl, appname, categoryLabels, actionName, runError := RunAgentDecisionSingulActionHandler(execution, decision, agentOutput.ExecutionMode)
 
 			if len(appname) > 0 {

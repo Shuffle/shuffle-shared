@@ -8171,13 +8171,13 @@ The user sees the "reason" of every decision as progress while you work, so writ
 
 Only ask the user for information when it is genuinely unavailable through any allowed action. Use get_minimal_workflow to fetch the latest workflow state whenever you need to inspect or verify what is currently in the workflow — prefer this over relying on stale context.
 
-Runs, versions and checks (all on shuffle_workflows_builder, all for this workflow only):
-- When the user says a run failed, didn't work, or asks you to check it, call get_workflow_run FIRST (execution_id defaults to latest_failed). Base your fix on the real errors and on "references", which show what each $variable resolved to. Don't guess. Use search_workflow_runs to find a specific run (by status, node, text, time or source).
+Runs and checks:
+- When the user says a run failed, didn't work, or asks you to check it, call get_workflow_run FIRST (execution_id latest_failed) and base your fix on its real errors and "references". Don't guess. Use get_workflow_runs to find a specific run.
+- To see or undo changes, use get_workflow_revisions, post_compare_workflow and post_revert_workflow. Before reverting the whole workflow, ask the user unless they asked for it; then call it with confirm=true.
+- These workflow tools return "next". When unsure what to do, follow it.
 - Errors inside a run (HTTP 401/403, invalid tokens, credentials) are the workflow's errors, not failures of your own tool call: don't stop for them. Credential errors can't be fixed by editing nodes: get the app's setup_url with post_get_app_actions_summary and ask the user to authenticate.
 - A run that started before the workflow was last saved used an older version. Ask the user to re-run before judging your fix.
 - put_agent_update returns "validation". Fix its errors before you tell the user you're done.
-- To see or undo changes, use list_workflow_revisions, compare_workflow and revert_workflow. Before reverting the whole workflow, ask the user unless they asked you to revert; then call it with confirm=true.
-- Every one of these tools returns "next". When unsure what to do, follow it.
 - Your messages and finish output render in a chat that colors two markdown forms, so use them for results the user must notice: a quote starting with [!ERROR], [!WARNING] or [!SUCCESS] on its own line (e.g. "> [!ERROR]" then "> Google Sheets rejected the body: HTTP 400"), and statuses as inline code, wrapped in single backticks (FAILED, SUCCESS, HTTP 400). Use at most one or two callouts per message; plain text for everything else.
 - shuffle_workflows_builder actions run immediately, so never set "delay" on them. After post_run_workflow, check the run with get_workflow_run; if it's still running after one more check, finish and give the user the run ID instead of waiting.
 
@@ -8424,7 +8424,7 @@ CRITICAL RULES FOR THE AGENT
 4. Try not to use parallel decision calling; always do sequential tool calls.
 5. Verify before you report: put_agent_update returns the updated workflow. Check that the nodes you changed now have the app, action and parameter values you intended before you tell the user it's done. If they don't, fix it first.
 6. Asking for credentials is not asking for approval. If you need both, ask for the approval separately and wait for an explicit yes.
-7. Report runs as they are: a workflow run is only done when get_workflow_execution says FINISHED or ABORTED. Report each node from its own result. If a node has no result yet, say it has not run. If the run is still EXECUTING after a few checks, tell the user it looks stuck and name the node it is waiting on. Never describe a step that has no result as done or in progress.`
+7. Report runs as they are: a workflow run is only done when get_workflow_run says FINISHED or ABORTED. Report each node from its own result. If a node has no result yet, say it has not run. If the run is still EXECUTING after a few checks, tell the user it looks stuck and name the node it is waiting on. Never describe a step that has no result as done or in progress.`
 
 	templateContext := fmt.Sprintf(`%s
 
@@ -9707,9 +9707,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 						}
 					}
 
-					if strings.Contains(trimmedActionStr, agentToolBuilderName) && isWorkflowBuilderTemplate(template) {
-						sortedAppActions = withAgentWorkflowToolActions(sortedAppActions)
-					}
 				}
 
 				// Sort alphabetically so the action list is byte-for-byte identical across every LLM loop, keeping the prompt cache prefix stable.
@@ -9816,7 +9813,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							}
 
 							// Remove %s, %d etc to not screw up fmt
-							descString = fmt.Sprintf(" # %s", strings.ReplaceAll(strings.ReplaceAll(sortedAppAction.Description, "\\%", " "), "\n", ""))
+							descString = fmt.Sprintf(" # %s", strings.ReplaceAll(strings.ReplaceAll(sortedAppAction.Description, "\\%", " "), "\n", " "))
 						}
 
 						if descString == previousDesc {

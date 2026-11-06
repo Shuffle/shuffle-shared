@@ -1998,7 +1998,19 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 	return workflowApp, nil
 }
 
+// Actions come from a local spec instead when SHUFFLE_APP_SPECS lists one for this app
 func GetApp(ctx context.Context, id string, user User, skipCache bool) (*WorkflowApp, error) {
+	app, err := getStoredApp(ctx, id, user, skipCache)
+	if err == nil && app != nil {
+		if actions, ok := getLocalAppSpecActions(app.ID); ok {
+			app.Actions = actions
+		}
+	}
+
+	return app, err
+}
+
+func getStoredApp(ctx context.Context, id string, user User, skipCache bool) (*WorkflowApp, error) {
 	workflowApp := &WorkflowApp{}
 	if len(id) == 0 {
 		return workflowApp, errors.New("No ID provided to get an app")
@@ -5219,6 +5231,10 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 
 	if strings.HasSuffix(id, ".") {
 		id = id[:len(id)-1]
+	}
+
+	if body, ok := getLocalAppSpec(id); ok {
+		return ParsedOpenApi{Body: body, ID: id, Success: true}, nil
 	}
 
 	if len(id) > 32 {
