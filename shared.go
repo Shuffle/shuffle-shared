@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -141,6 +142,8 @@ func AllowedDomain(referer string) bool {
 	return false
 }
 
+var prPreviewOriginRegex = regexp.MustCompile(`^https://shuffler-pr-previews--pr-[0-9]+-[a-z0-9]+\.web\.app$`)
+
 func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	origin := request.Header["Origin"]
 	resp.Header().Set("Vary", "Origin")
@@ -177,11 +180,12 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"http://localhost:3002",
 			"http://localhost:3000",
 
-			// Shuffle security 
+			// Shuffle security - test instances
 			"https://cases.shuffler.io",
 			"https://security.shuffler.io",
 			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
 			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
+			"https://preview--shuffle-security.lovable.app",
 
 			// tbd
 			"https://preview--shuffle-cases.lovable.app",
@@ -206,6 +210,10 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 					allowed = true
 					break
 				}
+			}
+
+			if !allowed && prPreviewOriginRegex.MatchString(origin[0]) {
+				allowed = true
 			}
 
 			// Since we are becoming more and more of a platform
@@ -252,8 +260,9 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	}
 
 	//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:8000")
-	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me, Org-Id, Org, Authorization, X-Debug-Url")
-	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, PATCH")
+	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me, Org-Id, Org, Authorization, X-Debug-Url, Mcp-Session-Id, MCP-Protocol-Version")
+	resp.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version, X-Debug-Url")
+	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, PATCH, OPTIONS")
 	resp.Header().Set("Access-Control-Allow-Credentials", "true")
 
 	if request.Method == "OPTIONS" {
@@ -3820,6 +3829,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			userdata.ApiKey = newApikey
 			}
 			userdata.AllowedApps = oauthTok.AllowedApps
+			userdata.AllowedTools = oauthTok.AllowedTools
 			userdata.OAuthScope = oauthTok.Scope
 			if oauthTok.OrgId != "" {
 				userdata.ActiveOrg.Id = oauthTok.OrgId
@@ -3924,6 +3934,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 					userdata.ApiKey = newApikey
 					}
 					userdata.AllowedApps = oauthTok.AllowedApps
+					userdata.AllowedTools = oauthTok.AllowedTools
 					userdata.OAuthScope = oauthTok.Scope
 					if oauthTok.OrgId != "" {
 						userdata.ActiveOrg.Id = oauthTok.OrgId
@@ -6260,18 +6271,41 @@ func GetFCMClient(ctx context.Context) (*messaging.Client, error) {
 	return client, nil
 }
 
-func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, error) { 
+func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, error) {
 	if project.Environment != "cloud" {
 		log.Printf("[ERROR] Device upsert attempted in non-cloud environment")
 		return user, errors.New("Device upsert is only allowed in cloud environment (for now). Cloud Sync required")
 	}
 
-	if len(device.ID) == 0 { 
+	if len(device.ID) == 0 {
 		log.Printf("[ERROR] No ID in device upsert")
 		return user, errors.New("No device ID provided")
 	}
 
-	if len(device.Token) == 0 { 
+	foundIndex := -1
+	for deviceIndex, curDevices := range user.Devices {
+		if curDevices.ID != device.ID {
+			continue
+		}
+
+		foundIndex = deviceIndex
+		break
+	}
+
+	device.Token = strings.TrimSpace(device.Token)
+	now := time.Now().Unix()
+	device.EditedAt = now
+
+	// Allow disconnecting an existing registered device by clearing its token
+	if len(device.Token) == 0 {
+		if foundIndex >= 0 {
+			if user.Devices[foundIndex].CreatedAt > 0 {
+				device.CreatedAt = user.Devices[foundIndex].CreatedAt
+			}
+			user.Devices[foundIndex] = device
+			return user, nil
+		}
+
 		log.Printf("[ERROR] No token in device upsert for %s", device.ID)
 		return user, errors.New("No device token provided")
 	}
@@ -6293,27 +6327,19 @@ func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, er
 		return user, errors.New("Invalid device token provided")
 	}
 
-
-	device.EditedAt = time.Now().Unix()
-
-	foundIndex := -1
-	for deviceIndex, curDevices := range user.Devices {
-		if curDevices.ID != device.ID {
-			continue
-		}
-
-		foundIndex = deviceIndex
-		break
-	}
-
 	if foundIndex >= 0 {
-		device.CreatedAt = user.Devices[foundIndex].CreatedAt
+		if user.Devices[foundIndex].CreatedAt > 0 {
+			device.CreatedAt = user.Devices[foundIndex].CreatedAt
+		}
 		user.Devices[foundIndex] = device
 	} else {
+		if device.CreatedAt == 0 {
+			device.CreatedAt = now
+		}
 		user.Devices = append(user.Devices, device)
 	}
 
-	return user, nil 
+	return user, nil
 }
 
 func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
@@ -6424,7 +6450,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	orgUpdater := true
+	orgUpdater := false
+	if len(t.Username) > 0 || len(t.Suborgs) > 0 {
+		orgUpdater = true
+	}
 	if len(t.Role) > 0 && (t.Role != "admin" && t.Role != "user" && t.Role != "org-reader") {
 
 		log.Printf("[WARNING] %s tried and failed to update user %s", userInfo.Username, t.UserId)
@@ -6861,6 +6890,77 @@ func GenerateApikey(ctx context.Context, userInfo User) (User, error) {
 	err = SetUser(ctx, &userInfo, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating users' apikey: %s", err)
+		return userInfo, err
+	}
+
+	return userInfo, nil
+}
+
+func GenerateRolloverApikey(ctx context.Context, userInfo User) (User, error) {
+	if len(userInfo.Username) == 0 || len(userInfo.Id) == 0 {
+		return userInfo, fmt.Errorf("User ID and username are required to generate API key")
+	}
+
+	if len(userInfo.ApiKey) == 0 {
+		return GenerateApikey(ctx, userInfo)
+	}
+
+	if len(userInfo.RolloverApiKey) > 0 {
+		return userInfo, fmt.Errorf("A rollover API key already exists. Delete the old key first")
+	}
+
+	userInfo.RolloverApiKey = uuid.NewV4().String()
+
+	if err := SetApikey(ctx, userInfo); err != nil {
+		log.Printf("[WARNING] Failed updating apikey index on rollover create: %s", err)
+		return userInfo, err
+	}
+
+	log.Printf("[AUDIT] Created rollover apikey for user '%s' (%s)", userInfo.Username, userInfo.Id)
+	if err := SetUser(ctx, &userInfo, true); err != nil {
+		log.Printf("[WARNING] Failed updating users' rollover apikey: %s", err)
+		return userInfo, err
+	}
+
+	return userInfo, nil
+}
+
+func PromoteRolloverApikey(ctx context.Context, userInfo User) (User, error) {
+	if len(userInfo.Username) == 0 || len(userInfo.Id) == 0 {
+		return userInfo, fmt.Errorf("User ID and username are required to promote API key")
+	}
+
+	if len(userInfo.RolloverApiKey) == 0 {
+		return userInfo, fmt.Errorf("No rollover API key to promote")
+	}
+
+	oldApiKey := userInfo.ApiKey
+
+	userInfo.ApiKey = userInfo.RolloverApiKey
+	userInfo.RolloverApiKey = ""
+
+	if len(oldApiKey) > 0 {
+		DeleteCache(ctx, oldApiKey)
+		DeleteCache(ctx, fmt.Sprintf("Users_%s", oldApiKey))
+
+		seenOrgs := map[string]bool{}
+		for _, orgId := range append([]string{userInfo.ActiveOrg.Id}, userInfo.Orgs...) {
+			if len(orgId) == 0 || seenOrgs[orgId] {
+				continue
+			}
+			seenOrgs[orgId] = true
+			DeleteCache(ctx, fmt.Sprintf("%s%s", oldApiKey, orgId))
+		}
+	}
+
+	if err := SetApikey(ctx, userInfo); err != nil {
+		log.Printf("[WARNING] Failed updating apikey index on rollover promote: %s", err)
+		return userInfo, err
+	}
+
+	log.Printf("[AUDIT] Promoted rollover apikey for user '%s' (%s); old key deleted", userInfo.Username, userInfo.Id)
+	if err := SetUser(ctx, &userInfo, true); err != nil {
+		log.Printf("[WARNING] Failed updating users' promoted apikey: %s", err)
 		return userInfo, err
 	}
 
@@ -10071,6 +10171,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+	} else {
+		DeleteCache(ctx, fmt.Sprintf("workflow_ops_cache_%s", workflow.ID))
 	}
 
 	org := &Org{}
@@ -10366,6 +10468,168 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "username": "%s", "verified": %t, "apikey": "%s"}`, userInfo.Username, userInfo.Verified, userInfo.ApiKey)))
 }
 
+// authorizeApikeyTarget decides which user an apikey action applies to and whether the caller is allowed to do it.
+func authorizeApikeyTarget(ctx context.Context, resp http.ResponseWriter, request *http.Request, caller User) (*User, bool) {
+	// Default the target to the caller; an optional "user_id" in the body targets someone else.
+	targetId := caller.Id
+
+	// Read the optional "user_id" from the request body (admins use this to act on another user).
+	if request.Body != nil {
+		body, err := ioutil.ReadAll(request.Body)
+		if err == nil && len(body) > 0 {
+			var t struct {
+				UserId string `json:"user_id"`
+			}
+			if err := json.Unmarshal(body, &t); err == nil && len(t.UserId) > 0 {
+				targetId = t.UserId
+			}
+		}
+	}
+
+	// Self-service: a user acting on their own key is always allowed.
+	if targetId == caller.Id {
+		self := caller
+		return &self, true
+	}
+
+	// Acting on someone else requires the caller to be an admin.
+	if caller.Role != "admin" {
+		log.Printf("[AUDIT] %s (%s) tried to change apikey for %s without admin role", caller.Username, caller.Id, targetId)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "You need to be admin to change another user's API key"}`))
+		return nil, false
+	}
+
+	// Load the target user; 404 if they don't exist.
+	target, err := GetUser(ctx, targetId)
+	if err != nil {
+		log.Printf("[WARNING] Can't find target user %s for apikey change: %s", targetId, err)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Target user not found"}`))
+		return nil, false
+	}
+
+	// Multi-tenant isolation: the admin can only touch users inside their own active org.
+	if !ArrayContains(target.Orgs, caller.ActiveOrg.Id) {
+		log.Printf("[AUDIT] admin %s (%s) tried to change apikey for %s outside their org %s", caller.Username, caller.Id, targetId, caller.ActiveOrg.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Target user is not in your organization"}`))
+		return nil, false
+	}
+
+	return target, true
+}
+
+func HandleGenerateRolloverApikey(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting rollover apikey create to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	caller, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in rollover create: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	target, ok := authorizeApikeyTarget(ctx, resp, request, caller)
+	if !ok {
+		return
+	}
+
+	newUserInfo, err := GenerateRolloverApikey(ctx, *target)
+	if err != nil {
+		log.Printf("[WARNING] Failed creating rollover apikey for %s: %s", target.Username, err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed creating rollover API key"}`))
+		return
+	}
+
+	newjson, err := json.Marshal(map[string]interface{}{
+		"success":         true,
+		"username":        newUserInfo.Username,
+		"verified":        newUserInfo.Verified,
+		"apikey":          newUserInfo.ApiKey,
+		"rollover_apikey": newUserInfo.RolloverApiKey,
+	})
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write(newjson)
+}
+
+func HandlePromoteRolloverApikey(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting rollover apikey promote to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	caller, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in rollover promote: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	target, ok := authorizeApikeyTarget(ctx, resp, request, caller)
+	if !ok {
+		return
+	}
+
+	newUserInfo, err := PromoteRolloverApikey(ctx, *target)
+	if err != nil {
+		log.Printf("[WARNING] Failed promoting rollover apikey for %s: %s", target.Username, err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed deleting old API key"}`))
+		return
+	}
+
+	newjson, err := json.Marshal(map[string]interface{}{
+		"success":  true,
+		"username": newUserInfo.Username,
+		"verified": newUserInfo.Verified,
+		"apikey":   newUserInfo.ApiKey,
+	})
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write(newjson)
+}
+
 func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -10402,6 +10666,7 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 		Username: userInfo.Username,
 		Verified: userInfo.Verified,
 		Apikey:   userInfo.ApiKey,
+		RolloverApikey: userInfo.RolloverApiKey,
 		Image:    userInfo.PublicProfile.GithubAvatar,
 
 		Devices: userInfo.Devices,
@@ -10422,6 +10687,7 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 func CleanCreds(user *User, currentUser User) *User {
 	user.Password = ""
 	user.ApiKey = ""
+	user.RolloverApiKey = ""
 	user.Session = ""
 	user.UsersLastSession = ""
 	user.VerificationToken = ""
@@ -10534,9 +10800,11 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 
 		if item.Id != user.Id {
 			item.ApiKey = ""
+			item.RolloverApiKey = ""
 		}
 
 		item.ApiKey = ""
+		item.RolloverApiKey = ""
 		item.Password = ""
 		item.Session = ""
 		item.UsersLastSession = ""
@@ -10631,6 +10899,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				orgUser.ApiKey = ""
+				orgUser.RolloverApiKey = ""
 				orgUser.Password = ""
 				orgUser.Session = ""
 				orgUser.UsersLastSession = ""
@@ -10928,17 +11197,15 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[AUDIT] Handling password change for %s from %s (%s)", t.Username, userInfo.Username, userInfo.Id)
 
-	curUserFound := false
-	if t.Username != userInfo.Username {
+	curUserFound := strings.EqualFold(strings.TrimSpace(t.Username), userInfo.Username)
+	if !curUserFound {
 		log.Printf("[WARNING] Bad username during password change for %s.", t.Username)
 
-		if project.Environment == "cloud" {
+		if project.Environment == "cloud" || userInfo.Role != "admin" {
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Not allowed to change others' passwords in cloud"}`))
+			resp.Write([]byte(`{"success": false, "reason": "Not allowed to change others' passwords"}`))
 			return
 		}
-	} else if t.Username == userInfo.Username {
-		curUserFound = true
 	}
 
 	// Checking current user changing another user
@@ -10988,15 +11255,21 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		foundUser = users[0]
-		orgFound := false
-		if userInfo.ActiveOrg.Id == foundUser.ActiveOrg.Id {
-			orgFound = true
-		} else {
-			for _, item := range foundUser.Orgs {
-				if item == userInfo.ActiveOrg.Id {
-					orgFound = true
-					break
+		orgFound := len(foundUser.Orgs) > 0
+		for _, orgId := range foundUser.Orgs {
+			isAdmin := false
+			if org, err := GetOrg(ctx, orgId); err == nil {
+				for _, orgUser := range org.Users {
+					if orgUser.Id == userInfo.Id && orgUser.Role == "admin" {
+						isAdmin = true
+						break
+					}
 				}
+			}
+
+			if !isAdmin {
+				orgFound = false
+				break
 			}
 		}
 
@@ -15017,6 +15290,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				user.Password = ""
 				user.Session = ""
 				user.ApiKey = ""
+				user.RolloverApiKey = ""
 				user.LoginInfo = []LoginInfo{}
 				user.PrivateApps = []WorkflowApp{}
 
@@ -19266,6 +19540,15 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	}
 
 	if len(allFinishedDecisions) == len(mappedResult.Decisions) {
+		// A run the user aborted must not ask the LLM for more, and this copy (which can still
+		// say EXECUTING) must not be saved over the aborted one
+		latestExec, fetchErr := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+		runAborted := fetchErr == nil && latestExec != nil && latestExec.Status == "ABORTED"
+		if runAborted {
+			log.Printf("[INFO][%s] Agent run was aborted. Not asking the LLM for a next step.", workflowExecution.ExecutionId)
+			return latestExec, false, nil
+		}
+
 		// Handle agent decisionmaking. Use the same
 		log.Printf("[INFO][%s] With the agent being finished, we are asking it whether it would like to do anything else", workflowExecution.ExecutionId)
 
@@ -34892,7 +35175,7 @@ func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request, am
 	// 4. If yes, continue and add the request to the list
 	// Use the GetCache() and SetCache() functions to store the request count
 
-	maxAmount := 4
+	maxAmount := 5
 	if len(amount) > 0 {
 		maxAmount = amount[0]
 	}
@@ -35067,7 +35350,7 @@ func fixOrgUsers(ctx context.Context, foundOrg Org) error {
 
 		log.Printf("[DEBUG] Re-adding user %s (%s) to org %s (%s)", user.Username, user.Id, foundOrg.Name, foundOrg.Id)
 		user.Role = "admin"
-		foundOrg.Users = append(foundOrg.Users, user)
+		foundOrg.Users = append(foundOrg.Users, SanitizeOrgUser(user))
 	}
 
 	// Save the org
@@ -38020,7 +38303,7 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 			lowerName := strings.ToLower(strings.TrimSpace(appName))
 			foundInOrg := false
 			for _, app := range allApps {
-				if strings.ToLower(app.Name) == lowerName && len(app.ID) > 0 {
+				if normalizeToolName(app.Name) == normalizeToolName(lowerName) && len(app.ID) > 0 {
 					if debug {
 						log.Printf("[DEBUG] Found app by name '%s' (ID %s) in org apps list", appName, app.ID)
 					}
@@ -38091,6 +38374,40 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(404)
 		resp.Write([]byte(`{"success": false, "reason": "No actions found in matched apps"}`))
 		return
+	}
+
+	// Tell the agent which apps the user still has to authenticate, and where.
+	// Activation isn't needed here: adding a node with a public app activates it.
+	orgApps := map[string]bool{}
+	for _, app := range allApps {
+		orgApps[app.ID] = true
+	}
+
+	matchedById := map[string]WorkflowApp{}
+	for _, app := range matchedApps {
+		matchedById[app.ID] = app
+	}
+
+	orgAuths, authErr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+	if authErr != nil {
+		log.Printf("[WARNING] Failed loading org auths in GetWorkflowAppActions: %s", authErr)
+	}
+
+	for i := range responses {
+		app := matchedById[responses[i].AppID]
+		responses[i].Activated = orgApps[app.ID]
+		responses[i].AuthenticationRequired = app.Authentication.Required
+
+		for _, auth := range orgAuths {
+			if auth.App.ID == app.ID || strings.EqualFold(auth.App.Name, app.Name) {
+				responses[i].Authenticated = true
+				break
+			}
+		}
+
+		if responses[i].AuthenticationRequired && !responses[i].Authenticated && authErr == nil {
+			responses[i].SetupUrl = fmt.Sprintf("/apps/%s", app.ID)
+		}
 	}
 
 	if debug {
@@ -38528,6 +38845,223 @@ func enrichTriggerFromApp(minTrig *MinimalTrigger, environment string) (Trigger,
 	default:
 		return Trigger{}, fmt.Errorf("unsupported trigger type: %s", minTrig.AppName)
 	}
+}
+
+// The workflow builder app is a thin wrapper around this backend's own workflow APIs.
+// Running it as an app sends every parameter through the app SDK, which treats
+// "$node.field" and liquid "{{ }}" inside the workflow content as variables and
+// replaces them, so edits made by the agent end up with empty references.
+// These actions are therefore handled in-process, passing the content through as-is.
+const workflowBuilderAppId = "de4ef2287bd41b9d5563e39989643ee6"
+const workflowBuilderAppName = "Shuffle_Workflows_Builder"
+
+// The app lookup lives on the shuffle_apps tool, but the model often files it under the builder
+const shuffleAppsAppId = "7db43ccd25261967b095cfbd467a75cc"
+const shuffleAppsAppName = "shuffle_apps"
+
+type workflowBuilderRequest struct {
+	Method  string
+	Path    string
+	Body    []byte
+	Handler http.HandlerFunc
+}
+
+func normalizeToolName(name string) string {
+	return strings.ToLower(strings.NewReplacer("_", "", " ", "", "-", "").Replace(strings.TrimSpace(name)))
+}
+
+// Only the actions that read or write workflow content. Anything else the
+// builder app can do (running workflows, reading executions) keeps the normal app path.
+func getWorkflowBuilderRequest(decision AgentDecision) (workflowBuilderRequest, bool) {
+	action := normalizeToolName(decision.Action)
+	tool := normalizeToolName(decision.Tool)
+
+	// The model sometimes puts the action name in the tool field
+	knownTools := []string{workflowBuilderAppId, workflowBuilderAppName, shuffleAppsAppId, shuffleAppsAppName, decision.Action}
+	known := false
+	for _, knownTool := range knownTools {
+		if tool == normalizeToolName(knownTool) {
+			known = true
+			break
+		}
+	}
+
+	if !known {
+		return workflowBuilderRequest{}, false
+	}
+
+	fields := map[string]string{}
+	for _, field := range decision.Fields {
+		value := field.Value
+		if len(field.Answer) > 0 {
+			value = field.Answer
+		}
+
+		fields[normalizeToolName(field.Key)] = value
+	}
+
+	switch action {
+	case "getminimalworkflow":
+		workflowId := fields["workflowid"]
+		if len(workflowId) == 0 {
+			return workflowBuilderRequest{}, false
+		}
+
+		return workflowBuilderRequest{
+			Method:  "GET",
+			Path:    fmt.Sprintf("/api/v1/workflows/%s/minimal", url.PathEscape(workflowId)),
+			Handler: GetWorkflowMinimal,
+		}, true
+	case "putagentupdate":
+		return workflowBuilderRequest{
+			Method:  "PUT",
+			Path:    "/api/v1/workflows/operations",
+			Body:    []byte(fields["body"]),
+			Handler: HandleAgentWorkflowOperations,
+		}, true
+	case "postcreateworkflow":
+		minimal := fields["minimal"]
+		if len(minimal) == 0 {
+			minimal = "true"
+		}
+
+		return workflowBuilderRequest{
+			Method:  "POST",
+			Path:    fmt.Sprintf("/api/v1/workflows?minimal=%s", url.QueryEscape(minimal)),
+			Body:    []byte(fields["body"]),
+			Handler: SetNewWorkflow,
+		}, true
+	case "postgetappactionssummary", "getappactionssummary":
+		body := fields["body"]
+		if len(body) == 0 {
+			body = getAppLookupBody(fields)
+		}
+
+		if len(body) == 0 {
+			return workflowBuilderRequest{}, false
+		}
+
+		return workflowBuilderRequest{
+			Method:  "POST",
+			Path:    "/api/v1/apps/actions",
+			Body:    []byte(body),
+			Handler: GetWorkflowAppActions,
+		}, true
+	}
+
+	return workflowBuilderRequest{}, false
+}
+
+// The model sometimes sends app_names as its own field instead of inside body
+func getAppLookupBody(fields map[string]string) string {
+	lookup := map[string][]string{}
+	for key, field := range map[string]string{"appnames": "app_names", "appname": "app_names", "name": "app_names", "appids": "app_ids", "appid": "app_ids"} {
+		value := strings.TrimSpace(fields[key])
+		if len(value) == 0 {
+			continue
+		}
+
+		values := []string{}
+		if json.Unmarshal([]byte(value), &values) != nil {
+			values = strings.Split(value, ",")
+		}
+
+		for _, item := range values {
+			if item = strings.TrimSpace(item); len(item) > 0 {
+				lookup[field] = append(lookup[field], item)
+			}
+		}
+	}
+
+	if len(lookup) == 0 {
+		return ""
+	}
+
+	body, _ := json.Marshal(lookup)
+	return string(body)
+}
+
+// Wraps the handler response in the same shape the builder app returns, so the agent reads it the same way
+func runWorkflowBuilderRequest(builderRequest workflowBuilderRequest, apikey, orgId string) []byte {
+	request := httptest.NewRequest(builderRequest.Method, builderRequest.Path, bytes.NewReader(builderRequest.Body))
+	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apikey))
+	request.Header.Set("Org-Id", orgId)
+	request.Header.Set("Content-Type", "application/json")
+
+	recorder := httptest.NewRecorder()
+	builderRequest.Handler(recorder, request)
+
+	var body interface{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		body = recorder.Body.String()
+	}
+
+	success := recorder.Code < 300
+	if parsedBody, ok := body.(map[string]interface{}); ok {
+		if innerSuccess, ok := parsedBody["success"].(bool); ok && !innerSuccess {
+			success = false
+		}
+	}
+
+	result, _ := json.Marshal(map[string]interface{}{
+		"success": success,
+		"status":  recorder.Code,
+		"url":     builderRequest.Path,
+		"body":    body,
+	})
+
+	return result
+}
+
+// Acts as the user who started the agent. Falls back to the same org user
+// the app path would have picked, so nobody gains access they didn't have.
+func getWorkflowBuilderApikey(ctx context.Context, execution WorkflowExecution) (string, error) {
+	orgId := execution.ExecutionOrg
+	if len(execution.Workflow.UpdatedBy) > 0 {
+		users, err := FindUser(ctx, execution.Workflow.UpdatedBy)
+		if err == nil {
+			for _, user := range users {
+				if !ArrayContains(user.Orgs, orgId) {
+					continue
+				}
+
+				if len(user.ApiKey) > 0 {
+					return user.ApiKey, nil
+				}
+
+				newUser, err := GenerateApikey(ctx, user)
+				if err == nil && len(newUser.ApiKey) > 0 {
+					return newUser.ApiKey, nil
+				}
+			}
+		}
+	}
+
+	org, err := GetOrg(ctx, orgId)
+	if err != nil {
+		return "", err
+	}
+
+	for _, orgUser := range org.Users {
+		user, err := GetUser(ctx, orgUser.Id)
+		if err == nil && len(user.ApiKey) > 0 {
+			return user.ApiKey, nil
+		}
+	}
+
+	return "", errors.New("no user with an API key found in the org")
+}
+
+func runWorkflowBuilderDecisionInProcess(execution WorkflowExecution, decision AgentDecision, builderRequest workflowBuilderRequest) ([]byte, string, string, []string, string, error) {
+	apikey, err := getWorkflowBuilderApikey(context.Background(), execution)
+	if err != nil {
+		log.Printf("[ERROR][%s] AI Agent: Failed finding a user to run workflow builder action '%s' as: %s", execution.ExecutionId, decision.Action, err)
+		return nil, "", workflowBuilderAppName, []string{}, decision.Action, err
+	}
+
+	result := runWorkflowBuilderRequest(builderRequest, apikey, execution.ExecutionOrg)
+	log.Printf("[INFO][%s] AI Agent: Ran workflow builder action '%s' in-process (%s %s)", execution.ExecutionId, decision.Action, builderRequest.Method, strings.Split(builderRequest.Path, "?")[0])
+	return result, "", workflowBuilderAppName, []string{}, decision.Action, nil
 }
 
 func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Request) {
@@ -39213,7 +39747,7 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 				op.ID = realID
 			}
 		}
-		return opEditNode(wf, op)
+		return opEditNodeWithApp(ctx, user, wf, op)
 	case "move_node":
 		if realID, exists := tempIDMap[op.ID]; exists {
 			op.ID = realID
@@ -39564,6 +40098,44 @@ func opAddNode(ctx context.Context, user User, wf *Workflow, op *WorkflowOperati
 	}
 }
 
+// edit_node from the agent. Changing the app or the action changes which parameters
+// exist, so the node is rebuilt from the app instead of only renaming the action
+// (which left e.g. an HTTP node pointing at a Google Sheets action). Anything else
+// is a plain edit.
+func opEditNodeWithApp(ctx context.Context, user User, wf *Workflow, op *WorkflowOperation) error {
+	actidx := findActionIndexByID(wf, op.ID)
+	if actidx == -1 {
+		return opEditNode(wf, op)
+	}
+
+	var updates MinimalAction
+	if err := json.Unmarshal(op.Data, &updates); err != nil {
+		return fmt.Errorf("invalid action update data: %w", err)
+	}
+
+	current := wf.Actions[actidx]
+	appChanged := len(updates.AppID) > 0 && updates.AppID != current.AppID
+	if !appChanged && len(updates.AppID) == 0 && len(updates.AppName) > 0 && normalizeToolName(updates.AppName) != normalizeToolName(current.AppName) {
+		return fmt.Errorf("to change the app of node %s from %s to %s, pass the new app_id (from the app lookup) in data", current.Label, current.AppName, updates.AppName)
+	}
+
+	if appChanged {
+		return rebuildActionFromApp(ctx, user, wf, actidx, &updates, true)
+	}
+
+	if len(updates.Name) > 0 && updates.Name != current.Name {
+		// Same app, other action. If the app can't be loaded, keep the old behaviour.
+		err := rebuildActionFromApp(ctx, user, wf, actidx, &updates, false)
+		if !errors.Is(err, errEditAppUnavailable) {
+			return err
+		}
+	}
+
+	return opEditNode(wf, op)
+}
+
+var errEditAppUnavailable = errors.New("app unavailable")
+
 func opEditNode(wf *Workflow, op *WorkflowOperation) error {
 	// Auto-detect node type: check if it's an action or trigger
 	actidx := findActionIndexByID(wf, op.ID)
@@ -39640,6 +40212,105 @@ func opEditNode(wf *Workflow, op *WorkflowOperation) error {
 	}
 
 	return fmt.Errorf("node %s not found in workflow (not an action or trigger)", op.ID)
+}
+
+// Rebuilds an action from its (new) app definition, like add_node does, while keeping
+// what ties it into the workflow: id (so branches stay), label, position and start node.
+func rebuildActionFromApp(ctx context.Context, user User, wf *Workflow, actidx int, updates *MinimalAction, appChanged bool) error {
+	current := wf.Actions[actidx]
+	appId := current.AppID
+	if appChanged {
+		appId = updates.AppID
+	}
+
+	app, err := findAppByID(ctx, appId, user)
+	if err != nil || app == nil || len(app.Actions) == 0 {
+		if !appChanged {
+			return errEditAppUnavailable
+		}
+		return fmt.Errorf("failed to find app %s: %v", appId, err)
+	}
+
+	actionName := updates.Name
+	if len(actionName) == 0 {
+		actionName = current.Name
+		if appChanged {
+			return fmt.Errorf("action_name is required when changing node %s to app %s (available: %s)", current.Label, app.Name, getActionNames(app.Actions))
+		}
+	}
+
+	var appAction *WorkflowAppAction
+	for i := range app.Actions {
+		if strings.EqualFold(app.Actions[i].Name, actionName) {
+			appAction = &app.Actions[i]
+			break
+		}
+	}
+
+	if appAction == nil {
+		return fmt.Errorf("action %s not found in app %s (available: %s)", actionName, app.Name, getActionNames(app.Actions))
+	}
+
+	// Unknown parameters would be dropped silently, so say which ones exist instead
+	for _, param := range updates.Parameters {
+		found := false
+		for _, appParam := range appAction.Parameters {
+			if strings.EqualFold(appParam.Name, param.Name) {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			names := []string{}
+			for _, appParam := range appAction.Parameters {
+				names = append(names, appParam.Name)
+			}
+			return fmt.Errorf("parameter %s does not exist in %s %s (available: %s)", param.Name, app.Name, appAction.Name, strings.Join(names, ", "))
+		}
+	}
+
+	// Same app, other action: keep values the user already set for parameters both actions share
+	parameters := []MinimalParameter{}
+	if !appChanged {
+		for _, param := range current.Parameters {
+			if len(param.Value) > 0 {
+				parameters = append(parameters, MinimalParameter{Name: param.Name, Value: param.Value})
+			}
+		}
+	}
+	parameters = append(parameters, updates.Parameters...)
+
+	label := current.Label
+	if len(updates.Label) > 0 {
+		label = updates.Label
+	}
+
+	minAct := MinimalAction{AppID: app.ID, Name: appAction.Name, Label: label, Parameters: parameters}
+	newAction, err := enrichActionFromApp(ctx, &minAct, app, current.Environment)
+	if err != nil {
+		return fmt.Errorf("failed to rebuild node %s: %w", current.Label, err)
+	}
+
+	// enrichActionFromApp applies values in order, so the agent's updates win over carried ones
+	for _, param := range parameters {
+		for i := range newAction.Parameters {
+			if strings.EqualFold(newAction.Parameters[i].Name, param.Name) {
+				newAction.Parameters[i].Value = param.Value
+			}
+		}
+	}
+
+	newAction.ID = current.ID
+	newAction.Position = current.Position
+	newAction.IsStartNode = current.IsStartNode
+	newAction.ExecutionDelay = current.ExecutionDelay
+	if !appChanged {
+		newAction.AuthenticationId = current.AuthenticationId
+	}
+
+	wf.Actions[actidx] = newAction
+	return nil
 }
 
 func opMoveNode(wf *Workflow, op *WorkflowOperation) error {
