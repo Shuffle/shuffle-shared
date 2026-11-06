@@ -7831,9 +7831,11 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 func getTemplateContext(ctx context.Context, template string, execution WorkflowExecution) (string, string, []string, error) {
 	// FIXME: Handle dynamic templates here too, based on user input
 
-	switch template {
-	case "workflow-edit", "edit-workflow", "build-workflows", "workflow-builder":
+	if isWorkflowBuilderTemplate(template) {
 		return buildWorkflowEditContext(ctx, execution)
+	}
+
+	switch template {
 	case "computer-use", "host-monitor-control":
 		return buildComputerUseContext(ctx, execution)
 	case "incident-response", "incident-handler":
@@ -8169,6 +8171,16 @@ The user sees the "reason" of every decision as progress while you work, so writ
 
 Only ask the user for information when it is genuinely unavailable through any allowed action. Use get_minimal_workflow to fetch the latest workflow state whenever you need to inspect or verify what is currently in the workflow — prefer this over relying on stale context.
 
+Runs and checks:
+- When the user says a run failed, didn't work, or asks you to check it, call get_workflow_run FIRST (execution_id latest_failed) and base your fix on its real errors and "references". Don't guess. Use get_workflow_runs to find a specific run.
+- To see or undo changes, use get_workflow_revisions, post_compare_workflow and post_revert_workflow. Before reverting the whole workflow, ask the user unless they asked for it; then call it with confirm=true.
+- These workflow tools return "next". When unsure what to do, follow it.
+- Errors inside a run (HTTP 401/403, invalid tokens, credentials) are the workflow's errors, not failures of your own tool call: don't stop for them. Credential errors can't be fixed by editing nodes: get the app's setup_url with post_get_app_actions_summary and ask the user to authenticate.
+- A run that started before the workflow was last saved used an older version. Ask the user to re-run before judging your fix.
+- put_agent_update returns "validation". Fix its errors before you tell the user you're done.
+- Your messages and finish output render in a chat that colors two markdown forms, so use them for results the user must notice: a quote starting with [!ERROR], [!WARNING] or [!SUCCESS] on its own line (e.g. "> [!ERROR]" then "> Google Sheets rejected the body: HTTP 400"), and statuses as inline code, wrapped in single backticks (FAILED, SUCCESS, HTTP 400). Use at most one or two callouts per message; plain text for everything else.
+- shuffle_workflows_builder actions run immediately, so never set "delay" on them. After post_run_workflow, check the run with get_workflow_run; if it's still running after one more check, finish and give the user the run ID instead of waiting.
+
 Payload Structure
 
 Send your incremental steps in the operations array. You can send one operation at a time, or multiple if you are building a connected sequence.
@@ -8412,7 +8424,7 @@ CRITICAL RULES FOR THE AGENT
 4. Try not to use parallel decision calling; always do sequential tool calls.
 5. Verify before you report: put_agent_update returns the updated workflow. Check that the nodes you changed now have the app, action and parameter values you intended before you tell the user it's done. If they don't, fix it first.
 6. Asking for credentials is not asking for approval. If you need both, ask for the approval separately and wait for an explicit yes.
-7. Report runs as they are: a workflow run is only done when get_workflow_execution says FINISHED or ABORTED. Report each node from its own result. If a node has no result yet, say it has not run. If the run is still EXECUTING after a few checks, tell the user it looks stuck and name the node it is waiting on. Never describe a step that has no result as done or in progress.`
+7. Report runs as they are: a workflow run is only done when get_workflow_run says FINISHED or ABORTED. Report each node from its own result. If a node has no result yet, say it has not run. If the run is still EXECUTING after a few checks, tell the user it looks stuck and name the node it is waiting on. Never describe a step that has no result as done or in progress.`
 
 	templateContext := fmt.Sprintf(`%s
 
@@ -9360,6 +9372,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		}
 	}
 
+	// Backend notes (e.g. failed app lookups) go in a system message so they never show up as the user's own text
+	systemNote := ""
 	imagesIncluded := []string{}
 	imageDetail := openai.ImageURLDetailAuto // low, high, original, auto (let the model decide)
 	for _, param := range startNode.Parameters {
@@ -9371,6 +9385,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			userMessage = param.Value
 
 			parsedAgentInput = userMessage
+		}
+
+		if param.Name == "system_note" {
+			systemNote = strings.TrimSpace(param.Value)
 		}
 
 		if param.Name == "enable_questions" && strings.ToLower(param.Value) == "true" {
@@ -9688,6 +9706,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							}
 						}
 					}
+
 				}
 
 				// Sort alphabetically so the action list is byte-for-byte identical across every LLM loop, keeping the prompt cache prefix stable.
@@ -9794,7 +9813,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							}
 
 							// Remove %s, %d etc to not screw up fmt
-							descString = fmt.Sprintf(" # %s", strings.ReplaceAll(strings.ReplaceAll(sortedAppAction.Description, "\\%", " "), "\n", ""))
+							descString = fmt.Sprintf(" # %s", strings.ReplaceAll(strings.ReplaceAll(sortedAppAction.Description, "\\%", " "), "\n", " "))
 						}
 
 						if descString == previousDesc {
@@ -9847,6 +9866,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	oldAgentOutput := AgentOutput{}
 	previousAnswers := ""
 	continuationMessage := "" // Tracks user continuation text (new message sent to a finished agent)
+	workflowChangedNote := ""
 
 	marshalledDecisions := []byte{}
 	relevantDecisions := []AgentDecision{}
@@ -10184,6 +10204,12 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 						continuationMessage = field.Answer
 						foundContinuation = true
+
+						// Without this, the agent answers from its memory of a workflow that was since reverted or edited
+						if sessionWorkflowID := getAgentSessionWorkflowID(execution); isWorkflowBuilderTemplate(template) && len(sessionWorkflowID) > 0 && AgentWorkflowChangedSinceSeen(ctx, sessionWorkflowID) {
+							workflowChangedNote = fmt.Sprintf("SYSTEM NOTE: Workflow %s was changed outside this chat since you last read or edited it (for example reverted or edited by the user). What you saw before may be out of date. Call get_minimal_workflow before answering about the workflow or changing it.", sessionWorkflowID)
+							log.Printf("[INFO][%s] AI Agent continuation: workflow %s changed outside the chat, telling the agent to re-read it", execution.ExecutionId, sessionWorkflowID)
+						}
 						break
 					}
 				}
@@ -10479,6 +10505,13 @@ data_filter:
 		})
 	}
 
+	if len(systemNote) > 0 {
+		primaryMessages = append(primaryMessages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: systemNote,
+		})
+	}
+
 	completionRequest := openai.ChatCompletionRequest{
 		Model:           aiModel,
 		Messages:        primaryMessages,
@@ -10623,6 +10656,12 @@ data_filter:
 			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 				Role:    openai.ChatMessageRoleUser,
 				Content: fmt.Sprintf("ORIGINAL REQUEST (already completed, visible in HISTORY): %s", userMessage),
+			})
+		}
+		if len(workflowChangedNote) > 0 {
+			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleUser,
+				Content: workflowChangedNote,
 			})
 		}
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
@@ -11225,6 +11264,7 @@ data_filter:
 
 		// Parse decisions using the refactored helper function
 		mappedDecisions, parsingErr := parseAgentDecisions(choicesString)
+
 		if len(mappedDecisions) == 0 {
 			if parsingErr == nil {
 				parsingErr = errors.New("no valid AgentDecision array or objects found in output")
