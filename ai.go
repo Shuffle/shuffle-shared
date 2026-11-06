@@ -10356,7 +10356,7 @@ data_filter:
 	// templateSystemRule, templateContext and requiredApps were already resolved
 	// earlier (before the "action" parameter merge), no need to fetch them again here.
 
-	agentReasoningEffort := "medium"
+	agentReasoningEffort := "low"
 	if aiReasoningEffort == "low" || aiReasoningEffort == "medium" || aiReasoningEffort == "high" {
 		agentReasoningEffort = aiReasoningEffort
 	} else if aiReasoningEffort == "minimal" || aiReasoningEffort == "off" || aiReasoningEffort == "none" {
@@ -10750,7 +10750,6 @@ data_filter:
 			ApiKey:          aiApiKeyOverride,
 			Model:           aiModelOverride,
 			ReasoningEffort: foundReasoning,
-			ResponseFormat:  "json",
 		}
 
 		// Check for authenticationId
@@ -12573,6 +12572,12 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	// Fixes some model & url errors
 	config.EmptyMessagesLimit = 100000
+
+	aiTransport := http.DefaultTransport.(*http.Transport).Clone()
+	aiTransport.ResponseHeaderTimeout = 90 * time.Second
+	config.HTTPClient = &http.Client{
+		Transport: aiTransport,
+	}
 	openaiClient := openai.NewClientWithConfig(config)
 
 	sysMsg := ""
@@ -12625,15 +12630,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	sleepTimer := time.Duration(5)
 	chatCompletion.StreamOptions = &openai.StreamOptions{
 		IncludeUsage: true,
-	}
-
-	if chatCompletion.ResponseFormat == nil {
-		respFormat := strings.ToLower(strings.TrimSpace(info.ResponseFormat))
-		if respFormat == "json" || respFormat == "json_object" {
-			chatCompletion.ResponseFormat = &openai.ChatCompletionResponseFormat{
-				Type: openai.ChatCompletionResponseFormatTypeJSONObject,
-			}
-		}
 	}
 
 	// In case of non-streaming Resp input
@@ -12718,17 +12714,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 				return "", errors.New(fmt.Sprintf("Request from org %s with model '%s' exceeds the maximum number of tokens. %s", org, currentModel, err))
 			}
-            // Commented out the potential fix for now as we don't know what the actual reason that's causing "timeout awaiting response headers"
-
-			// if strings.Contains(err.Error(), "timeout awaiting response headers") {
-			// 	http.DefaultClient.CloseIdleConnections()
-			// 	if baseTransport, ok := http.DefaultTransport.(*http.Transport); ok {
-			// 		config.HTTPClient = &http.Client{
-			// 			Transport: baseTransport.Clone(),
-			// 		}
-			// 		openaiClient = openai.NewClientWithConfig(config)
-			// 	}
-			// }
+			if strings.Contains(err.Error(), "timeout awaiting response headers") {
+				aiTransport.CloseIdleConnections()
+			}
 
 			// Some AI Providers might return multi-line error bodies. Flatten them so the whole error stays in ONE log entry instead of being split per line.
 			lastError = errors.New(strings.Join(strings.Fields(err.Error()), " "))
