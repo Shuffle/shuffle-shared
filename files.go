@@ -19,14 +19,18 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/storage"
 	"github.com/google/go-github/v28/github"
 	uuid "github.com/satori/go.uuid"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 var basepath = os.Getenv("SHUFFLE_FILE_LOCATION")
@@ -796,7 +800,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 						WorkflowId:   "global",
 						DownloadPath: downloadPath,
 						Subflows:     []string{},
-						StorageArea:  "local",
+						StorageArea:  StorageAreaName(),
 						Namespace:    namespace,
 						Tags: []string{
 							"standard",
@@ -1130,7 +1134,64 @@ func GetFileContent(ctx context.Context, file *File, resp http.ResponseWriter) (
 		}
 
 	} else if file.StorageArea == "s3" {
-		log.Printf("[INFO] Trying to download file %s from s3", file.Id)
+		log.Printf("[INFO] Downloading file %s from object storage", file.Id)
+		allText, err := ReadStorageData(downloadPath)
+		if err != nil {
+			file.Status = "deleted"
+			err = SetFile(ctx, *file)
+			if err != nil {
+				log.Printf("Failed setting file to uploading")
+				if resp != nil {
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
+				}
+
+				return []byte{}, err
+			}
+
+			//File not found, send 404
+			if resp != nil {
+				resp.WriteHeader(400)
+				resp.Write([]byte(`{"success": false, "reason": "File doesn't exist in object storage"}`))
+			}
+
+			return []byte{}, err
+		}
+
+		if file.Encrypted {
+			passphrase := fmt.Sprintf("%s_%s", file.OrgId, file.Id)
+			data, err := HandleKeyDecryption(allText, passphrase)
+			if err != nil {
+				if len(file.ReferenceFileId) > 0 {
+					passphrase = fmt.Sprintf("%s_%s", file.OrgId, file.ReferenceFileId)
+					data, err = HandleKeyDecryption(allText, passphrase)
+					if err != nil {
+						log.Printf("[ERROR] Failed decrypting file (5): %s", err)
+					}
+
+					allText = []byte(data)
+				} else {
+					log.Printf("[ERROR] Failed decrypting file (2): %s", err)
+				}
+
+			} else {
+				//log.Printf("[DEBUG] File size reduced from %d to %d after decryption (s3)", len(allText), len(data))
+				allText = []byte(data)
+			}
+		}
+
+		FileContentType := http.DetectContentType(allText)
+		FileSize := strconv.FormatInt(int64(len(allText)), 10)
+
+		if resp != nil {
+			resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
+			resp.Header().Set("Content-Type", FileContentType)
+			resp.Header().Set("Content-Length", FileSize)
+			reader := bytes.NewReader(allText)
+			io.Copy(resp, reader)
+		}
+
+		return allText, nil
 	} else {
 		log.Printf("[INFO] Downloadpath: %s", downloadPath)
 		Openfile, err := os.Open(downloadPath)
@@ -1625,7 +1686,22 @@ func UploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 			// Close, just like writing a file.
 			defer w.Close()
 		} else if file.StorageArea == "s3" {
-			log.Printf("SHOULD UPLOAD TO S3!")
+			if !StorageS3Enabled() {
+				file.Status = "created"
+				SetFile(ctx, *file)
+				backendErr := errors.New("file has StorageArea=s3 but SHUFFLE_STORAGE_BACKEND is local")
+				log.Printf("[ERROR] Object storage backend unavailable for file %s: %s", file.Id, backendErr)
+				return file.Id, backendErr
+			}
+
+			if appendErr := AppendStorageData(ctx, file.DownloadPath, contents); appendErr != nil {
+				file.Status = "created"
+				SetFile(ctx, *file)
+				log.Printf("[ERROR] Failed uploading file to object storage %s: %s", file.DownloadPath, appendErr)
+				return file.Id, appendErr
+			}
+
+			log.Printf("[INFO] Added %d bytes to object storage file %s", len(contents), file.DownloadPath)
 		} else {
 			f, err := os.OpenFile(file.DownloadPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
 
@@ -1903,7 +1979,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		WorkflowId:   curfile.WorkflowId,
 		DownloadPath: downloadPath,
 		Subflows:     duplicateWorkflows,
-		StorageArea:  "local",
+		StorageArea:  StorageAreaName(),
 		Namespace:    curfile.Namespace,
 		Tags:         curfile.Tags,
 	}
@@ -2073,7 +2149,7 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 			WorkflowId:   "global",
 			DownloadPath: downloadPath,
 			Subflows:     []string{},
-			StorageArea:  "local",
+			StorageArea:  StorageAreaName(),
 			Namespace:    strings.ReplaceAll(strings.ReplaceAll(path, "/", "_"), "..", "_"),
 			Tags: []string{
 				input.URL,
@@ -2325,4 +2401,394 @@ func GetStorageClient(ctx context.Context, projectID string) (storage.Client, er
 	}
 
 	return *client, nil
+}
+
+/*
+	Optional object storage for file data.
+
+	Shuffle persists binary data (file uploads, oversized execution payloads,
+	workflow parameters and app image metadata) under SHUFFLE_FILE_LOCATION.
+	With SHUFFLE_STORAGE_BACKEND=s3, this data is stored in an S3-compatible
+	bucket (AWS S3, MinIO, Wasabi, Ceph) instead, so deployments can run
+	without persistent volumes for it.
+
+	Configuration (environment variables):
+	  SHUFFLE_STORAGE_BACKEND   "local" (default), "s3"
+	  SHUFFLE_S3_ENDPOINT       S3-compatible endpoint, e.g. "s3.amazonaws.com" or
+	                            "minio.default.svc.cluster.local:9000"
+	  SHUFFLE_S3_BUCKET         Bucket name (required for s3)
+	  SHUFFLE_S3_PREFIX         Optional key prefix inside the bucket
+	  SHUFFLE_S3_REGION         Region (default "us-east-1")
+	  SHUFFLE_S3_ACCESS_KEY     Access key (falls back to AWS_ACCESS_KEY_ID)
+	  SHUFFLE_S3_SECRET_KEY     Secret key (falls back to AWS_SECRET_ACCESS_KEY)
+	  SHUFFLE_S3_USE_PATH_STYLE Force path-style addressing (default true, required
+	                            for MinIO and most self-hosted S3 implementations)
+	  SHUFFLE_S3_INSECURE       Use http:// against the endpoint
+
+	Keys are always relative to SHUFFLE_FILE_LOCATION (the same relative
+	layout used on disk), so switching between backends does not change how
+	paths are referenced in the database and no migration is needed. The
+	local backend is rooted at SHUFFLE_FILE_LOCATION via os.Root, which
+	refuses path traversal outside of the storage directory.
+*/
+
+// Storage backend selection. The backend is resolved once per process from
+// SHUFFLE_STORAGE_BACKEND: "local" (default) or "s3". With the s3 backend,
+// s3StorageInit additionally sets up a minio client and verifies bucket
+// access; the resulting error is returned by every storage operation until
+// the configuration is fixed.
+var (
+	storageBackendOnce sync.Once
+	storageBackendName string
+	storageBackendErr  error
+
+	s3Client *minio.Client
+	s3Bucket string
+	s3Prefix string
+)
+
+func storageBackendInit() {
+	storageBackendOnce.Do(func() {
+		storageBackendName = strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_STORAGE_BACKEND")))
+		switch storageBackendName {
+		case "", "local", "filesystem":
+			storageBackendName = "local"
+		case "s3", "s3compatible", "minio":
+			if err := s3StorageInit(); err != nil {
+				storageBackendName = "local"
+				storageBackendErr = err
+			}
+		default:
+			storageBackendName = "local"
+			storageBackendErr = fmt.Errorf("unknown SHUFFLE_STORAGE_BACKEND '%s' (supported: local, s3)", os.Getenv("SHUFFLE_STORAGE_BACKEND"))
+		}
+	})
+}
+
+// StorageS3Enabled returns true when the s3 backend is configured.
+func StorageS3Enabled() bool {
+	storageBackendInit()
+	return storageBackendName == "s3"
+}
+
+// StorageAreaName returns the StorageArea metadata value for newly created
+// files, based on the configured storage backend.
+func StorageAreaName() string {
+	if StorageS3Enabled() {
+		return "s3"
+	}
+	return "local"
+}
+
+// storageKey converts an absolute or basepath-prefixed path into a
+// backend-relative object key. Absolute paths under the file location are
+// normalized; relative paths pass through unchanged.
+func storageKey(path string) string {
+	base := strings.TrimRight(basepath, "/")
+	clean := filepath.ToSlash(path)
+
+	if len(base) > 0 && strings.HasPrefix(clean, base+"/") {
+		clean = strings.TrimPrefix(clean, base+"/")
+	}
+
+	return strings.TrimLeft(clean, "/")
+}
+
+// WriteStorageData persists data under the given path. The path is
+// interpreted relative to SHUFFLE_FILE_LOCATION (basepath-prefixed or
+// absolute paths are normalized), replacing any previous content.
+func WriteStorageData(path string, data []byte) error {
+	if err := storageBackendErr; err != nil {
+		return err
+	}
+
+	if StorageS3Enabled() {
+		return s3PutObject(storageKey(path), data)
+	}
+
+	return writeLocalStorageFile(storageKey(path), data)
+}
+
+// AppendStorageData adds data to the end of the object at the given path,
+// creating it if missing. For the s3 backend this is a read-modify-write.
+func AppendStorageData(ctx context.Context, path string, data []byte) error {
+	if err := storageBackendErr; err != nil {
+		return err
+	}
+
+	if StorageS3Enabled() {
+		return s3AppendObject(ctx, storageKey(path), data)
+	}
+
+	return appendLocalStorageFile(storageKey(path), data)
+}
+
+// ReadStorageData reads data previously written by WriteStorageData. Not-found
+// errors are always compatible with os.IsNotExist.
+func ReadStorageData(path string) ([]byte, error) {
+	if err := storageBackendErr; err != nil {
+		return nil, err
+	}
+
+	if StorageS3Enabled() {
+		return s3GetObject(storageKey(path))
+	}
+
+	return readLocalStorageFile(storageKey(path))
+}
+
+// DeleteStorageData removes data written by WriteStorageData.
+func DeleteStorageData(path string) error {
+	if err := storageBackendErr; err != nil {
+		return err
+	}
+
+	if StorageS3Enabled() {
+		return s3RemoveObject(context.Background(), storageKey(path))
+	}
+
+	return deleteLocalStorageFile(storageKey(path))
+}
+
+// The local backend stores objects on the filesystem under
+// SHUFFLE_FILE_LOCATION, using os.Root so that keys cannot escape the
+// storage directory. The root handle is opened per operation: basepath is a
+// process constant in practice, and the open cost is negligible next to the
+// I/O it wraps.
+func openLocalStorageRoot() (*os.Root, error) {
+	rootPath := basepath
+	if len(rootPath) == 0 {
+		rootPath = "files"
+	}
+
+	if err := os.MkdirAll(rootPath, 0755); err != nil {
+		return nil, fmt.Errorf("create storage directory %s: %w", rootPath, err)
+	}
+
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return nil, fmt.Errorf("open storage root %s: %w", rootPath, err)
+	}
+
+	return root, nil
+}
+
+func writeLocalStorageFile(key string, data []byte) error {
+	root, err := openLocalStorageRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	if dir := filepath.Dir(key); dir != "." {
+		if err := root.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("create directory for %s: %w", key, err)
+		}
+	}
+
+	if err := root.WriteFile(key, data, 0644); err != nil {
+		return fmt.Errorf("write %s: %w", key, err)
+	}
+
+	return nil
+}
+
+func appendLocalStorageFile(key string, data []byte) error {
+	root, err := openLocalStorageRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	if dir := filepath.Dir(key); dir != "." {
+		if err := root.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("create directory for %s: %w", key, err)
+		}
+	}
+
+	f, err := root.OpenFile(key, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("open %s for appending: %w", key, err)
+	}
+	defer f.Close()
+
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("append to %s: %w", key, err)
+	}
+
+	return nil
+}
+
+func readLocalStorageFile(key string) ([]byte, error) {
+	root, err := openLocalStorageRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+
+	data, err := root.ReadFile(key)
+	if err != nil {
+		return nil, err
+	}
+
+	return data, nil
+}
+
+func deleteLocalStorageFile(key string) error {
+	root, err := openLocalStorageRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	return root.Remove(key)
+}
+
+// The s3 backend stores objects in an S3-compatible bucket using minio-go.
+func s3StorageInit() error {
+	endpoint := strings.TrimSpace(os.Getenv("SHUFFLE_S3_ENDPOINT"))
+	bucket := strings.TrimSpace(os.Getenv("SHUFFLE_S3_BUCKET"))
+
+	if len(bucket) == 0 {
+		return errors.New("SHUFFLE_S3_BUCKET is required when SHUFFLE_STORAGE_BACKEND=s3")
+	}
+
+	accessKey := os.Getenv("SHUFFLE_S3_ACCESS_KEY")
+	if len(accessKey) == 0 {
+		accessKey = os.Getenv("AWS_ACCESS_KEY_ID")
+	}
+
+	secretKey := os.Getenv("SHUFFLE_S3_SECRET_KEY")
+	if len(secretKey) == 0 {
+		secretKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
+	}
+
+	region := strings.TrimSpace(os.Getenv("SHUFFLE_S3_REGION"))
+	if len(region) == 0 {
+		region = "us-east-1"
+	}
+
+	usePathStyle := true
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_S3_USE_PATH_STYLE"))) {
+	case "false", "0", "no":
+		usePathStyle = false
+	}
+
+	secure := true
+	if strings.HasPrefix(endpoint, "http://") {
+		secure = false
+		endpoint = strings.TrimPrefix(endpoint, "http://")
+	} else if strings.HasPrefix(endpoint, "https://") {
+		endpoint = strings.TrimPrefix(endpoint, "https://")
+	} else if strings.EqualFold(strings.TrimSpace(os.Getenv("SHUFFLE_S3_INSECURE")), "true") {
+		secure = false
+	}
+
+	if len(endpoint) == 0 {
+		endpoint = "s3.amazonaws.com"
+	}
+
+	client, err := minio.New(endpoint, &minio.Options{
+		// With empty keys, minio-go falls back to ambient credentials such
+		// as IAM roles (e.g. IRSA on EKS).
+		Creds:        credentials.NewStaticV4(accessKey, secretKey, ""),
+		Secure:       secure,
+		Region:       region,
+		BucketLookup: bucketLookupType(usePathStyle),
+	})
+	if err != nil {
+		return fmt.Errorf("initialize S3 client for endpoint '%s': %w", endpoint, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if _, err = client.BucketExists(ctx, bucket); err != nil {
+		return fmt.Errorf("verify access to S3 bucket '%s': %w", bucket, err)
+	}
+
+	s3Prefix = strings.Trim(os.Getenv("SHUFFLE_S3_PREFIX"), "/")
+	if len(s3Prefix) > 0 {
+		s3Prefix += "/"
+	}
+
+	log.Printf("[INFO] Using S3-compatible object storage: endpoint=%s bucket=%s prefix='%s' pathStyle=%t", endpoint, bucket, s3Prefix, usePathStyle)
+
+	s3Client = client
+	s3Bucket = bucket
+
+	return nil
+}
+
+func bucketLookupType(usePathStyle bool) minio.BucketLookupType {
+	if usePathStyle {
+		return minio.BucketLookupPath
+	}
+	return minio.BucketLookupAuto
+}
+
+func s3ObjectKey(key string) string {
+	return s3Prefix + strings.TrimLeft(key, "/")
+}
+
+// s3ObjectError wraps S3 errors so callers can keep using os.IsNotExist on them.
+func s3ObjectError(key string, err error) error {
+	resp := minio.ToErrorResponse(err)
+	if resp.Code == "NoSuchKey" {
+		return &os.PathError{Op: "open", Path: key, Err: os.ErrNotExist}
+	}
+	return fmt.Errorf("s3 object '%s': %w", key, err)
+}
+
+func s3GetObject(key string) ([]byte, error) {
+	obj, err := s3Client.GetObject(context.Background(), s3Bucket, s3ObjectKey(key), minio.GetObjectOptions{})
+	if err != nil {
+		return nil, s3ObjectError(key, err)
+	}
+	defer obj.Close()
+
+	// minio-go performs the actual request lazily; stat it so callers get a
+	// not-found error from ReadStorageData rather than a body read error.
+	if _, err = obj.Stat(); err != nil {
+		return nil, s3ObjectError(key, err)
+	}
+
+	data, err := io.ReadAll(obj)
+	if err != nil {
+		return nil, s3ObjectError(key, err)
+	}
+
+	return data, nil
+}
+
+func s3PutObject(key string, data []byte) error {
+	_, err := s3Client.PutObject(context.Background(), s3Bucket, s3ObjectKey(key), bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{ContentType: "application/octet-stream"})
+	if err != nil {
+		return fmt.Errorf("put object '%s': %w", key, err)
+	}
+
+	return nil
+}
+
+// s3AppendObject emulates appends via read-modify-write, which is the best an
+// object store can offer. The existing object is buffered in memory; file
+// uploads using this path are bounded by maxFileSize (10MB on-prem).
+func s3AppendObject(ctx context.Context, key string, data []byte) error {
+	existing, err := s3GetObject(key)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("read object '%s' for append: %w", key, err)
+		}
+		existing = nil
+	}
+
+	merged := append(existing, data...)
+	if err := s3PutObject(key, merged); err != nil {
+		return fmt.Errorf("write appended object '%s': %w", key, err)
+	}
+
+	return nil
+}
+
+func s3RemoveObject(ctx context.Context, key string) error {
+	return s3Client.RemoveObject(ctx, s3Bucket, s3ObjectKey(key), minio.RemoveObjectOptions{})
 }
