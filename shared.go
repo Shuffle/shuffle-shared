@@ -36448,11 +36448,29 @@ func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 		return exec
 	}
 
-	// This doesn't matter as we are checking for 'sanitized' anyway
-	// This also makes it stop too early
-	//if exec.Status == "FINISHED" || exec.Status == "ABORTED" {
-	//	return exec
-	//}
+	if exec.Status == "FINISHED" || exec.Status == "ABORTED" {
+		return exec
+	}
+
+	if len(strings.TrimSpace(exec.ExecutionOrg)) == 0 || len(exec.Results) == 0 {
+		return exec
+	}
+
+	needsSanitization := false
+	for resultKey := range exec.Results {
+		if exec.Results[resultKey].Sanitized {
+			continue
+		}
+		if exec.Results[resultKey].Status != "FINISHED" && exec.Results[resultKey].Status != "SUCCESS" {
+			continue
+		}
+		needsSanitization = true
+		break
+	}
+
+	if !needsSanitization {
+		return exec
+	}
 
 	protectedKeys, _, err := GetAllCacheKeys(context.Background(), exec.ExecutionOrg, "protected", 100, "")
 	if err != nil {
