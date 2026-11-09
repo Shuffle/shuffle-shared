@@ -522,8 +522,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 			if len(fileId) == 0 {
 				fileId = user.ActiveOrg.Id
 				tmpData.OrgId = user.ActiveOrg.Id
-			} else {
-				user.ActiveOrg.Id = fileId
 			}
 
 			skipExecutionAuth = true
@@ -681,18 +679,28 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 	if err != nil {
 		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (get) and cacheId %s", tmpData.Key, tmpData.OrgId, cacheId)
+		if !strings.Contains(err.Error(), "no such entity") && !strings.Contains(err.Error(), "Key doesn't exist") {
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed authentication or key doesn't exist"}`))
+			return
+		}
+
 		// Doing a last resort search, e.g. to handle spaces and the like
 		limit := 50
 		if os.Getenv("SHUFFLE_GCEPROJECT") == "shuffle-europe-west3" {
 			limit = 2000
 		}
 
-		allkeys, _, err := GetAllCacheKeys(ctx, org.Id, "", limit, "")
+		allkeys, _, err := GetAllCacheKeys(ctx, org.Id, tmpData.Category, limit, "")
 		if err == nil {
 			cacheData = &CacheKeyData{}
 			searchkey := strings.ReplaceAll(strings.Trim(strings.ToLower(tmpData.Key), " "), " ", "_")
+			expectedCategory := normalizeOrgCacheCategory(tmpData.Category)
 
 			for _, key := range allkeys {
+				if normalizeOrgCacheCategory(key.Category) != expectedCategory {
+					continue
+				}
 				tmpkey := strings.ReplaceAll(strings.Trim(strings.ToLower(key.Key), " "), " ", "_")
 
 				//log.Printf("%s vs %s", tmpkey, searchkey)
@@ -700,7 +708,8 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 					if debug {
 						log.Printf("\n\n[DEBUG] Found key %s for org %s\n\n", key.Key, org.Id)
 					}
-					cacheData = &key
+					foundCopy := key
+					cacheData = &foundCopy
 					break
 				}
 			}
@@ -954,12 +963,14 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		tmpData = append(tmpData, CacheKeyData{
-			OrgId:       tmpDataOverride.OrgId,
-			Key:         tmpDataOverride.Key,
-			Category:    tmpDataOverride.Category,
-			Tags:        tmpDataOverride.Tags,
-			Enrichments: tmpDataOverride.Enrichments,
-			RBAC:        tmpDataOverride.RBAC,
+			OrgId:               tmpDataOverride.OrgId,
+			Key:                 tmpDataOverride.Key,
+			Category:            tmpDataOverride.Category,
+			Tags:                tmpDataOverride.Tags,
+			IgnoreSecurityRules: tmpDataOverride.IgnoreSecurityRules,
+			SuborgDistribution:  tmpDataOverride.SuborgDistribution,
+			Enrichments:         tmpDataOverride.Enrichments,
+			RBAC:                tmpDataOverride.RBAC,
 
 			Value: parsedValue,
 		})
@@ -1205,7 +1216,10 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	var parentRBAC *RBAC
 	if len(category) > 0 && category != "default" {
 		categoryConfig, err = GetDatastoreCategoryConfig(ctx, org.Id, category)
-		if err == nil && categoryConfig != nil {
+		if categoryConfig == nil {
+			categoryConfig = &DatastoreCategoryUpdate{}
+		}
+		if err == nil {
 			parentRBAC = categoryConfig.Settings.RBAC
 		}
 	}
@@ -1253,18 +1267,15 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	if keyList, keyOk := request.URL.Query()["key"]; keyOk && len(keyList) > 0 {
 		key := keyList[0]
 
-		cacheId := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, key)
-		if len(category) > 0 {
-			cacheId = fmt.Sprintf("%s_%s_%s", user.ActiveOrg.Id, key, category)
-		}
-
+		cacheId := fmt.Sprintf("%s_%s", org.Id, key)
 		cacheItem, err := GetDatastoreKey(ctx, cacheId, category)
-		if err != nil {
+		if err != nil || cacheItem == nil || len(cacheItem.Key) == 0 {
 			isSuccess = false
-		}
-
-		keys = []CacheKeyData{
-			*cacheItem,
+			keys = []CacheKeyData{}
+		} else {
+			keys = []CacheKeyData{
+				*cacheItem,
+			}
 		}
 	} else if searchList, searchOk := request.URL.Query()["search"]; searchOk && len(searchList) > 0 && searchList[0] != "" {
 		// Prefix search within a category (e.g. DataGrid "starts with").
@@ -1573,10 +1584,10 @@ func HandleCacheConfig(resp http.ResponseWriter, request *http.Request) {
 
 	cacheId := fmt.Sprintf("%s_%s", orgId, config.Key)
 	cache, err := GetDatastoreKey(ctx, cacheId, config.Category)
-	if err != nil {
+	if err != nil || cache == nil || len(cache.Key) == 0 {
 		log.Printf("[WARNING] Failed getting cache key '%s' for org %s (config)", config.Key, orgId)
 		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get key. Does it exist?", "extra": "%s"}`, cache.Key)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get key. Does it exist?", "extra": "%s"}`, config.Key)))
 		return
 	}
 
@@ -1658,10 +1669,10 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", orgId, cacheKey)
 
 	cacheData, err := GetDatastoreKey(ctx, cacheId, "")
-	if err != nil || cacheData.Key == "" {
+	if err != nil || cacheData == nil || cacheData.Key == "" {
 		log.Printf("[WARNING] Failed to GET datastore key '%s' for org %s (delete)", cacheId, orgId)
 		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get key. Does it exist?", "extra": "%s"}`, cacheData.Key)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get key. Does it exist?", "extra": "%s"}`, cacheKey)))
 		return
 	}
 
@@ -1674,16 +1685,16 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	entity := "org_cache"
 
-	DeleteKey(ctx, entity, cacheId)
+	DeleteKey(ctx, entity, cacheId, orgId)
 	if len(cacheData.WorkflowId) > 0 {
 		escapedKey := url.QueryEscape(cacheKey)
 
-		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", orgId, cacheData.WorkflowId, cacheData.Key))
-		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", orgId, cacheData.WorkflowId, escapedKey))
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", orgId, cacheData.WorkflowId, cacheData.Key), orgId)
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", orgId, cacheData.WorkflowId, escapedKey), orgId)
 
-		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, cacheData.Key))
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, cacheData.Key), orgId)
 
-		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, escapedKey))
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, escapedKey), orgId)
 	}
 
 	DeleteCache(ctx, cacheKey)
@@ -1694,9 +1705,7 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", orgId, cacheData.Key))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", orgId, cacheData.Key, cacheData.Category))
 
-	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_50", entity, orgId, cacheData.Category))
-	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_100", entity, orgId, cacheData.Category))
-	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_1000", entity, orgId, cacheData.Category))
+	removeOrgCacheKeysFromListCache(ctx, orgId, cacheData.Category, []string{cacheData.Key})
 
 	if debug { 
 		log.Printf("[DEBUG] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
@@ -1813,13 +1822,10 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if user.ActiveOrg.Id != org.Id {
-			org, err = GetOrg(ctx, user.ActiveOrg.Id)
-			if err != nil {
-				log.Printf("[INFO] Organization doesn't exist in cache delete: %s", err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false}`))
-				return
-			}
+			log.Printf("[INFO] User org %s does not match target org %s in cache delete", user.ActiveOrg.Id, org.Id)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "No permission to delete key in this organization"}`))
+			return
 		}
 
 		selectedOrg = user.ActiveOrg.Id
@@ -1828,7 +1834,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
-	if err != nil || len(cacheData.Key) == 0 {
+	if err != nil || cacheData == nil || len(cacheData.Key) == 0 {
 		//log.Printf("[WARNING] Failed to DELETE cache key '%s' for org %s (delete) in category '%s'. Does it exist?", tmpData.Key, tmpData.OrgId, tmpData.Category)
 
 		resp.WriteHeader(400)
@@ -1867,8 +1873,9 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(tmpData.Category) > 0 {
-		cacheId = fmt.Sprintf("%s_%s", cacheId, tmpData.Category)
+	normalizedCategory := normalizeOrgCacheCategory(tmpData.Category)
+	if len(normalizedCategory) > 0 {
+		cacheId = fmt.Sprintf("%s_%s", cacheId, normalizedCategory)
 	}
 
 	cacheId = url.QueryEscape(cacheId)
@@ -1881,7 +1888,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	entity := "org_cache"
-	err = DeleteKey(ctx, entity, cacheId)
+	err = DeleteKey(ctx, entity, cacheId, org.Id)
 	if err != nil {
 		//log.Printf("[WARNING] Failed to DELETE cache key '%s' (2) for org %s (delete) (2)", cacheId, tmpData.OrgId)
 		resp.WriteHeader(400)
@@ -1892,11 +1899,11 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	if len(cacheData.WorkflowId) > 0 {
 		escapedKey := url.QueryEscape(tmpData.Key)
 
-		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", org.Id, cacheData.WorkflowId, cacheData.Key))
-		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", org.Id, cacheData.WorkflowId, escapedKey))
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", org.Id, cacheData.WorkflowId, cacheData.Key), org.Id)
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", org.Id, cacheData.WorkflowId, escapedKey), org.Id)
 
-		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, cacheData.Key))
-		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, escapedKey))
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, cacheData.Key), org.Id)
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, escapedKey), org.Id)
 	}
 
 	DeleteCache(ctx, tmpData.Key)
@@ -1905,16 +1912,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, cacheId))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, url.QueryEscape(cacheId)))
 
-	normalizedCategory := strings.ReplaceAll(strings.ToLower(tmpData.Category), " ", "_")
-	if normalizedCategory == "default" {
-		normalizedCategory = ""
-	}
-	DeleteCache(ctx, fmt.Sprintf("%s__%s_", entity, org.Id))
-	DeleteCache(ctx, fmt.Sprintf("%s__%s", entity, org.Id))
-	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s", entity, org.Id, normalizedCategory))
-	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_50", entity, org.Id, normalizedCategory))
-	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_100", entity, org.Id, normalizedCategory))
-	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_1000", entity, org.Id, normalizedCategory))
+	removeOrgCacheKeysFromListCache(ctx, org.Id, normalizedCategory, []string{cacheData.Key})
 
 	result := ResultChecker{
 		Success: true,
@@ -2044,7 +2042,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if len(tmpData.Value) == 0 {
+	if len(tmpData.Value) == 0 && len(tmpData.Enrichments) == 0 {
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Value can't be empty"}`))
 		return
@@ -2055,18 +2053,13 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
-	// Check if cache already existed and if distributed
-	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
-	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
-	if err == nil {
-		tmpData.SuborgDistribution = cacheData.SuborgDistribution
-	}
 
 	// This is just to ensure that input data doesn't get directly set in the database
 	parsedKey := CacheKeyData{
 		Category:           tmpData.Category,
 		Key:                tmpData.Key,
 		Value:              tmpData.Value,
+		Enrichments:        tmpData.Enrichments,
 		ExecutionId:        tmpData.ExecutionId,
 		Authorization:      tmpData.Authorization,
 		SuborgDistribution: tmpData.SuborgDistribution,
