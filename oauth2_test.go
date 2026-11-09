@@ -5,16 +5,246 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/datastore"
+	pb "cloud.google.com/go/datastore/apiv1/datastorepb"
+	"github.com/patrickmn/go-cache"
+	"google.golang.org/api/option"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 )
+
+// The real Datastore client drives an in-memory service. Transaction conflicts
+// abort stale commits, so concurrent handlers exercise the real retry behavior.
+type oauthRotationDatastore struct {
+	*datastoreAPIFixture
+	transactionMu sync.Mutex
+	version       uint64
+	nextID        uint64
+	transactions  map[string]uint64
+}
+
+func (f *oauthRotationDatastore) BeginTransaction(_ context.Context, _ *pb.BeginTransactionRequest) (*pb.BeginTransactionResponse, error) {
+	f.transactionMu.Lock()
+	defer f.transactionMu.Unlock()
+	f.nextID++
+	id := fmt.Sprintf("oauth-tx-%d", f.nextID)
+	f.transactions[id] = f.version
+	return &pb.BeginTransactionResponse{Transaction: []byte(id)}, nil
+}
+
+func (f *oauthRotationDatastore) Commit(ctx context.Context, req *pb.CommitRequest) (*pb.CommitResponse, error) {
+	f.transactionMu.Lock()
+	defer f.transactionMu.Unlock()
+	if req.Mode == pb.CommitRequest_TRANSACTIONAL {
+		version, exists := f.transactions[string(req.GetTransaction())]
+		delete(f.transactions, string(req.GetTransaction()))
+		if !exists || version != f.version {
+			return nil, status.Error(codes.Aborted, "synthetic transaction conflict")
+		}
+	}
+	response, err := f.datastoreAPIFixture.Commit(ctx, req)
+	if err == nil && len(req.Mutations) > 0 {
+		f.version++
+	}
+	return response, err
+}
+
+func (f *oauthRotationDatastore) Rollback(_ context.Context, req *pb.RollbackRequest) (*pb.RollbackResponse, error) {
+	f.transactionMu.Lock()
+	defer f.transactionMu.Unlock()
+	delete(f.transactions, string(req.Transaction))
+	return &pb.RollbackResponse{}, nil
+}
+
+func newOAuthRotationFixture(t *testing.T) *oauthRotationDatastore {
+	t.Helper()
+	t.Setenv("DATASTORE_EMULATOR_HOST", "")
+	t.Setenv("SHUFFLE_OAUTH_CLIENT_SECRET", "")
+	fixture := &oauthRotationDatastore{datastoreAPIFixture: &datastoreAPIFixture{}, transactions: map[string]uint64{}}
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	pb.RegisterDatastoreServer(server, fixture)
+	go server.Serve(listener)
+	t.Cleanup(server.Stop)
+	t.Cleanup(func() { listener.Close() })
+	conn, err := grpc.NewClient("passthrough:///oauth-rotation-tests", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+		return listener.Dial()
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	client, err := datastore.NewClient(context.Background(), "oauth-rotation-tests", option.WithGRPCConn(conn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close() })
+	previousProject, previousCache, previousMemcached := project, requestCache, memcached
+	t.Cleanup(func() { project, requestCache, memcached = previousProject, previousCache, previousMemcached })
+	project = ShuffleStorage{Dbclient: *client, CacheDb: true}
+	requestCache = cache.New(time.Minute, 0)
+	memcached = ""
+	return fixture
+}
+
+func TestOAuthRefreshSingleWinnerAndRecovery(t *testing.T) {
+	for _, scenario := range []string{"concurrent", "cache loss", "interrupted reservation", "interrupted completion", "failed write", "storage unavailable", "expired recovery", "revoked replacement", "revoked during reservation", "expired reservation"} {
+		t.Run(scenario, func(t *testing.T) {
+			fixture := newOAuthRotationFixture(t)
+			ctx := context.Background()
+			seed := OAuthToken{ID: "synthetic-connection", ClientID: "synthetic-client", AccessToken: "synthetic-old-access", RefreshToken: "synthetic-old-refresh", Scope: "workflow:read", ExpiresAt: time.Now().Add(time.Hour), ExpiresIn: 3600}
+			seed.OrgId = "synthetic-org"
+			seed.AllowedApps, seed.AllowedTools = []string{"synthetic-app"}, []string{"list_items"}
+			seed.AppPermissions = []OAuthAppPermission{{ID: "synthetic-app", Name: "Synthetic App", Tools: []OAuthToolPermission{{Name: "list_items", ReadOnly: true}}}}
+			if err := SetOAuthToken(ctx, seed); err != nil {
+				t.Fatal(err)
+			}
+			refresh := func() (int, OAuthTokenResponse) {
+				req := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {seed.RefreshToken}, "client_id": {seed.ClientID}}.Encode()))
+				req.RemoteAddr = "127.0.0.1:12345"
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				rec := httptest.NewRecorder()
+				HandleOAuthToken(rec, req)
+				var result OAuthTokenResponse
+				_ = json.Unmarshal(rec.Body.Bytes(), &result)
+				return rec.Code, result
+			}
+			key := fmt.Sprintf("%x", sha256.Sum256([]byte(seed.RefreshToken)))
+			if scenario == "interrupted reservation" || scenario == "interrupted completion" || scenario == "revoked during reservation" || scenario == "expired reservation" {
+				candidate := seed
+				candidate.AccessToken, candidate.RefreshToken, candidate.RotationKey = "synthetic-chosen-access", "synthetic-chosen-refresh", key
+				previousExpiry := seed.ExpiresAt
+				if scenario == "expired reservation" {
+					previousExpiry = time.Now().Add(-time.Minute)
+				}
+				if _, err := saveOAuthTokenRotation(ctx, key, oauthTokenRotation{Token: candidate, PreviousAccessToken: seed.AccessToken, PreviousExpiresAt: previousExpiry}, true); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "interrupted completion" {
+					if err := SetOAuthToken(ctx, candidate); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if scenario == "revoked during reservation" {
+				if err := DeleteOAuthToken(ctx, seed.AccessToken); err != nil {
+					t.Fatal(err)
+				}
+				requestCache.Flush()
+				if code, result := refresh(); code != http.StatusBadRequest || result.AccessToken != "" {
+					t.Fatal("an interrupted refresh resumed after explicit revocation")
+				}
+				return
+			}
+			if scenario == "expired reservation" {
+				if code, result := refresh(); code != http.StatusBadRequest || result.AccessToken != "" {
+					t.Fatal("an interrupted refresh outlived the original token")
+				}
+				return
+			}
+			if scenario == "failed write" {
+				fixture.rejectWritesToKind = "oauth_tokens"
+				if code, _ := refresh(); code != http.StatusServiceUnavailable {
+					t.Fatalf("failed write returned %d", code)
+				}
+				if _, err := GetOAuthToken(ctx, seed.AccessToken); err != nil {
+					t.Fatal("failed rotation consumed the old token")
+				}
+				fixture.rejectWritesToKind = ""
+			}
+			if scenario == "storage unavailable" {
+				fixture.lookupErrKind, fixture.lookupErr = "oauth_token_rotations", status.Error(codes.Unavailable, "synthetic storage outage")
+				if code, _ := refresh(); code != http.StatusServiceUnavailable {
+					t.Fatalf("storage outage returned %d", code)
+				}
+				fixture.lookupErr = nil
+			}
+			count := 1
+			if scenario == "concurrent" {
+				count = 12
+			}
+			results := make([]OAuthTokenResponse, count)
+			statuses := make([]int, count)
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			for i := range results {
+				wg.Add(1)
+				go func(i int) { defer wg.Done(); <-start; statuses[i], results[i] = refresh() }(i)
+			}
+			close(start)
+			wg.Wait()
+			for i := range results {
+				if statuses[i] != http.StatusOK || results[i].AccessToken == "" || results[i].AccessToken != results[0].AccessToken || results[i].RefreshToken != results[0].RefreshToken {
+					t.Fatalf("refresh %d returned status %d or a different replacement", i, statuses[i])
+				}
+			}
+			stored, err := GetOAuthToken(ctx, results[0].AccessToken)
+			if err != nil || len(stored.AppPermissions) != 1 || len(stored.AppPermissions[0].Tools) != 1 || len(stored.AllowedTools) != 1 {
+				t.Fatal("rotation lost the original app/tool restrictions")
+			}
+			stored.TokenUserAgent = "updated-after-issuance"
+			if err := SetOAuthToken(ctx, *stored); err != nil {
+				t.Fatal(err)
+			}
+			rotation, _ := getOAuthTokenRotation(ctx, key)
+			if err := SetOAuthToken(ctx, rotation.Token, true); err != nil {
+				t.Fatal(err)
+			}
+			preserved, err := GetOAuthToken(ctx, stored.AccessToken)
+			if err != nil || preserved.TokenUserAgent != "updated-after-issuance" {
+				t.Fatal("a resumed write overwrote an already-issued token")
+			}
+			if strings.HasPrefix(scenario, "interrupted") && results[0].AccessToken != "synthetic-chosen-access" {
+				t.Fatal("crash recovery generated a different replacement")
+			}
+			requestCache.Flush()
+			if scenario == "expired recovery" {
+				rotation, _ := getOAuthTokenRotation(ctx, key)
+				rotation.CompletedAt = time.Now().Add(-2 * time.Minute).UnixNano()
+				if _, err := project.Dbclient.Put(ctx, datastore.NameKey("oauth_token_rotations", key, nil), rotation); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "revoked replacement" {
+				if err := DeleteOAuthToken(ctx, results[0].AccessToken); err != nil {
+					t.Fatal(err)
+				}
+				// A delayed writer must not resurrect this token, even if it repopulates cache/storage.
+				rotation, _ := getOAuthTokenRotation(ctx, key)
+				if err := SetOAuthToken(ctx, rotation.Token); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := GetOAuthToken(ctx, results[0].AccessToken); err == nil {
+					t.Fatal("revoked token was resurrected by a delayed write")
+				}
+				if tokens, err := GetOAuthTokensByOrg(ctx, seed.OrgId); err != nil || len(tokens) != 0 {
+					t.Fatal("revoked replacement reappeared in the connection list")
+				}
+			}
+			code, replay := refresh()
+			if scenario == "expired recovery" || scenario == "revoked replacement" {
+				if code != http.StatusBadRequest || replay.AccessToken != "" {
+					t.Fatal("expired or revoked replacement remained recoverable")
+				}
+			} else if code != http.StatusOK || replay.AccessToken != results[0].AccessToken || replay.RefreshToken != results[0].RefreshToken {
+				t.Fatal("database recovery did not return the original replacement after cache loss")
+			}
+		})
+	}
+}
 
 func TestVerifyPKCE(t *testing.T) {
 	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
@@ -183,6 +413,7 @@ func TestHandleOAuthTokenValidation(t *testing.T) {
 }
 
 func TestHandleOAuthTokenFullCodeExchangeAndRefresh(t *testing.T) {
+	newOAuthRotationFixture(t)
 	ctx := context.Background()
 	project.CacheDb = true
 
@@ -409,6 +640,7 @@ func TestHandleOAuthTokenClientIDEnforcement(t *testing.T) {
 }
 
 func TestHandleOAuthTokenScopeDownscoping(t *testing.T) {
+	newOAuthRotationFixture(t)
 	ctx := context.Background()
 	project.CacheDb = true
 
@@ -460,6 +692,7 @@ func TestHandleOAuthTokenScopeDownscoping(t *testing.T) {
 }
 
 func TestHandleOAuthRevoke(t *testing.T) {
+	newOAuthRotationFixture(t)
 	ctx := context.Background()
 	project.CacheDb = true
 
@@ -1278,6 +1511,7 @@ func TestDynamicShuffleClientLoopback(t *testing.T) {
 }
 
 func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testing.T) {
+	newOAuthRotationFixture(t)
 	ctx := context.Background()
 	project.CacheDb = true
 	newReq := func(method, target string, body *strings.Reader) *http.Request {
@@ -1586,6 +1820,7 @@ func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testin
 }
 
 func TestDynamicOAuth2SecurityHardening(t *testing.T) {
+	newOAuthRotationFixture(t)
 	ctx := context.Background()
 	project.CacheDb = true
 	newSecReq := func(method, target string, body *strings.Reader) *http.Request {
@@ -2095,5 +2330,3 @@ func TestOAuthChosenToolsConsentAndSettingsPermeation(t *testing.T) {
 		t.Fatalf("Expected updated token to have Jira Cloud with 3 tools in AppPermissions, got %+v", updatedTok.AppPermissions)
 	}
 }
-
-

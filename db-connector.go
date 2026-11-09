@@ -10583,8 +10583,12 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			"from": 0,
 			"size": 1000,
 			"query": map[string]interface{}{
-				"match": map[string]interface{}{
-					"apikey": apikey,
+				"bool": map[string]interface{}{
+					"should": []map[string]interface{}{
+						{"match": map[string]interface{}{"apikey": apikey}},
+						{"match": map[string]interface{}{"rollover_apikey": apikey}},
+					},
+					"minimum_should_match": 1,
 				},
 			},
 		}
@@ -10649,7 +10653,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 		users = []User{}
 		for _, hit := range wrapped.Hits.Hits {
-			if hit.Source.ApiKey != apikey {
+			if hit.Source.ApiKey != apikey && hit.Source.RolloverApiKey != apikey {
 				continue
 			}
 
@@ -10663,6 +10667,16 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			if !strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[WARNING] Error getting apikey: %s", err)
 				//return User{}, err
+			}
+		}
+
+		if len(users) == 0 {
+			rq := datastore.NewQuery(nameKey).Filter("rollover_apikey =", apikey).Limit(1)
+			_, err := project.Dbclient.GetAll(ctx, rq, &users)
+			if err != nil && len(users) == 0 {
+				if !strings.Contains(err.Error(), `cannot load field`) {
+					log.Printf("[WARNING] Error getting rollover apikey: %s", err)
+				}
 			}
 		}
 	}
@@ -20447,8 +20461,141 @@ func DeleteOAuthClient(ctx context.Context, id string) error {
 	return DeleteKey(ctx, "oauth_clients", id)
 }
 
+func getOAuthTokenRotation(ctx context.Context, key string) (rotation *oauthTokenRotation, err error) {
+	defer func() {
+		if recover() != nil {
+			rotation, err = nil, errors.New("OAuth rotation storage is not initialized")
+		}
+	}()
+	rotation = &oauthTokenRotation{}
+	if project.DbType == "opensearch" {
+		response, getErr := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index: strings.ToLower(GetESIndexPrefix("oauth_token_rotations")), DocumentID: key,
+		})
+		if response != nil && response.Inspect().Response != nil {
+			if response.Inspect().Response.Body != nil {
+				defer response.Inspect().Response.Body.Close()
+			}
+			if response.Inspect().Response.StatusCode == http.StatusNotFound {
+				return nil, nil
+			}
+		}
+		if getErr != nil {
+			return nil, getErr
+		}
+		if err := json.Unmarshal(response.Source, rotation); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := project.Dbclient.Get(ctx, datastore.NameKey("oauth_token_rotations", key, nil), rotation); err != nil {
+			if err == datastore.ErrNoSuchEntity {
+				return nil, nil
+			}
+			return nil, err
+		}
+	}
+	return rotation, nil
+}
+
+// Create chooses a single replacement. Later updates only advance completion/revocation.
+func saveOAuthTokenRotation(ctx context.Context, key string, proposed oauthTokenRotation, create bool) (rotation *oauthTokenRotation, err error) {
+	defer func() {
+		if recover() != nil {
+			rotation, err = nil, errors.New("OAuth rotation storage is not initialized")
+		}
+	}()
+	if project.DbType == "opensearch" {
+		index := strings.ToLower(GetESIndexPrefix("oauth_token_rotations"))
+		if create {
+			data, marshalErr := json.Marshal(proposed)
+			if marshalErr != nil {
+				return nil, marshalErr
+			}
+			response, writeErr := project.Es.Index(ctx, opensearchapi.IndexReq{
+				Index: index, DocumentID: key, Body: bytes.NewReader(data),
+				Params: opensearchapi.IndexParams{OpType: "create", Refresh: "true"},
+			})
+			if response != nil && response.Inspect().Response != nil {
+				if response.Inspect().Response.Body != nil {
+					defer response.Inspect().Response.Body.Close()
+				}
+				if response.Inspect().Response.StatusCode == http.StatusConflict {
+					return getOAuthTokenRotation(ctx, key)
+				}
+			}
+			if writeErr != nil {
+				// A timed-out write may have committed. Read the decision before retrying.
+				if saved, readErr := getOAuthTokenRotation(ctx, key); readErr == nil && saved != nil {
+					return saved, nil
+				}
+				return nil, writeErr
+			}
+			return &proposed, nil
+		}
+		data, _ := json.Marshal(map[string]interface{}{"script": map[string]interface{}{
+			"source": "if (params.revoked) { ctx._source.revoked = true; } if (params.completed_at > 0 && ctx._source.completed_at == 0) { ctx._source.completed_at = params.completed_at; }",
+			"params": map[string]interface{}{"revoked": proposed.Revoked, "completed_at": proposed.CompletedAt},
+		}})
+		retries := 5
+		response, writeErr := project.Es.Update(ctx, opensearchapi.UpdateReq{
+			Index: index, DocumentID: key, Body: bytes.NewReader(data),
+			Params: opensearchapi.UpdateParams{Refresh: "true", RetryOnConflict: &retries},
+		})
+		if response != nil && response.Inspect().Response != nil {
+			if response.Inspect().Response.Body != nil {
+				defer response.Inspect().Response.Body.Close()
+			}
+		}
+		if writeErr != nil {
+			if saved, readErr := getOAuthTokenRotation(ctx, key); readErr == nil && saved != nil &&
+				(!proposed.Revoked || saved.Revoked) && (proposed.CompletedAt == 0 || saved.CompletedAt != 0) {
+				return saved, nil
+			}
+			return nil, writeErr
+		}
+		return getOAuthTokenRotation(ctx, key)
+	}
+	keyRef := datastore.NameKey("oauth_token_rotations", key, nil)
+	_, err = project.Dbclient.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+		current := &oauthTokenRotation{}
+		if readErr := tx.Get(keyRef, current); readErr != nil {
+			if readErr != datastore.ErrNoSuchEntity || !create {
+				return readErr
+			}
+			current = &proposed
+		} else if !create {
+			if (!proposed.Revoked || current.Revoked) && (proposed.CompletedAt == 0 || current.CompletedAt != 0) {
+				rotation = current
+				return nil
+			}
+			current.Revoked = current.Revoked || proposed.Revoked
+			if current.CompletedAt == 0 {
+				current.CompletedAt = proposed.CompletedAt
+			}
+		} else {
+			rotation = current
+			return nil
+		}
+		if _, writeErr := tx.Put(keyRef, current); writeErr != nil {
+			return writeErr
+		}
+		rotation = current
+		return nil
+	})
+	if err != nil {
+		if saved, readErr := getOAuthTokenRotation(ctx, key); readErr == nil && saved != nil {
+			if create || ((!proposed.Revoked || saved.Revoked) && (proposed.CompletedAt == 0 || saved.CompletedAt != 0)) {
+				return saved, nil
+			}
+		}
+		return nil, err
+	}
+	return rotation, nil
+}
+
 // SetOAuthToken persists an OAuthToken in OpenSearch (onprem) or Datastore (cloud).
-func SetOAuthToken(ctx context.Context, token OAuthToken) error {
+// createOnly is used by refresh recovery to preserve an already-issued replacement.
+func SetOAuthToken(ctx context.Context, token OAuthToken, createOnly ...bool) error {
 	nameKey := "oauth_tokens"
 	if len(token.AccessToken) == 0 {
 		return errors.New("access token cannot be empty")
@@ -20463,6 +20610,39 @@ func SetOAuthToken(ctx context.Context, token OAuthToken) error {
 	data, err := json.Marshal(token)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshalling OAuth token: %s", err)
+		return err
+	}
+	if len(createOnly) > 0 && createOnly[0] {
+		// Crash recovery may race a completed request. Never overwrite its token or cache.
+		if project.DbType == "opensearch" {
+			response, writeErr := project.Es.Index(ctx, opensearchapi.IndexReq{
+				Index: strings.ToLower(GetESIndexPrefix(nameKey)), DocumentID: token.AccessToken, Body: bytes.NewReader(data),
+				Params: opensearchapi.IndexParams{OpType: "create", Refresh: "true"},
+			})
+			if response != nil && response.Inspect().Response != nil {
+				if response.Inspect().Response.Body != nil {
+					defer response.Inspect().Response.Body.Close()
+				}
+				if response.Inspect().Response.StatusCode == http.StatusConflict {
+					return nil
+				}
+			}
+			return writeErr
+		}
+		key := datastore.NameKey(nameKey, token.AccessToken, nil)
+		_, err := project.Dbclient.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+			var existing OAuthToken
+			if err := tx.Get(key, &existing); err != datastore.ErrNoSuchEntity {
+				return err
+			}
+			_, err := tx.Put(key, &token)
+			return err
+		})
+		if err != nil {
+			if existing, readErr := GetOAuthToken(ctx, token.AccessToken); readErr == nil && existing != nil {
+				return nil
+			}
+		}
 		return err
 	}
 
@@ -20487,7 +20667,7 @@ func SetOAuthToken(ctx context.Context, token OAuthToken) error {
 				putErr = err
 			}
 		}()
-		if putErr != nil && !project.CacheDb {
+		if putErr != nil && (!project.CacheDb || token.RotationKey != "") {
 			return putErr
 		}
 	}
@@ -20573,6 +20753,15 @@ func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error)
 					if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
 						return nil, errors.New("OAuth token has expired")
 					}
+					if token.RotationKey != "" {
+						rotation, rotationErr := getOAuthTokenRotation(ctx, token.RotationKey)
+						if rotationErr != nil {
+							return nil, errors.New("OAuth rotation storage unavailable")
+						}
+						if rotation == nil || rotation.Revoked || rotation.Token.AccessToken != token.AccessToken {
+							return nil, errors.New("OAuth token doesn't exist")
+						}
+					}
 					return &token, nil
 				}
 			}
@@ -20640,6 +20829,15 @@ func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error)
 
 	if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
 		return nil, errors.New("OAuth token has expired")
+	}
+	if token.RotationKey != "" {
+		rotation, rotationErr := getOAuthTokenRotation(ctx, token.RotationKey)
+		if rotationErr != nil {
+			return nil, errors.New("OAuth rotation storage unavailable")
+		}
+		if rotation == nil || rotation.Revoked || rotation.Token.AccessToken != token.AccessToken {
+			return nil, errors.New("OAuth token doesn't exist")
+		}
 	}
 
 	if project.CacheDb {
@@ -20724,7 +20922,7 @@ func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAu
 			if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
 				return nil, errors.New("OAuth token has expired")
 			}
-			return &token, nil
+			return GetOAuthToken(ctx, token.AccessToken)
 		}
 	} else {
 		var tokens []OAuthToken
@@ -20752,7 +20950,7 @@ func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAu
 			return nil, getErr
 		}
 		if len(tokens) > 0 {
-			return &tokens[0], nil
+			return GetOAuthToken(ctx, tokens[0].AccessToken)
 		}
 	}
 
@@ -20760,8 +20958,31 @@ func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAu
 }
 
 // DeleteOAuthToken removes an OAuthToken from storage and cache.
-func DeleteOAuthToken(ctx context.Context, accessToken string) error {
+// Normal rotation cleanup passes rotating=true; explicit revocation also cancels outgoing rotations.
+func DeleteOAuthToken(ctx context.Context, accessToken string, rotating ...bool) error {
 	token, err := GetOAuthToken(ctx, accessToken)
+	if err != nil && err.Error() != "OAuth token doesn't exist" && err.Error() != "OAuth token not found" &&
+		err.Error() != "OAuth token has expired" && !strings.HasPrefix(err.Error(), "status: 404,") {
+		return err
+	}
+	if token != nil && token.RefreshToken != "" && (len(rotating) == 0 || !rotating[0]) {
+		// Stop an in-flight refresh from producing another token after explicit revocation.
+		key := fmt.Sprintf("%x", sha256.Sum256([]byte(token.RefreshToken)))
+		outgoing, writeErr := saveOAuthTokenRotation(ctx, key, oauthTokenRotation{Revoked: true}, true)
+		if writeErr != nil {
+			return writeErr
+		}
+		if outgoing != nil && !outgoing.Revoked {
+			if _, err := saveOAuthTokenRotation(ctx, key, oauthTokenRotation{Revoked: true}, false); err != nil {
+				return err
+			}
+		}
+	}
+	if token != nil && token.RotationKey != "" {
+		if _, err := saveOAuthTokenRotation(ctx, token.RotationKey, oauthTokenRotation{Revoked: true}, false); err != nil {
+			return err
+		}
+	}
 	if err == nil && token != nil && len(token.RefreshToken) > 0 {
 		_ = DeleteKey(ctx, "oauth_refresh", token.RefreshToken)
 	}
@@ -20854,7 +21075,20 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 		}
 	}
 
-	return tokens, nil
+	activeTokens := tokens[:0]
+	for _, token := range tokens {
+		if token.RotationKey != "" {
+			rotation, err := getOAuthTokenRotation(ctx, token.RotationKey)
+			if err != nil {
+				return nil, err
+			}
+			if rotation == nil || rotation.Revoked || rotation.Token.AccessToken != token.AccessToken {
+				continue
+			}
+		}
+		activeTokens = append(activeTokens, token)
+	}
+	return activeTokens, nil
 }
 
 // GetOAuthTokensByUser retrieves all active OAuth tokens issued to a specific user.
@@ -20943,7 +21177,20 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 		}
 	}
 
-	return tokens, nil
+	activeTokens := tokens[:0]
+	for _, token := range tokens {
+		if token.RotationKey != "" {
+			rotation, err := getOAuthTokenRotation(ctx, token.RotationKey)
+			if err != nil {
+				return nil, err
+			}
+			if rotation == nil || rotation.Revoked || rotation.Token.AccessToken != token.AccessToken {
+				continue
+			}
+		}
+		activeTokens = append(activeTokens, token)
+	}
+	return activeTokens, nil
 }
 
 // SetOAuthAuthCode persists a temporary authorization code in OpenSearch (onprem) or Datastore (cloud).

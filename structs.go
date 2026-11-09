@@ -821,6 +821,7 @@ type User struct {
 	Roles                []string      `datastore:"roles" json:"roles"`
 	VerificationToken    string        `datastore:"verification_token" json:"verification_token"`
 	ApiKey               string        `datastore:"apikey" json:"apikey"`
+	RolloverApiKey       string        `datastore:"rollover_apikey" json:"rollover_apikey,omitempty"`
 	ResetReference       string        `datastore:"reset_reference" json:"reset_reference"`
 	Executions           ExecutionInfo `datastore:"executions" json:"executions"`
 	Limits               UserLimits    `datastore:"limits" json:"limits,omitempty"`
@@ -3238,6 +3239,7 @@ type OAuthAppPermission struct {
 
 type OAuthToken struct {
 	ID                 string               `json:"id" datastore:"id"`
+	RotationKey        string               `json:"rotation_key,omitempty" datastore:"rotation_key,omitempty"`
 	AccessToken        string               `json:"access_token" datastore:"access_token"`
 	RefreshToken       string               `json:"refresh_token,omitempty" datastore:"refresh_token"`
 	TokenType          string               `json:"token_type" datastore:"token_type"`
@@ -3276,6 +3278,16 @@ type OAuthToken struct {
 	MCPClientName      string    `json:"mcp_client_name,omitempty" datastore:"mcp_client_name"`
 	MCPClientVersion   string    `json:"mcp_client_version,omitempty" datastore:"mcp_client_version"`
 	MCPUserAgent       string    `json:"mcp_user_agent,omitempty" datastore:"mcp_user_agent,noindex"`
+}
+
+// Rotation records use a non-rolling index: create-only must remain unique across rollovers.
+type oauthTokenRotation struct {
+	Token               OAuthToken `json:"token" datastore:"token,noindex"`
+	PreviousAccessToken string     `json:"previous_access_token" datastore:"previous_access_token,noindex"`
+	PreviousExpiresAt   time.Time  `json:"previous_expires_at" datastore:"previous_expires_at"`
+	RequestScope        string     `json:"request_scope" datastore:"request_scope,noindex"`
+	CompletedAt         int64      `json:"completed_at" datastore:"completed_at"`
+	Revoked             bool       `json:"revoked" datastore:"revoked"`
 }
 
 type OAuthTokenWrapper struct {
@@ -4377,6 +4389,7 @@ type SettingsReturn struct {
 	Username string `json:"username"`
 	Verified bool   `json:"verified"`
 	Apikey   string `json:"apikey"`
+	RolloverApikey string `json:"rollover_apikey,omitempty"`
 	Image    string `json:"image"`
 
 	Devices []Device `json:"devices"`
