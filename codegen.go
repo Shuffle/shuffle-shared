@@ -3486,6 +3486,36 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
+	// Valid OpenAPI 3 JSON bodies live in requestBody, not parameters.
+	// Keep the schema intact and expose the existing Python body argument.
+	if path.Post.RequestBody != nil && path.Post.RequestBody.Value != nil && fileField == "" {
+		requestBody := path.Post.RequestBody.Value
+		if _, ok := requestBody.Content["application/json"]; ok {
+			hasBody := false
+			for _, parameter := range action.Parameters {
+				if parameter.Name == "body" {
+					hasBody = true
+					break
+				}
+			}
+			if !hasBody {
+				description := requestBody.Description
+				if description == "" {
+					description = "JSON request body"
+				}
+				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					Name:        "body",
+					Description: description,
+					Multiline:   true,
+					Required:    requestBody.Required,
+					Schema: SchemaDefinition{
+						Type: "string",
+					},
+				})
+			}
+		}
+	}
+
 	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "post", parameters, optionalQueries, headersFound, fileField, api, handleFile)
 
 	if len(functionname) > 0 {
