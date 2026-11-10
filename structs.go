@@ -821,6 +821,7 @@ type User struct {
 	Roles                []string      `datastore:"roles" json:"roles"`
 	VerificationToken    string        `datastore:"verification_token" json:"verification_token"`
 	ApiKey               string        `datastore:"apikey" json:"apikey"`
+	RolloverApiKey       string        `datastore:"rollover_apikey" json:"rollover_apikey,omitempty"`
 	ResetReference       string        `datastore:"reset_reference" json:"reset_reference"`
 	Executions           ExecutionInfo `datastore:"executions" json:"executions"`
 	Limits               UserLimits    `datastore:"limits" json:"limits,omitempty"`
@@ -1435,14 +1436,15 @@ type CacheKeyDataMini struct {
 }
 
 type CacheKeyDataFallback struct {
-	OrgId    string   `json:"org_id,omitempty" datastore:"OrgId"`
-	Key      string   `json:"key" datastore:"Key"`
-	Value    any      `json:"value" datastore:"Value,noindex"`
-	Category string   `json:"category" datastore:"category"`
-	Tags     []string `json:"tags,omitempty" datastore:"tags"`
-
-	Enrichments []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
-	RBAC        *RBAC        `json:"rbac,omitempty" datastore:"rbac,noindex"`
+	OrgId               string       `json:"org_id,omitempty" datastore:"OrgId"`
+	Key                 string       `json:"key" datastore:"Key"`
+	Value               any          `json:"value" datastore:"Value,noindex"`
+	Category            string       `json:"category" datastore:"category"`
+	Tags                []string     `json:"tags,omitempty" datastore:"tags"`
+	IgnoreSecurityRules bool         `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"`
+	SuborgDistribution  []string     `json:"suborg_distribution,omitempty" datastore:"suborg_distribution"`
+	Enrichments         []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
+	RBAC                *RBAC        `json:"rbac,omitempty" datastore:"rbac,noindex"`
 }
 
 type CacheKeyData struct {
@@ -4387,6 +4389,7 @@ type SettingsReturn struct {
 	Username string `json:"username"`
 	Verified bool   `json:"verified"`
 	Apikey   string `json:"apikey"`
+	RolloverApikey string `json:"rollover_apikey,omitempty"`
 	Image    string `json:"image"`
 
 	Devices []Device `json:"devices"`
