@@ -1054,6 +1054,41 @@ func getNotificationAliasSearch(ctx context.Context, aliasName, id string) (*Not
 	return &found, nil
 }
 func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string) (*WorkflowExecution, error) {
+	alias, err := project.Es.Indices.Alias.Get(ctx, opensearchapi.AliasGetReq{Indices: []string{"*"}, Alias: []string{aliasName}})
+	if err != nil && !strings.Contains(err.Error(), "status: 404") {
+		return nil, fmt.Errorf("resolve execution alias %s: %w", aliasName, err)
+	}
+	indices := []string{}
+	writeIndices := map[string]bool{}
+	if err == nil {
+		for name, index := range alias.Indices {
+			metadata, exists := index.Aliases[aliasName]
+			if !exists {
+				continue
+			}
+			var details struct {
+				IsWriteIndex bool `json:"is_write_index"`
+			}
+			if len(metadata) > 0 {
+				if err := json.Unmarshal(metadata, &details); err != nil {
+					return nil, fmt.Errorf("decode execution alias metadata for %s: %w", name, err)
+				}
+			}
+			indices = append(indices, name)
+			writeIndices[name] = details.IsWriteIndex
+		}
+	}
+	// Executions have no edited/created fields. Prefer the write index, then rollover generation.
+	sort.Slice(indices, func(i, j int) bool {
+		if writeIndices[indices[i]] != writeIndices[indices[j]] {
+			return writeIndices[indices[i]]
+		}
+		left, right := getOpensearchGeneration(indices[i]), getOpensearchGeneration(indices[j])
+		if left != right {
+			return left > right
+		}
+		return indices[i] > indices[j]
+	})
 	var buf bytes.Buffer
 	query := map[string]interface{}{
 		"size": 1,
@@ -1062,20 +1097,19 @@ func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string
 				"values": []string{id},
 			},
 		},
-		"sort": []map[string]interface{}{
-			{
-				"edited": map[string]interface{}{
-					"order":         "desc",
-					"unmapped_type": "long",
-				},
-			},
-			{
-				"created": map[string]interface{}{
-					"order":         "desc",
-					"unmapped_type": "long",
-				},
-			},
-		},
+	}
+	if len(indices) > 0 {
+		priority := make([]map[string]interface{}, 0, len(indices))
+		for position, index := range indices {
+			priority = append(priority, map[string]interface{}{"constant_score": map[string]interface{}{
+				"filter": map[string]interface{}{"term": map[string]string{"_index": index}},
+				"boost": len(indices) - position,
+			}})
+		}
+		query["query"] = map[string]interface{}{"bool": map[string]interface{}{
+			"filter": query["query"], "should": priority, "minimum_should_match": 1,
+		}}
+		query["sort"] = []map[string]interface{}{{"_score": "desc"}}
 	}
 
 	if err := json.NewEncoder(&buf).Encode(query); err != nil {
@@ -1091,6 +1125,10 @@ func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string
 	})
 	if err != nil {
 		return nil, err
+	}
+	if resp.Timeout || resp.Shards.Failed > 0 {
+		resp.Inspect().Response.Body.Close()
+		return nil, errors.New("execution alias lookup returned incomplete results")
 	}
 
 	res := resp.Inspect().Response
