@@ -766,8 +766,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// FIXME: Removed the current stats grabber as it made no sense
-	// to dump it to cache. The point was JUST to grab it in realtime.
+	DeleteCache(ctx, fmt.Sprintf("org_statistics_%s", orgId))
 	info, err := GetOrgStatistics(ctx, orgId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting stats for org %s: %s", orgId, err)
@@ -1310,6 +1309,13 @@ func HandleAppendStatistics(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Cache incremented by %d"}`, inputData.Value)))
 }
 
+var incrementCacheLocks sync.Map
+
+func getIncrementCacheLock(key string) *sync.Mutex {
+	lockInterface, _ := incrementCacheLocks.LoadOrStore(key, &sync.Mutex{})
+	return lockInterface.(*sync.Mutex)
+}
+
 // Rudementary caching system. WILL go wrong at times without sharding.
 // It's only good for the user in cloud, hence wont bother for a while
 // Optional input is the amount to increment
@@ -1341,6 +1347,10 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 	// 2. Update it
 	dbDumpInterval := uint8(dbInterval)
 	key := fmt.Sprintf("cache_%s_%s", orgId, dataType)
+	lock := getIncrementCacheLock(key)
+	lock.Lock()
+	defer lock.Unlock()
+
 	if len(memcached) > 0 {
 		appendForQuickDump := false
 		if !ArrayContains(PredictableDataTypes, dataType) {
@@ -1657,18 +1667,22 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 		}
 
 		if foundItem >= int(dbDumpInterval) {
-			// Memcache dump first to keep the counter going for other executions
-			go SetCache(context.Background(), key, []byte(fmt.Sprintf("%x", 0)), 86400)
-			IncrementCacheDump(ctx, orgId, dataType, foundItem)
+			if dumpErr := IncrementCacheDump(ctx, orgId, dataType, foundItem); dumpErr != nil {
 
-			//log.Printf("[DEBUG] Dumping cache for %s with amount %d", key, foundItem)
+				if debug {
+					log.Printf("[DEBUG] Failed dumping cache for key %s, keeping %d pending for retry: %s", key, foundItem, dumpErr)
+				}
+				setCacheValue := []byte(fmt.Sprintf("%d", foundItem))
+				if err := SetCache(ctx, key, setCacheValue, 86400); err != nil {
+					log.Printf("[ERROR] Failed re-queueing increment cache for key %s: %s", orgId, err)
+				}
+			} else {
+				if err := SetCache(ctx, key, []byte(fmt.Sprintf("%d", 0)), 86400); err != nil {
+					log.Printf("[ERROR] Failed resetting increment cache for key %s after successful dump: %s", orgId, err)
+				}
+			}
 		} else {
-			// Set cache
-			//setCacheValue := []byte(strconv.FormatInt(int64(foundItem), 16))
-			//setCacheValue := []byte(fmt.Sprintf("%d", foundItem))
-
-			// FIXME: Something is wrong here past 0x9 :O
-			setCacheValue := []byte(fmt.Sprintf("%x", foundItem))
+			setCacheValue := []byte(fmt.Sprintf("%d", foundItem))
 			err = SetCache(ctx, key, setCacheValue, 86400)
 			if err != nil {
 				log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
