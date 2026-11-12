@@ -1436,14 +1436,15 @@ type CacheKeyDataMini struct {
 }
 
 type CacheKeyDataFallback struct {
-	OrgId    string   `json:"org_id,omitempty" datastore:"OrgId"`
-	Key      string   `json:"key" datastore:"Key"`
-	Value    any      `json:"value" datastore:"Value,noindex"`
-	Category string   `json:"category" datastore:"category"`
-	Tags     []string `json:"tags,omitempty" datastore:"tags"`
-
-	Enrichments []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
-	RBAC        *RBAC        `json:"rbac,omitempty" datastore:"rbac,noindex"`
+	OrgId               string       `json:"org_id,omitempty" datastore:"OrgId"`
+	Key                 string       `json:"key" datastore:"Key"`
+	Value               any          `json:"value" datastore:"Value,noindex"`
+	Category            string       `json:"category" datastore:"category"`
+	Tags                []string     `json:"tags,omitempty" datastore:"tags"`
+	IgnoreSecurityRules bool         `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"`
+	SuborgDistribution  []string     `json:"suborg_distribution,omitempty" datastore:"suborg_distribution"`
+	Enrichments         []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
+	RBAC                *RBAC        `json:"rbac,omitempty" datastore:"rbac,noindex"`
 }
 
 type CacheKeyData struct {

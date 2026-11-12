@@ -490,7 +490,6 @@ func RecordPagerNotification(ctx context.Context, req NotificationRequest, targe
 				existing.Read = true
 			}
 			err := SetNotification(ctx, existing)
-			DeleteCache(ctx, fmt.Sprintf("notifications_%s", userId))
 			return existing, err
 		}
 	}
@@ -525,7 +524,6 @@ func RecordPagerNotification(ctx context.Context, req NotificationRequest, targe
 	}
 
 	err := SetNotification(ctx, newNotif)
-	DeleteCache(ctx, fmt.Sprintf("notifications_%s", userId))
 	return newNotif, err
 }
 
@@ -777,12 +775,28 @@ func DispatchFCMPushNotification(ctx context.Context, req NotificationRequest, t
 	return results, batchResp.SuccessCount, nil
 }
 
+func getNotificationDedupCacheKey(orgId, userId, title, description, referenceUrl string) string {
+	raw := fmt.Sprintf("%s_%s_%s_%s_%s", strings.TrimSpace(orgId), strings.TrimSpace(userId), strings.TrimSpace(title), strings.TrimSpace(description), strings.TrimSpace(referenceUrl))
+	sum := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("notification_dedup_%s", hex.EncodeToString(sum[:]))
+}
+
 // Standalone to make it work many places
 func markNotificationRead(ctx context.Context, notification *Notification) error {
+	if notification == nil {
+		return errors.New("notification is nil")
+	}
+
 	notification.Read = true
 	err := SetNotification(ctx, *notification)
 	if err != nil {
 		return err
+	}
+
+	DeleteCache(ctx, getNotificationDedupCacheKey(notification.OrgId, notification.UserId, notification.Title, notification.Description, notification.ReferenceUrl))
+	DeleteCache(ctx, getNotificationDedupCacheKey("", notification.UserId, notification.Title, notification.Description, notification.ReferenceUrl))
+	if len(notification.UserId) > 0 {
+		DeleteCache(ctx, getNotificationDedupCacheKey(notification.OrgId, "", notification.Title, notification.Description, notification.ReferenceUrl))
 	}
 
 	return nil
@@ -796,7 +810,7 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
-	if location[1] == "api" {
+	if len(location) > 1 && location[1] == "api" {
 		if len(location) <= 4 {
 			log.Printf("Path too short: %d", len(location))
 			resp.WriteHeader(401)
@@ -826,14 +840,14 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	notification, err := GetNotification(ctx, fileId)
-	if err != nil {
+	if err != nil || notification == nil {
 		log.Printf("[WARNING] Failed getting notification %s for user %s: %s", fileId, user.Id, err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Bad userId or notification doesn't exist"}`))
 		return
 	}
 
-	if notification.Personal || len(notification.UserId) > 0 {
+	if notification.Personal {
 		if notification.UserId != user.Id {
 			log.Printf("[WARNING] Bad user for notification. %s (wanted) vs %s", notification.UserId, user.Id)
 			resp.WriteHeader(403)
@@ -865,14 +879,6 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed to mark it as read"}`))
 		return
 	}
-
-	if len(notification.UserId) > 0 {
-		DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.UserId))
-	}
-	if len(notification.OrgId) > 0 {
-		DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.OrgId))
-	}
-	DeleteCache(ctx, fmt.Sprintf("notifications_%s", user.Id))
 
 	log.Printf("[AUDIT] Marked %s as read by user %s (%s)", notification.Id, user.Username, user.Id)
 
@@ -936,30 +942,38 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	var markErr error
 	for _, notification := range notifications {
 		if personal {
 			if notification.UserId != user.Id {
 				continue
 			}
 		} else {
-			if notification.Personal || len(notification.UserId) > 0 {
+			if notification.Personal {
 				continue
 			}
+		}
+
+		if notification.Read {
+			continue
 		}
 
 		notification.ModifiedBy = user.Username
 		err = markNotificationRead(ctx, &notification)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating notification %s (%s) to read (clear): %s", notification.Title, notification.Id, err)
+			markErr = err
 			continue
 		}
 	}
 
+	if markErr != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to clear notifications"}`))
+		return
+	}
+
 	log.Printf("[AUDIT] Cleared %d notifications for user %s (%s) in org %s (%s)", len(notifications), user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
-	cacheKey := fmt.Sprintf("notifications_%s", user.ActiveOrg.Id)
-	DeleteCache(ctx, cacheKey)
-	cacheKey = fmt.Sprintf("notifications_%s", user.Id)
-	DeleteCache(ctx, cacheKey)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -1052,17 +1066,16 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 			}
 			notification.Personal = true
 		} else {
-			if notification.Personal || len(notification.UserId) > 0 {
+			if notification.Personal {
 				continue
 			}
-			notification.UserId = ""
 		}
 
-		if len(severity) > 0 && notification.Severity != severity {
+		if len(severity) > 0 && !strings.EqualFold(notification.Severity, severity) {
 			continue
 		}
 
-		if len(curType) > 0 && curType != notification.Origin {
+		if len(curType) > 0 && !strings.EqualFold(curType, notification.Origin) {
 			continue
 		}
 
@@ -1107,6 +1120,11 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		return nil
 	}
 
+	if notification.Personal {
+		log.Printf("[DEBUG] Skipping notification workflow send for personal notification %s", notification.Id)
+		return nil
+	}
+
 	if notification.Ignored {
 		log.Printf("[DEBUG] Skipping notification workflow send for notification %s as it's ignored. WorkflowId: %#v", notification.Id, workflowId)
 		return nil
@@ -1115,11 +1133,11 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	workflow, err := GetWorkflow(ctx, workflowId)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting workflow %s: %s", workflowId, err)
-	} else if workflow.ExecutingOrg.Id != "" && workflow.ExecutingOrg.Id != authOrg.Id {
+	} else if workflow != nil && workflow.ExecutingOrg.Id != "" && workflow.ExecutingOrg.Id != authOrg.Id {
 		executionOrg, err := GetOrg(ctx, workflow.ExecutingOrg.Id)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting execution org %s: %s", workflow.ExecutingOrg.Id, err)
-		} else {
+		} else if executionOrg != nil {
 			authOrg = *executionOrg
 		}
 	}
@@ -1532,7 +1550,7 @@ func getFailureReasonFromResult(result, description string) string {
 	return description
 }
 
-func enrichNotificationFailureContext(ctx context.Context, referenceUrl, description string) NotificationFailureContext {
+func enrichNotificationFailureContext(ctx context.Context, referenceUrl, description string, orgIds ...string) NotificationFailureContext {
 	enriched := NotificationFailureContext{}
 	enriched.ExecutionId = getNotificationReferenceParam(referenceUrl, "execution_id")
 	enriched.NodeId = getNotificationReferenceParam(referenceUrl, "node")
@@ -1542,9 +1560,20 @@ func enrichNotificationFailureContext(ctx context.Context, referenceUrl, descrip
 	}
 
 	workflowExecution, err := GetWorkflowExecution(ctx, enriched.ExecutionId)
-	if err != nil {
+	if err != nil || workflowExecution == nil {
 		log.Printf("[DEBUG] Failed loading execution %s for notification enrichment: %s", enriched.ExecutionId, err)
 		return enriched
+	}
+
+	if len(orgIds) > 0 && len(strings.TrimSpace(orgIds[0])) > 0 {
+		expectedOrg := strings.TrimSpace(orgIds[0])
+		execOrg := strings.TrimSpace(workflowExecution.ExecutionOrg)
+		wfOrg := strings.TrimSpace(workflowExecution.OrgId)
+		innerWfOrg := strings.TrimSpace(workflowExecution.Workflow.OrgId)
+		if (len(execOrg) > 0 || len(wfOrg) > 0 || len(innerWfOrg) > 0) &&
+			execOrg != expectedOrg && wfOrg != expectedOrg && innerWfOrg != expectedOrg {
+			return NotificationFailureContext{}
+		}
 	}
 
 	enriched.WorkflowId = workflowExecution.WorkflowId
@@ -1633,36 +1662,18 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 	//log.Printf("[DEBUG] Creating org notification! %s. Env: %s", orgId, project.Environment)
 
-	// Check if the referenceUrl is already in cache or not
-	if len(referenceUrl) > 0 {
-		// Have a 0-0.5 sec timeout here?
-
-		cacheKey := fmt.Sprintf("notification-%s", referenceUrl)
-		_, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			// Avoiding duplicates for the same workflow+execution
-			if project.Environment != "cloud" {
-				//log.Printf("[DEBUG] Found cached notification for %s", referenceUrl)
-			}
-
-			return nil
-
-		} else {
-			if project.Environment != "cloud" {
-				//log.Printf("[DEBUG] No cached notification for %s. Creating one", referenceUrl)
-			}
-
-			err := SetCache(ctx, cacheKey, []byte("1"), 1)
-			if err != nil {
-				log.Printf("[ERROR] Failed saving cached notification %s: %s", cacheKey, err)
-			}
-		}
+	// Deduplicate identical notification requests (same org + title + description + referenceUrl) within 1 minute
+	dedupCacheKey := getNotificationDedupCacheKey(orgId, "", title, description, referenceUrl)
+	if _, err := GetCache(ctx, dedupCacheKey); err == nil {
+		return nil
 	}
 
 	// FIXME: Send a request to the backend here from worker when optimized
 	if project.Environment == "worker" {
 		log.Printf("[DEBUG] Creating backend notification for org %s", orgId)
-		forwardNotificationRequest(ctx, title, description, referenceUrl, orgId)
+		if err := forwardNotificationRequest(ctx, title, description, referenceUrl, orgId); err == nil {
+			_ = SetCache(ctx, dedupCacheKey, []byte("1"), 1)
+		}
 		return nil
 	}
 
@@ -1686,12 +1697,15 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 	}
 
 	org, err := GetOrg(ctx, orgId)
-	if err != nil {
+	if err != nil || org == nil {
+		if err == nil {
+			err = errors.New("org not found")
+		}
 		log.Printf("[WARNING] Error getting org %s in createOrgNotification: %s", orgId, err)
 		return err
 	}
 
-	enrichedFailureContext := enrichNotificationFailureContext(ctx, referenceUrl, description)
+	enrichedFailureContext := enrichNotificationFailureContext(ctx, referenceUrl, description, orgId)
 
 	generatedId := uuid.NewV4().String()
 	mainNotification := Notification{
@@ -1745,7 +1759,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		}
 
 		foundUser, err := GetUser(ctx, user.Id)
-		if err != nil {
+		if err != nil || foundUser == nil {
 			continue
 		}
 
@@ -1811,8 +1825,18 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 				log.Printf("[WARNING] Failed to reopen notification %s for user %s", notification.Title, notification.UserId)
 			} else {
 				//log.Printf("[INFO] Reopened and incremented notification %s for %s", notification.Title, notification.UserId)
+				mainNotification.Id = notification.Id
+				mainNotification.Amount = notification.Amount
 				usersHandled = append(usersHandled, notification.UserId)
 			}
+		}
+
+		if len(usersHandled) == 0 && err != nil {
+			return err
+		}
+
+		if setCacheErr := SetCache(ctx, dedupCacheKey, []byte("1"), 1); setCacheErr != nil {
+			log.Printf("[ERROR] Failed saving cached notification %s: %s", dedupCacheKey, setCacheErr)
 		}
 
 		if mainNotification.Ignored {
@@ -1841,6 +1865,10 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			return err
 		}
 
+		if setCacheErr := SetCache(ctx, dedupCacheKey, []byte("1"), 1); setCacheErr != nil {
+			log.Printf("[ERROR] Failed saving cached notification %s: %s", dedupCacheKey, setCacheErr)
+		}
+
 		// 1. Find users in org
 		// 2. Make notification for each of them
 		// 3. Make reference to org notification
@@ -1854,7 +1882,10 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			}
 
 			workflow, err := GetWorkflow(ctx, org.Defaults.NotificationWorkflow)
-			if err != nil || len(workflow.ID) == 0 {
+			if err != nil || workflow == nil || len(workflow.ID) == 0 {
+				if err == nil {
+					err = errors.New("notification workflow not found")
+				}
 				log.Printf("[WARNING] Failed getting notification workflow with ID '%s': %s", org.Defaults.NotificationWorkflow, err)
 				return err
 			}
@@ -1865,7 +1896,10 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 				// Get parent org if it exists and check too
 				if len(org.ManagerOrgs) > 0 {
 					parentOrg, err := GetOrg(ctx, org.ManagerOrgs[0].Id)
-					if err != nil {
+					if err != nil || parentOrg == nil {
+						if err == nil {
+							err = errors.New("parent org not found")
+						}
 						log.Printf("[WARNING] Error getting parent org %s in createOrgNotification (2): %s", orgId, err)
 						return err
 					}
@@ -1904,17 +1938,9 @@ func CreatePersonalNotification(ctx context.Context, title, description, referen
 		return errors.New("no user ID provided")
 	}
 
-	if len(referenceUrl) > 0 {
-		cacheKey := fmt.Sprintf("notification-%s-%s", userId, referenceUrl)
-		_, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			return nil
-		}
-
-		err = SetCache(ctx, cacheKey, []byte("1"), 1)
-		if err != nil {
-			log.Printf("[ERROR] Failed saving cached personal notification %s: %s", cacheKey, err)
-		}
+	dedupCacheKey := getNotificationDedupCacheKey(orgId, userId, title, description, referenceUrl)
+	if _, err := GetCache(ctx, dedupCacheKey); err == nil {
+		return nil
 	}
 
 	targetUser, userErr := GetUser(ctx, userId)
@@ -1928,6 +1954,10 @@ func CreatePersonalNotification(ctx context.Context, title, description, referen
 			orgId = strings.TrimSpace(targetUser.ActiveOrg.Id)
 		} else if len(targetUser.Orgs) > 0 {
 			orgId = strings.TrimSpace(targetUser.Orgs[0])
+		}
+		dedupCacheKey = getNotificationDedupCacheKey(orgId, userId, title, description, referenceUrl)
+		if _, err := GetCache(ctx, dedupCacheKey); err == nil {
+			return nil
 		}
 	}
 
@@ -1959,7 +1989,7 @@ func CreatePersonalNotification(ctx context.Context, title, description, referen
 		}
 	}
 
-	enrichedFailureContext := enrichNotificationFailureContext(ctx, referenceUrl, description)
+	enrichedFailureContext := enrichNotificationFailureContext(ctx, referenceUrl, description, orgId)
 
 	generatedId := uuid.NewV4().String()
 	now := int64(time.Now().Unix())
@@ -2054,6 +2084,10 @@ func CreatePersonalNotification(ctx context.Context, title, description, referen
 		savedNotification = mainNotification
 	}
 
+	if setCacheErr := SetCache(ctx, dedupCacheKey, []byte("1"), 1); setCacheErr != nil {
+		log.Printf("[ERROR] Failed saving cached personal notification %s: %s", dedupCacheKey, setCacheErr)
+	}
+
 	pushType := ResolveNotificationPushType("", effectiveSeverity, effectiveOrigin)
 	shouldPush := len(matchingNotifications) == 0 || wasRead || pushType == NotificationTypeCritical
 
@@ -2101,7 +2135,6 @@ func CreatePersonalNotification(ctx context.Context, title, description, referen
 					if setErr := SetNotification(bgCtx, n); setErr != nil {
 						log.Printf("[WARNING] Failed marking pushed personal notification %s as read for user %s: %v", n.Id, u.Id, setErr)
 					}
-					DeleteCache(bgCtx, fmt.Sprintf("notifications_%s", u.Id))
 				}
 			}(targetCopy, pushReq, notifCopy)
 		}
@@ -2207,7 +2240,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			exec, err := GetWorkflowExecution(ctx, notification.ExecutionId)
-			if err != nil {
+			if err != nil || exec == nil {
 				log.Printf("[ERROR] Failed getting execution %s in create notification api: %s", notification.ExecutionId, err)
 				resp.WriteHeader(400)
 				resp.Write([]byte(`{"success": false}`))
@@ -2279,7 +2312,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		notification.OrgId = orgId
 	}
 
-	isPersonal := notification.Personal || len(notification.UserId) > 0 || isPersonalNotificationRequest(request) || strings.EqualFold(notification.Origin, "personal")
+	isPersonal := notification.Personal || isPersonalNotificationRequest(request) || strings.EqualFold(notification.Origin, "personal")
 
 	if user.Role == "org-reader" && !(isPersonal && (len(notification.UserId) == 0 || notification.UserId == user.Id)) {
 		log.Printf("[INFO] User %s (%s) tried to create a notification without being admin", user.Username, user.Id)
@@ -2302,7 +2335,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 
 			// Check if user has access
 			org, err := GetOrg(ctx, orgId)
-			if err != nil {
+			if err != nil || org == nil {
 				log.Printf("[ERROR] Failed getting org %s in create notification api: %s", orgId, err)
 				resp.WriteHeader(500)
 				resp.Write([]byte(`{"success": false}`))
@@ -2369,7 +2402,6 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 			notification.Severity,
 			notification.Origin,
 		)
-		DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", targetUserId))
 	} else {
 		log.Printf("[DEBUG] User '%s' (%s) in org '%s' (%s) is creating notification '%s'", user.Username, user.Id, user.ActiveOrg.Name, orgId, notification.Title)
 		err = CreateOrgNotification(
@@ -2383,10 +2415,6 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 			notification.Origin,
 		)
 	}
-
-	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", orgId))
-	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", user.ActiveOrg.Id))
-	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", user.Id))
 
 	if err != nil {
 		log.Printf("[ERROR] Failed creating notification in create notification api: %s", err)

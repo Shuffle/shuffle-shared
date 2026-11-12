@@ -7,11 +7,13 @@ import (
 	"cloud.google.com/go/storage"
 	"context"
 	"crypto/md5"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	cache "github.com/patrickmn/go-cache"
+	uuid "github.com/satori/go.uuid"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -19,6 +21,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"io"
+	"io/ioutil"
 	"mime"
 	"mime/multipart"
 	"net"
@@ -27,6 +30,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -529,14 +533,16 @@ const datastoreTestAPIKey = "00000000-0000-4000-8000-000000000002"
 // Only the external Datastore service is substituted; requests use the real API handler.
 type datastoreAPIFixture struct {
 	pb.UnimplementedDatastoreServer
-	mu                  sync.Mutex
-	entities            []*pb.Entity
-	lookupErr           error
-	lookupErrKind       string
-	queryErr            error
-	queryErrKind        string
-	rejectWritesToKind  string
-	rejectDeletesToKind string
+	mu                      sync.Mutex
+	entities                []*pb.Entity
+	lookupErr               error
+	lookupErrKind           string
+	queryErr                error
+	queryErrKind            string
+	rejectWritesToKind      string
+	rejectDeletesToKind     string
+	orgCacheQueryCount      int
+	orgCacheStartAfterCount int
 }
 
 func (f *datastoreAPIFixture) Lookup(_ context.Context, req *pb.LookupRequest) (*pb.LookupResponse, error) {
@@ -567,14 +573,58 @@ func (f *datastoreAPIFixture) RunQuery(_ context.Context, req *pb.RunQueryReques
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	query := req.GetQuery()
+	if len(query.Kind) > 0 && query.Kind[0].Name == "org_cache" {
+		f.orgCacheQueryCount++
+		if len(query.StartCursor) > 0 {
+			f.orgCacheStartAfterCount++
+		}
+	}
 	if f.queryErr != nil && len(query.Kind) > 0 && query.Kind[0].Name == f.queryErrKind {
 		return nil, f.queryErr
 	}
-	batch := &pb.QueryResultBatch{MoreResults: pb.QueryResultBatch_NO_MORE_RESULTS}
+	matched := []*pb.Entity{}
 	for _, entity := range f.entities {
 		if entity.Key.Path[0].Kind == query.Kind[0].Name && datastoreFilterMatches(entity, query.Filter) {
-			batch.EntityResults = append(batch.EntityResults, &pb.EntityResult{Entity: entity})
+			matched = append(matched, entity)
 		}
+	}
+	if len(query.Order) > 0 && query.Order[0].Property != nil && query.Order[0].Property.Name == "Edited" && query.Order[0].Direction == pb.PropertyOrder_DESCENDING {
+		sort.SliceStable(matched, func(i, j int) bool {
+			ei := matched[i].Properties["Edited"].GetIntegerValue()
+			ej := matched[j].Properties["Edited"].GetIntegerValue()
+			if ei != ej {
+				return ei > ej
+			}
+			return matched[i].Key.Path[0].GetName() < matched[j].Key.Path[0].GetName()
+		})
+	}
+	if len(query.StartCursor) > 0 {
+		startKey := string(query.StartCursor)
+		startIdx := 0
+		for idx, entity := range matched {
+			if entity.Key.Path[0].GetName() == startKey {
+				startIdx = idx + 1
+				break
+			}
+		}
+		if startIdx <= len(matched) {
+			matched = matched[startIdx:]
+		}
+	}
+	if query.Limit != nil && query.Limit.Value > 0 && len(matched) > int(query.Limit.Value) {
+		matched = matched[:int(query.Limit.Value)]
+	}
+	batch := &pb.QueryResultBatch{MoreResults: pb.QueryResultBatch_NO_MORE_RESULTS}
+	var lastCursor []byte
+	for _, entity := range matched {
+		lastCursor = []byte(entity.Key.Path[0].GetName())
+		batch.EntityResults = append(batch.EntityResults, &pb.EntityResult{
+			Entity: entity,
+			Cursor: lastCursor,
+		})
+	}
+	if len(lastCursor) > 0 {
+		batch.EndCursor = lastCursor
 	}
 	return &pb.RunQueryResponse{Batch: batch}, nil
 }
@@ -675,7 +725,7 @@ func newDatastoreAPIFixture(t *testing.T) *datastoreAPIFixture {
 	project = ShuffleStorage{Dbclient: *client, CacheDb: true}
 	requestCache = cache.New(time.Minute, 0)
 	memcached = ""
-	user := User{Id: "release-test-user", Username: "scheduler@shuffler.io", ActiveOrg: OrgMini{Id: datastoreTestOrg}, Role: "admin"}
+	user := User{Id: "release-test-user", Username: "scheduler@shuffler.io", ActiveOrg: OrgMini{Id: datastoreTestOrg, Role: "admin"}, Role: "admin"}
 	data, err := json.Marshal(user)
 	if err != nil {
 		t.Fatal(err)
@@ -3804,5 +3854,1142 @@ func TestWorkflowReaderCannotCreateOrSave(t *testing.T) {
 		if (response.Code != http.StatusUnauthorized && response.Code != http.StatusForbidden) || body["success"] != false {
 			t.Fatalf("read-only user was allowed to mutate a workflow: HTTP %d, %#v", response.Code, body)
 		}
+	}
+}
+
+func TestOrgCacheLowAmountWithAndWithoutCategory(t *testing.T) {
+	categories := []struct {
+		name     string
+		category string
+	}{
+		{"without_category_empty", ""},
+		{"without_category_default", "default"},
+		{"with_category", "release_tests"},
+		{"with_protected_category", "protected"},
+	}
+
+	for _, catCase := range categories {
+		for _, count := range []int{0, 1, 3} {
+			t.Run(fmt.Sprintf("%s_count_%d", catCase.name, count), func(t *testing.T) {
+				fixture := newDatastoreAPIFixture(t)
+				fixture.lookupErrKind = ""
+				ctx := context.Background()
+
+				normalizedCat := normalizeOrgCacheCategory(catCase.category)
+				for i := 0; i < count; i++ {
+					keyName := fmt.Sprintf("key_%d", i)
+					cacheId := fmt.Sprintf("%s_%s", datastoreTestOrg, keyName)
+					if normalizedCat != "" {
+						cacheId = fmt.Sprintf("%s_%s", cacheId, normalizedCat)
+					}
+					item := CacheKeyData{
+						OrgId:    datastoreTestOrg,
+						Key:      keyName,
+						Category: normalizedCat,
+						Value:    fmt.Sprintf("val_%d", i),
+						Edited:   int64(1000 + i),
+						Created:  int64(1000 + i),
+					}
+					if _, err := project.Dbclient.Put(ctx, datastore.NameKey("org_cache", cacheId, nil), &item); err != nil {
+						t.Fatal(err)
+					}
+				}
+
+				fixture.mu.Lock()
+				fixture.orgCacheQueryCount = 0
+				fixture.orgCacheStartAfterCount = 0
+				fixture.mu.Unlock()
+
+				keys, cursor, err := GetAllCacheKeys(ctx, datastoreTestOrg, catCase.category, 100, "")
+				if err != nil {
+					t.Fatalf("GetAllCacheKeys failed: %v", err)
+				}
+				if len(keys) != count {
+					t.Fatalf("expected %d keys, got %d", count, len(keys))
+				}
+				if cursor != "" {
+					t.Fatalf("expected empty cursor when key count (%d) < max (100), got %q", count, cursor)
+				}
+
+				fixture.mu.Lock()
+				qCount := fixture.orgCacheQueryCount
+				saCount := fixture.orgCacheStartAfterCount
+				fixture.mu.Unlock()
+				if qCount != 1 || saCount != 0 {
+					t.Fatalf("expected exactly 1 query and 0 START_AFTER queries on initial load, got queryCount=%d startAfterCount=%d", qCount, saCount)
+				}
+
+				// Second call must hit cache even for 0 or 1 keys, issuing 0 Datastore queries
+				keys2, cursor2, err := GetAllCacheKeys(ctx, datastoreTestOrg, catCase.category, 100, "")
+				if err != nil {
+					t.Fatalf("second GetAllCacheKeys failed: %v", err)
+				}
+				if len(keys2) != count || cursor2 != "" {
+					t.Fatalf("second GetAllCacheKeys returned len=%d cursor=%q, want len=%d cursor=\"\"", len(keys2), cursor2, count)
+				}
+				// Also verify a smaller max (e.g. 50) reuses the cached complete category without hitting Datastore
+				keys50, cursor50, err := GetAllCacheKeys(ctx, datastoreTestOrg, catCase.category, 50, "")
+				if err != nil || len(keys50) != count || cursor50 != "" {
+					t.Fatalf("max=50 GetAllCacheKeys returned len=%d cursor=%q err=%v", len(keys50), cursor50, err)
+				}
+
+				fixture.mu.Lock()
+				qCountAfter := fixture.orgCacheQueryCount
+				fixture.mu.Unlock()
+				if qCountAfter != 1 {
+					t.Fatalf("expected cached reads to issue 0 additional queries, total queries=%d", qCountAfter)
+				}
+
+				// Write a new key via SetDatastoreKey and verify write-through list cache update (still 0 extra RunQuery)
+				if err := SetDatastoreKey(ctx, CacheKeyData{
+					OrgId:    datastoreTestOrg,
+					Key:      "live_upserted_key",
+					Category: catCase.category,
+					Value:    "live_upserted_val",
+				}); err != nil {
+					t.Fatalf("SetDatastoreKey failed: %v", err)
+				}
+
+				keysAfterUpsert, _, err := GetAllCacheKeys(ctx, datastoreTestOrg, catCase.category, 100, "")
+				if err != nil {
+					t.Fatalf("GetAllCacheKeys after upsert failed: %v", err)
+				}
+				if len(keysAfterUpsert) != count+1 || keysAfterUpsert[0].Key != "live_upserted_key" || keysAfterUpsert[0].Value != "live_upserted_val" {
+					t.Fatalf("expected write-through upsert at head of cached list, got %+v", keysAfterUpsert)
+				}
+
+				// Delete the key via DeleteKey and verify write-through list removal without extra RunQuery
+				delId := fmt.Sprintf("%s_live_upserted_key", datastoreTestOrg)
+				if normalizedCat != "" {
+					delId = fmt.Sprintf("%s_%s", delId, normalizedCat)
+				}
+				if err := DeleteKey(ctx, "org_cache", delId); err != nil {
+					t.Fatalf("DeleteKey failed: %v", err)
+				}
+
+				keysAfterDelete, _, err := GetAllCacheKeys(ctx, datastoreTestOrg, catCase.category, 100, "")
+				if err != nil {
+					t.Fatalf("GetAllCacheKeys after delete failed: %v", err)
+				}
+				if len(keysAfterDelete) != count {
+					t.Fatalf("expected %d keys after delete, got %d", count, len(keysAfterDelete))
+				}
+
+				fixture.mu.Lock()
+				finalQCount := fixture.orgCacheQueryCount
+				fixture.mu.Unlock()
+				if finalQCount != 1 {
+					t.Fatalf("expected write-through upsert and delete to require 0 additional org_cache queries, got total=%d", finalQCount)
+				}
+			})
+		}
+	}
+}
+
+func TestOrgCachePaginationStartAfterWithAndWithoutCategory(t *testing.T) {
+	for _, cat := range []string{"", "release_tests"} {
+		name := "without_category"
+		if cat != "" {
+			name = "with_category_" + cat
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := newDatastoreAPIFixture(t)
+			fixture.lookupErrKind = ""
+			ctx := context.Background()
+
+			const totalKeys = 250
+			const pageSize = 100
+			for i := 0; i < totalKeys; i++ {
+				keyName := fmt.Sprintf("paged_key_%03d", i)
+				cacheId := fmt.Sprintf("%s_%s", datastoreTestOrg, keyName)
+				if cat != "" {
+					cacheId = fmt.Sprintf("%s_%s", cacheId, cat)
+				}
+				item := CacheKeyData{
+					OrgId:    datastoreTestOrg,
+					Key:      keyName,
+					Category: cat,
+					Value:    fmt.Sprintf("paged_val_%03d", i),
+					Edited:   int64(2000 + i),
+					Created:  int64(2000 + i),
+				}
+				if _, err := project.Dbclient.Put(ctx, datastore.NameKey("org_cache", cacheId, nil), &item); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			fixture.mu.Lock()
+			fixture.orgCacheQueryCount = 0
+			fixture.orgCacheStartAfterCount = 0
+			fixture.mu.Unlock()
+
+			// Page 1 (first 100 items, no input cursor)
+			page1, cursor1, err := GetAllCacheKeys(ctx, datastoreTestOrg, cat, pageSize, "")
+			if err != nil {
+				t.Fatalf("page 1 GetAllCacheKeys failed: %v", err)
+			}
+			if len(page1) != 100 || cursor1 == "" {
+				t.Fatalf("page 1 expected 100 keys and non-empty cursor, got len=%d cursor=%q", len(page1), cursor1)
+			}
+
+			fixture.mu.Lock()
+			if fixture.orgCacheQueryCount != 1 || fixture.orgCacheStartAfterCount != 0 {
+				t.Fatalf("page 1 expected 1 query and 0 START_AFTER queries, got %d and %d", fixture.orgCacheQueryCount, fixture.orgCacheStartAfterCount)
+			}
+			fixture.mu.Unlock()
+
+			// Page 2 (next 100 items using cursor1 -> START_AFTER)
+			page2, cursor2, err := GetAllCacheKeys(ctx, datastoreTestOrg, cat, pageSize, cursor1)
+			if err != nil {
+				t.Fatalf("page 2 GetAllCacheKeys failed: %v", err)
+			}
+			if len(page2) != 100 || cursor2 == "" || cursor2 == cursor1 {
+				t.Fatalf("page 2 expected 100 keys and new cursor, got len=%d cursor=%q", len(page2), cursor2)
+			}
+
+			fixture.mu.Lock()
+			if fixture.orgCacheQueryCount != 2 || fixture.orgCacheStartAfterCount != 1 {
+				t.Fatalf("page 2 expected 2 total queries and 1 START_AFTER query, got %d and %d", fixture.orgCacheQueryCount, fixture.orgCacheStartAfterCount)
+			}
+			fixture.mu.Unlock()
+
+			// Page 3 (remaining 50 items using cursor2 -> START_AFTER; must NOT loop for a 4th query)
+			page3, cursor3, err := GetAllCacheKeys(ctx, datastoreTestOrg, cat, pageSize, cursor2)
+			if err != nil {
+				t.Fatalf("page 3 GetAllCacheKeys failed: %v", err)
+			}
+			if len(page3) != 50 || cursor3 != "" {
+				t.Fatalf("page 3 expected 50 keys and empty cursor, got len=%d cursor=%q", len(page3), cursor3)
+			}
+
+			fixture.mu.Lock()
+			if fixture.orgCacheQueryCount != 3 || fixture.orgCacheStartAfterCount != 2 {
+				t.Fatalf("page 3 expected 3 total queries and 2 START_AFTER queries (no extra loop when < max), got %d and %d", fixture.orgCacheQueryCount, fixture.orgCacheStartAfterCount)
+			}
+			fixture.mu.Unlock()
+
+			// Verify all 250 keys were returned in strict descending Edited order without duplicates
+			seen := map[string]bool{}
+			all := append(append([]CacheKeyData{}, page1...), page2...)
+			all = append(all, page3...)
+			for i, item := range all {
+				if seen[item.Key] {
+					t.Fatalf("duplicate key %q at index %d", item.Key, i)
+				}
+				seen[item.Key] = true
+				if i > 0 && all[i-1].Edited < item.Edited {
+					t.Fatalf("keys not sorted descending by Edited at %d: %d < %d", i, all[i-1].Edited, item.Edited)
+				}
+			}
+			if len(seen) != totalKeys {
+				t.Fatalf("expected %d unique keys across pages, got %d", totalKeys, len(seen))
+			}
+
+			// Re-fetching page 2 with cursor1 should hit cache without another Datastore query
+			page2Cached, _, err := GetAllCacheKeys(ctx, datastoreTestOrg, cat, pageSize, cursor1)
+			if err != nil || len(page2Cached) != 100 {
+				t.Fatalf("cached page 2 failed: len=%d err=%v", len(page2Cached), err)
+			}
+			fixture.mu.Lock()
+			if fixture.orgCacheQueryCount != 3 {
+				t.Fatalf("expected cached page 2 to issue 0 new queries, got %d", fixture.orgCacheQueryCount)
+			}
+			fixture.mu.Unlock()
+		})
+	}
+}
+
+func TestOrgCacheHighThroughputBulkWithAndWithoutCategory(t *testing.T) {
+	for _, cat := range []string{"", "default", "high_throughput_cat"} {
+		name := "category_" + cat
+		if cat == "" {
+			name = "without_category"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := newDatastoreAPIFixture(t)
+			fixture.lookupErrKind = ""
+			ctx := context.Background()
+
+			// Warm list cache when empty (0 keys)
+			initial, cursor, err := GetAllCacheKeys(ctx, datastoreTestOrg, cat, 100, "")
+			if err != nil || len(initial) != 0 || cursor != "" {
+				t.Fatalf("initial empty GetAllCacheKeys failed: len=%d cursor=%q err=%v", len(initial), cursor, err)
+			}
+			fixture.mu.Lock()
+			if fixture.orgCacheQueryCount != 1 {
+				t.Fatalf("expected 1 initial query, got %d", fixture.orgCacheQueryCount)
+			}
+			fixture.mu.Unlock()
+
+			// Bulk insert 650 keys in a single call (exercises >500 PutMulti chunking and write-through list cache)
+			const bulkCount = 650
+			bulkItems := make([]CacheKeyData, bulkCount)
+			for i := 0; i < bulkCount; i++ {
+				bulkItems[i] = CacheKeyData{
+					OrgId:    datastoreTestOrg,
+					Key:      fmt.Sprintf("bulk_key_%04d", i),
+					Category: cat,
+					Value:    fmt.Sprintf("bulk_val_%04d", i),
+				}
+			}
+			if _, err := SetDatastoreKeyBulk(ctx, bulkItems); err != nil {
+				t.Fatalf("SetDatastoreKeyBulk(650) failed: %v", err)
+			}
+
+			// Concurrent high-throughput bulk updates + concurrent GetAllCacheKeys & GetDatastoreKey reads
+			var wg sync.WaitGroup
+			errCh := make(chan error, 32)
+			for worker := 0; worker < 8; worker++ {
+				wg.Add(1)
+				go func(w int) {
+					defer wg.Done()
+					batch := make([]CacheKeyData, 25)
+					for j := 0; j < 25; j++ {
+						batch[j] = CacheKeyData{
+							OrgId:    datastoreTestOrg,
+							Key:      fmt.Sprintf("concurrent_w%d_k%02d", w, j),
+							Category: cat,
+							Value:    fmt.Sprintf("concurrent_val_w%d_k%02d", w, j),
+						}
+					}
+					if _, err := SetDatastoreKeyBulk(ctx, batch); err != nil {
+						errCh <- err
+						return
+					}
+					keys, _, err := GetAllCacheKeys(ctx, datastoreTestOrg, cat, 100, "")
+					if err != nil {
+						errCh <- err
+						return
+					}
+					if len(keys) != 100 {
+						errCh <- fmt.Errorf("expected 100 keys in cached list, got %d", len(keys))
+						return
+					}
+				}(worker)
+			}
+			wg.Wait()
+			close(errCh)
+			for err := range errCh {
+				t.Fatalf("concurrent bulk worker error: %v", err)
+			}
+
+			// Verify GetAllCacheKeys(100) still required 0 extra RunQuery calls because write-through kept the cache warm
+			fixture.mu.Lock()
+			qCount := fixture.orgCacheQueryCount
+			fixture.mu.Unlock()
+			if qCount != 1 {
+				t.Fatalf("expected write-through bulk updates to keep list cache warm with 1 total RunQuery, got %d", qCount)
+			}
+
+			// Verify individual keys written by SetDatastoreKeyBulk are cached with PublicAuthorization populated
+			sampleId := fmt.Sprintf("%s_bulk_key_0649", datastoreTestOrg)
+			singleKey, err := GetDatastoreKey(ctx, sampleId, cat)
+			if err != nil {
+				t.Fatalf("GetDatastoreKey for bulk key failed: %v", err)
+			}
+			if singleKey.Value != "bulk_val_0649" || singleKey.PublicAuthorization == "" {
+				t.Fatalf("expected cached bulk key with PublicAuthorization populated, got %+v", singleKey)
+			}
+		})
+	}
+}
+
+func TestOrgCacheCleanupProtectedKeysSkipsWhenAlreadySanitized(t *testing.T) {
+	fixture := newDatastoreAPIFixture(t)
+	fixture.lookupErrKind = ""
+	ctx := context.Background()
+
+	// 1. Execution with no unsanitized FINISHED/SUCCESS results must not query org_cache at all
+	execSanitized := WorkflowExecution{
+		ExecutionId:  "exec-sanitized",
+		ExecutionOrg: datastoreTestOrg,
+		Results: []ActionResult{
+			{Status: "EXECUTING", Result: "secret-123", Sanitized: false},
+			{Status: "SUCCESS", Result: "already-clean", Sanitized: true},
+		},
+	}
+	res := cleanupProtectedKeys(execSanitized)
+	if len(res.Results) != 2 {
+		t.Fatalf("unexpected results length: %d", len(res.Results))
+	}
+	fixture.mu.Lock()
+	if fixture.orgCacheQueryCount != 0 {
+		t.Fatalf("expected 0 org_cache queries when results do not need sanitization, got %d", fixture.orgCacheQueryCount)
+	}
+	fixture.mu.Unlock()
+
+	// 2. Execution with unsanitized SUCCESS result queries protected keys once and caches the empty list
+	execUnsanitized := WorkflowExecution{
+		ExecutionId:  "exec-unsanitized",
+		ExecutionOrg: datastoreTestOrg,
+		Results: []ActionResult{
+			{Status: "SUCCESS", Result: "some-output", Sanitized: false},
+		},
+	}
+	res1 := cleanupProtectedKeys(execUnsanitized)
+	if !res1.Results[0].Sanitized {
+		t.Fatal("expected result to be marked Sanitized")
+	}
+	_ = cleanupProtectedKeys(execUnsanitized)
+
+	fixture.mu.Lock()
+	if fixture.orgCacheQueryCount != 1 || fixture.orgCacheStartAfterCount != 0 {
+		t.Fatalf("expected 1 query and 0 START_AFTER queries across repeated cleanupProtectedKeys calls, got %d and %d", fixture.orgCacheQueryCount, fixture.orgCacheStartAfterCount)
+	}
+	fixture.mu.Unlock()
+
+	// 3. Add a protected key via SetDatastoreKey and verify cleanupProtectedKeys redacts its value without any new RunQuery
+	if err := SetDatastoreKey(ctx, CacheKeyData{
+		OrgId:    datastoreTestOrg,
+		Key:      "api_token",
+		Category: "protected",
+		Value:    "top-secret-protected-token",
+	}); err != nil {
+		t.Fatalf("SetDatastoreKey(protected) failed: %v", err)
+	}
+	execWithSecret := WorkflowExecution{
+		ExecutionId:  "exec-with-secret",
+		ExecutionOrg: datastoreTestOrg,
+		Results: []ActionResult{
+			{Status: "FINISHED", Result: "header: top-secret-protected-token", Sanitized: false},
+		},
+	}
+	resSecret := cleanupProtectedKeys(execWithSecret)
+	if strings.Contains(resSecret.Results[0].Result, "top-secret-protected-token") || !strings.Contains(resSecret.Results[0].Result, "***") {
+		t.Fatalf("expected protected value to be redacted, got %q", resSecret.Results[0].Result)
+	}
+	fixture.mu.Lock()
+	if fixture.orgCacheQueryCount != 1 {
+		t.Fatalf("expected write-through protected key to require 0 additional RunQuery calls, got %d", fixture.orgCacheQueryCount)
+	}
+	fixture.mu.Unlock()
+}
+
+func requestDatastoreAPI(handler http.HandlerFunc, method, path, body string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+datastoreTestAPIKey)
+	request.Header.Set("Org-Id", datastoreTestOrg)
+	response := httptest.NewRecorder()
+	handler(response, request)
+	return response
+}
+
+func TestDatastoreAllDataTypesAndOutputFormats(t *testing.T) {
+	fixture := newDatastoreAPIFixture(t)
+	fixture.lookupErrKind = ""
+	ctx := context.Background()
+
+	// 1. Test diverse data types via HandleSetDatastoreKey (bulk array, single-object JSON fallback, raw body fallback)
+	bulkPayload := `[
+		{"key": "str_key", "category": "types_cat", "value": "simple string value"},
+		{"key": "multiline_key", "category": "types_cat", "value": "alpha\nbeta\ngamma"},
+		{"key": "csv_key", "category": "types_cat", "value": "one,two,three"},
+		{"key": "json_obj_key", "category": "types_cat", "value": "{\"host\":\"db-01\",\"port\":5432,\"nested\":{\"active\":true}}"},
+		{"key": "json_arr_key", "category": "types_cat", "value": "[{\"id\":\"1\",\"score\":95},{\"id\":\"2\",\"score\":40}]"}
+	]`
+	resp := requestDatastoreAPI(HandleSetDatastoreKey, http.MethodPost, "/api/v1/orgs/"+datastoreTestOrg+"/datastore", bulkPayload)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("bulk HandleSetDatastoreKey failed: HTTP %d: %s", resp.Code, resp.Body.String())
+	}
+
+	// Single-object fallback with map value (non-string value in CacheKeyDataFallback)
+	singleMapPayload := `{"key": "fallback_map_key", "category": "types_cat", "value": {"env": "prod", "replicas": 3, "enabled": true}}`
+	resp = requestDatastoreAPI(HandleSetDatastoreKey, http.MethodPost, "/api/v1/orgs/"+datastoreTestOrg+"/datastore", singleMapPayload)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("single-object map HandleSetDatastoreKey failed: HTTP %d: %s", resp.Code, resp.Body.String())
+	}
+
+	// Single-object fallback with array value
+	singleArrPayload := `{"key": "fallback_arr_key", "category": "types_cat", "value": ["item1", "item2", 123, false]}`
+	resp = requestDatastoreAPI(HandleSetDatastoreKey, http.MethodPost, "/api/v1/orgs/"+datastoreTestOrg+"/datastore", singleArrPayload)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("single-object array HandleSetDatastoreKey failed: HTTP %d: %s", resp.Code, resp.Body.String())
+	}
+
+	// Special characters & spaces in key and category + long key (>127 chars)
+	longKeyName := "long_key_" + strings.Repeat("x", 140)
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      "key with spaces & symbols!",
+			Category: "My Special Category",
+			Value:    "special_value_123",
+		},
+	}); err != nil {
+		t.Fatalf("SetDatastoreKeyBulk(special key) failed: %v", err)
+	}
+
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      longKeyName,
+			Category: "types_cat",
+			Value:    "long_key_value",
+		},
+	}); err != nil {
+		t.Fatalf("SetDatastoreKeyBulk(long key) failed: %v", err)
+	}
+
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      "protected_secret",
+			Category: "protected",
+			Value:    "{\"api_secret\":\"super-secret-value\"}",
+		},
+	}); err != nil {
+		t.Fatalf("SetDatastoreKeyBulk(protected) failed: %v", err)
+	}
+
+	// Verify special category normalization and retrieval
+	gotSpecial, err := GetDatastoreKey(ctx, datastoreTestOrg+"_key with spaces & symbols!", "My Special Category")
+	if err != nil || gotSpecial.Value != "special_value_123" || gotSpecial.Category != "my_special_category" {
+		t.Fatalf("unexpected special key result: err=%v, got=%+v", err, gotSpecial)
+	}
+
+	// Verify >127 char key round-trip
+	gotLong, err := GetDatastoreKey(ctx, datastoreTestOrg+"_"+longKeyName, "types_cat")
+	if err != nil || gotLong.Value != "long_key_value" || gotLong.Key != longKeyName {
+		t.Fatalf("unexpected long key result: err=%v, got=%+v", err, gotLong)
+	}
+
+	// Verify protected key is encrypted in Datastore entity but decrypted by GetDatastoreKey and GetAllCacheKeys
+	gotProtected, err := GetDatastoreKey(ctx, datastoreTestOrg+"_protected_secret", "protected")
+	if err != nil || gotProtected.Value != "{\"api_secret\":\"super-secret-value\"}" || gotProtected.Encrypted {
+		t.Fatalf("expected decrypted protected key from GetDatastoreKey, err=%v, got=%+v", err, gotProtected)
+	}
+	protectedList, _, err := GetAllCacheKeys(ctx, datastoreTestOrg, "protected", 100, "")
+	if err != nil || len(protectedList) == 0 {
+		t.Fatalf("GetAllCacheKeys(protected) failed: err=%v, len=%d", err, len(protectedList))
+	}
+	foundProtected := false
+	for _, pk := range protectedList {
+		if pk.Key == "protected_secret" {
+			foundProtected = true
+			if pk.Value != "{\"api_secret\":\"super-secret-value\"}" || pk.Encrypted {
+				t.Fatalf("expected decrypted protected key in list, got %+v", pk)
+			}
+		}
+	}
+	if !foundProtected {
+		t.Fatal("protected_secret not found in GetAllCacheKeys(protected)")
+	}
+
+	// 2. Test HandleGetCacheKey output modes (?type=text, ?type=raw, ?type=json for JSON object, JSON array, and newline text)
+	getKey := func(key, cat, querySuffix string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(CacheKeyDataMini{
+			OrgId:    datastoreTestOrg,
+			Key:      key,
+			Category: cat,
+		})
+		return requestDatastoreAPI(HandleGetCacheKey, http.MethodPost, "/api/v1/orgs/"+datastoreTestOrg+"/get_cache"+querySuffix, string(body))
+	}
+
+	rawResp := getKey("str_key", "types_cat", "?type=raw")
+	if rawResp.Code != http.StatusOK || rawResp.Body.String() != "simple string value" {
+		t.Fatalf("expected raw string output, got HTTP %d: %q", rawResp.Code, rawResp.Body.String())
+	}
+
+	jsonObjResp := getKey("fallback_map_key", "types_cat", "?type=json")
+	if jsonObjResp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for ?type=json on JSON object, got %d: %s", jsonObjResp.Code, jsonObjResp.Body.String())
+	}
+	var parsedMap map[string]interface{}
+	if err := json.Unmarshal(jsonObjResp.Body.Bytes(), &parsedMap); err != nil || parsedMap["env"] != "prod" {
+		t.Fatalf("unexpected ?type=json object output: err=%v, map=%+v", err, parsedMap)
+	}
+
+	jsonArrResp := getKey("json_arr_key", "types_cat", "?type=json")
+	if jsonArrResp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for ?type=json on JSON array, got %d: %s", jsonArrResp.Code, jsonArrResp.Body.String())
+	}
+	var parsedArr []map[string]interface{}
+	if err := json.Unmarshal(jsonArrResp.Body.Bytes(), &parsedArr); err != nil || len(parsedArr) != 2 {
+		t.Fatalf("unexpected ?type=json array output: err=%v, arr=%+v", err, parsedArr)
+	}
+
+	multilineJsonResp := getKey("multiline_key", "types_cat", "?type=json")
+	if multilineJsonResp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for ?type=json on multiline text, got %d", multilineJsonResp.Code)
+	}
+	var parsedLines []string
+	if err := json.Unmarshal(multilineJsonResp.Body.Bytes(), &parsedLines); err != nil || len(parsedLines) != 3 || parsedLines[0] != "alpha" {
+		t.Fatalf("expected newline text converted to JSON string array, got err=%v, lines=%+v", err, parsedLines)
+	}
+
+	// 3. Test HandleListCacheKeys output modes (?type=ndjson, ?type=values, ?type=keys, ?type=meta, ?key=, ?search=)
+	ndjsonResp := requestDatastoreAPI(HandleListCacheKeys, http.MethodGet, "/api/v1/orgs/"+datastoreTestOrg+"/list_cache?category=types_cat&type=ndjson", "")
+	if ndjsonResp.Code != http.StatusOK || !strings.Contains(ndjsonResp.Body.String(), "simple string value") {
+		t.Fatalf("unexpected ?type=ndjson response: HTTP %d: %s", ndjsonResp.Code, ndjsonResp.Body.String())
+	}
+
+	valuesResp := requestDatastoreAPI(HandleListCacheKeys, http.MethodGet, "/api/v1/orgs/"+datastoreTestOrg+"/list_cache?category=types_cat&type=values", "")
+	if valuesResp.Code != http.StatusOK {
+		t.Fatalf("unexpected ?type=values status: %d", valuesResp.Code)
+	}
+	var valuesArr []interface{}
+	if err := json.Unmarshal(valuesResp.Body.Bytes(), &valuesArr); err != nil || len(valuesArr) < 7 {
+		t.Fatalf("unexpected ?type=values array: err=%v, len=%d", err, len(valuesArr))
+	}
+
+	keysResp := requestDatastoreAPI(HandleListCacheKeys, http.MethodGet, "/api/v1/orgs/"+datastoreTestOrg+"/list_cache?category=types_cat&type=keys", "")
+	if keysResp.Code != http.StatusOK {
+		t.Fatalf("unexpected ?type=keys status: %d", keysResp.Code)
+	}
+	rawKeysStr := keysResp.Body.String()
+	if !strings.Contains(rawKeysStr, "str_key") {
+		t.Fatalf("unexpected ?type=keys output: %q", rawKeysStr)
+	}
+
+	metaResp := requestDatastoreAPI(HandleListCacheKeys, http.MethodGet, "/api/v1/orgs/"+datastoreTestOrg+"/list_cache?category=types_cat&type=meta", "")
+	if metaResp.Code != http.StatusOK {
+		t.Fatalf("unexpected ?type=meta status: %d", metaResp.Code)
+	}
+	var metaList []CacheKeyData
+	if err := json.Unmarshal(metaResp.Body.Bytes(), &metaList); err != nil || len(metaList) < 7 {
+		t.Fatalf("unexpected ?type=meta response: err=%v, len=%d", err, len(metaList))
+	}
+
+	// ?key= existing and non-existent
+	singleKeyListResp := requestDatastoreAPI(HandleListCacheKeys, http.MethodGet, "/api/v1/orgs/"+datastoreTestOrg+"/list_cache?category=types_cat&key=str_key", "")
+	if singleKeyListResp.Code != http.StatusOK {
+		t.Fatalf("unexpected ?key=str_key status: %d", singleKeyListResp.Code)
+	}
+	var singleKeyReturn CacheReturn
+	if err := json.Unmarshal(singleKeyListResp.Body.Bytes(), &singleKeyReturn); err != nil || !singleKeyReturn.Success || len(singleKeyReturn.Keys) != 1 || singleKeyReturn.Keys[0].Key != "str_key" {
+		t.Fatalf("unexpected ?key=str_key return: err=%v, ret=%+v", err, singleKeyReturn)
+	}
+
+	missingKeyListResp := requestDatastoreAPI(HandleListCacheKeys, http.MethodGet, "/api/v1/orgs/"+datastoreTestOrg+"/list_cache?category=types_cat&key=does_not_exist", "")
+	if missingKeyListResp.Code != http.StatusOK {
+		t.Fatalf("unexpected ?key=does_not_exist status: %d", missingKeyListResp.Code)
+	}
+	var missingKeyReturn CacheReturn
+	if err := json.Unmarshal(missingKeyListResp.Body.Bytes(), &missingKeyReturn); err != nil || missingKeyReturn.Success || len(missingKeyReturn.Keys) != 0 {
+		t.Fatalf("expected empty keys and Success=false for missing ?key=, got err=%v, ret=%+v", err, missingKeyReturn)
+	}
+
+	// ?search= prefix search (case-insensitive)
+	searchResp := requestDatastoreAPI(HandleListCacheKeys, http.MethodGet, "/api/v1/orgs/"+datastoreTestOrg+"/list_cache?category=types_cat&search=FALLBACK_", "")
+	if searchResp.Code != http.StatusOK {
+		t.Fatalf("unexpected ?search=FALLBACK_ status: %d", searchResp.Code)
+	}
+	var searchReturn CacheReturn
+	if err := json.Unmarshal(searchResp.Body.Bytes(), &searchReturn); err != nil || len(searchReturn.Keys) != 2 {
+		t.Fatalf("expected 2 keys matching prefix FALLBACK_, got err=%v, keys=%+v", err, searchReturn.Keys)
+	}
+
+	// 4. Delete key with mixed-case category via HandleDeleteCacheKeyPost
+	delBody, _ := json.Marshal(CacheKeyData{
+		OrgId:    datastoreTestOrg,
+		Key:      "key with spaces & symbols!",
+		Category: "My Special Category",
+	})
+	delResp := requestDatastoreAPI(HandleDeleteCacheKeyPost, http.MethodDelete, "/api/v1/orgs/"+datastoreTestOrg+"/delete_cache", string(delBody))
+	if delResp.Code != http.StatusOK {
+		t.Fatalf("HandleDeleteCacheKeyPost failed for mixed-case category: HTTP %d: %s", delResp.Code, delResp.Body.String())
+	}
+	afterDelList, _, err := GetAllCacheKeys(ctx, datastoreTestOrg, "My Special Category", 100, "")
+	if err != nil || len(afterDelList) != 0 {
+		t.Fatalf("expected 0 keys after deleting from 'My Special Category', got err=%v, keys=%+v", err, afterDelList)
+	}
+}
+
+func TestDatastoreRLSSecurityRulesEndToEnd(t *testing.T) {
+	fixture := newDatastoreAPIFixture(t)
+	fixture.lookupErrKind = ""
+	ctx := context.Background()
+
+	// 1. Category with allowed_fields merge rule
+	if err := SetDatastoreCategoryConfig(ctx, DatastoreCategoryUpdate{
+		OrgId:    datastoreTestOrg,
+		Category: "rls_allowed_fields",
+		Automations: []DatastoreAutomation{
+			{
+				Name:    "Security Rules",
+				Enabled: true,
+				Options: []DatastoreAutomationOption{
+					{
+						Key:   "rule",
+						Value: `merge if allowed_fields["status", "tags", "metrics"]`,
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SetDatastoreCategoryConfig(rls_allowed_fields) failed: %v", err)
+	}
+
+	// Initial insert creates the document with all fields
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      "inc_1",
+			Category: "rls_allowed_fields",
+			Value:    `{"id":"inc_1","status":"open","owner":"alice","tags":["t1"],"metrics":{"score":10,"raw":"keep"}}`,
+		},
+	}); err != nil {
+		t.Fatalf("initial SetDatastoreKeyBulk failed: %v", err)
+	}
+
+	// Second update tries to modify allowed fields ("status", "tags", "metrics") AND unauthorized fields ("owner", "hacked")
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      "inc_1",
+			Category: "rls_allowed_fields",
+			Value:    `{"status":"triaged","owner":"mallory","hacked":true,"tags":["t2"],"metrics":{"score":85}}`,
+		},
+	}); err != nil {
+		t.Fatalf("second SetDatastoreKeyBulk failed: %v", err)
+	}
+
+	gotInc, err := GetDatastoreKey(ctx, datastoreTestOrg+"_inc_1", "rls_allowed_fields")
+	if err != nil {
+		t.Fatalf("GetDatastoreKey(inc_1) failed: %v", err)
+	}
+	var incDoc map[string]interface{}
+	if err := json.Unmarshal([]byte(gotInc.Value), &incDoc); err != nil {
+		t.Fatalf("failed unmarshalling merged JSON: %v (%s)", err, gotInc.Value)
+	}
+	if incDoc["status"] != "triaged" || incDoc["owner"] != "alice" || incDoc["hacked"] != nil {
+		t.Fatalf("expected RLS allowed_fields to update status='triaged', preserve owner='alice', and reject hacked, got %+v", incDoc)
+	}
+	metricsMap, _ := incDoc["metrics"].(map[string]interface{})
+	if metricsMap["score"] != float64(85) || metricsMap["raw"] != "keep" {
+		t.Fatalf("expected metrics.score=85 and metrics.raw='keep', got %+v", metricsMap)
+	}
+
+	// Verify IgnoreSecurityRules: true bypasses RLS
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:               datastoreTestOrg,
+			Key:                 "inc_1",
+			Category:            "rls_allowed_fields",
+			IgnoreSecurityRules: true,
+			Value:               `{"id":"inc_1","status":"closed","owner":"bob"}`,
+		},
+	}); err != nil {
+		t.Fatalf("IgnoreSecurityRules SetDatastoreKeyBulk failed: %v", err)
+	}
+	gotBypass, err := GetDatastoreKey(ctx, datastoreTestOrg+"_inc_1", "rls_allowed_fields")
+	if err != nil {
+		t.Fatalf("GetDatastoreKey after bypass failed: %v", err)
+	}
+	var bypassDoc map[string]interface{}
+	_ = json.Unmarshal([]byte(gotBypass.Value), &bypassDoc)
+	if bypassDoc["owner"] != "bob" || bypassDoc["status"] != "closed" {
+		t.Fatalf("expected IgnoreSecurityRules=true to allow owner='bob', got %+v", bypassDoc)
+	}
+
+	// 2. Category with `overwrite if same_shape; deny if has_deleted_field`
+	if err := SetDatastoreCategoryConfig(ctx, DatastoreCategoryUpdate{
+		OrgId:    datastoreTestOrg,
+		Category: "rls_no_delete",
+		Automations: []DatastoreAutomation{
+			{
+				Name:    "security_rules",
+				Enabled: true,
+				Options: []DatastoreAutomationOption{
+					{
+						Key:   "rule",
+						Value: `overwrite if same_shape; deny if has_deleted_field`,
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SetDatastoreCategoryConfig(rls_no_delete) failed: %v", err)
+	}
+
+	// Initial insert with pretty whitespace to also test canonicalized deny handling
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      "asset_1",
+			Category: "rls_no_delete",
+			Value:    "{\n  \"hostname\": \"srv-01\",\n  \"critical\": true,\n  \"vulns\": [{\"id\": \"CVE-1\", \"severity\": \"high\"}]\n}",
+		},
+	}); err != nil {
+		t.Fatalf("initial asset_1 write failed: %v", err)
+	}
+
+	// Update with different schema -> shape doesn't match -> denied!
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      "asset_1",
+			Category: "rls_no_delete",
+			Value:    `{"hostname": "srv-01-renamed"}`,
+		},
+	}); err != nil {
+		t.Fatalf("denied asset_1 write failed: %v", err)
+	}
+
+	gotAsset, err := GetDatastoreKey(ctx, datastoreTestOrg+"_asset_1", "rls_no_delete")
+	if err != nil {
+		t.Fatalf("GetDatastoreKey(asset_1) failed: %v", err)
+	}
+	var assetDoc map[string]interface{}
+	_ = json.Unmarshal([]byte(gotAsset.Value), &assetDoc)
+	if assetDoc["hostname"] != "srv-01" || assetDoc["critical"] != true {
+		t.Fatalf("expected denied update to preserve hostname='srv-01' and critical=true, got %+v", assetDoc)
+	}
+	// Verify datastore_unchanged_* was set because the RLS policy denied the write
+	unchangedKey := fmt.Sprintf("datastore_unchanged_%s_%s_%s", datastoreTestOrg, "rls_no_delete", "asset_1")
+	if cachedUnchanged, err := GetCache(ctx, unchangedKey); err != nil || cachedUnchanged == nil {
+		t.Fatalf("expected datastore_unchanged cache to be set when RLS denies an update, got err=%v", err)
+	}
+
+	// Update that preserves all fields and adds a keyed array item -> allowed & smart-merged!
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      "asset_1",
+			Category: "rls_no_delete",
+			Value:    `{"hostname": "srv-01", "critical": true, "vulns": [{"id": "CVE-1", "severity": "critical"}, {"id": "CVE-2", "severity": "medium"}]}`,
+		},
+	}); err != nil {
+		t.Fatalf("allowed asset_1 write failed: %v", err)
+	}
+	gotAsset2, _ := GetDatastoreKey(ctx, datastoreTestOrg+"_asset_1", "rls_no_delete")
+	var assetDoc2 map[string]interface{}
+	_ = json.Unmarshal([]byte(gotAsset2.Value), &assetDoc2)
+	vulnsArr, _ := assetDoc2["vulns"].([]interface{})
+	if len(vulnsArr) != 2 {
+		t.Fatalf("expected keyed array merge to produce 2 vulns, got %+v", vulnsArr)
+	}
+}
+
+func TestDatastoreAutomationsEndToEnd(t *testing.T) {
+	fixture := newDatastoreAPIFixture(t)
+	fixture.lookupErrKind = ""
+	ctx := context.Background()
+
+	// Seed Org with an admin user that has an API key so enrich and run_ai_agent can authenticate
+	adminUserId := "admin-user-1"
+	adminUser := User{
+		Id:        adminUserId,
+		Username:  "admin@example.com",
+		Role:      "admin",
+		ApiKey:    datastoreTestAPIKey,
+		ActiveOrg: OrgMini{Id: datastoreTestOrg, Role: "admin"},
+	}
+	userBytes, _ := json.Marshal(adminUser)
+	_ = SetCache(ctx, fmt.Sprintf("Users_%s", adminUserId), userBytes, 60)
+	_ = SetCache(ctx, fmt.Sprintf("users_%s", adminUserId), userBytes, 60)
+	if _, err := project.Dbclient.Put(ctx, datastore.NameKey("Users", adminUserId, nil), &adminUser); err != nil {
+		t.Fatalf("failed seeding admin User: %v", err)
+	}
+	orgObj := Org{
+		Id:   datastoreTestOrg,
+		Name: "Automation Test Org",
+		Users: []User{
+			adminUser,
+		},
+	}
+	orgBytes, _ := json.Marshal(orgObj)
+	_ = SetCache(ctx, fmt.Sprintf("Organizations_%s", datastoreTestOrg), orgBytes, 60)
+	_ = SetCache(ctx, fmt.Sprintf("organizations_%s", datastoreTestOrg), orgBytes, 60)
+	if _, err := project.Dbclient.Put(ctx, datastore.NameKey("Organizations", datastoreTestOrg, nil), &orgObj); err != nil {
+		t.Fatalf("failed seeding Org: %v", err)
+	}
+
+	var mu sync.Mutex
+	receivedRequests := make(map[string][]string)
+	reqSignal := make(chan string, 32)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := ioutil.ReadAll(r.Body)
+		mu.Lock()
+		receivedRequests[r.URL.Path] = append(receivedRequests[r.URL.Path], string(bodyBytes))
+		mu.Unlock()
+		select {
+		case reqSignal <- r.URL.Path:
+		default:
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"success": true}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv("BASE_URL", srv.URL)
+	t.Setenv("SHUFFLE_CLOUDRUN_URL", "")
+
+	targetWorkflowId := "11111111-2222-3333-4444-555555555555"
+	targetWebhookUrl := "https://webhook.example.com/hook"
+	if err := SetDatastoreCategoryConfig(ctx, DatastoreCategoryUpdate{
+		OrgId:    datastoreTestOrg,
+		Category: "auto_cat",
+		Automations: []DatastoreAutomation{
+			{
+				Name:    "run_workflow",
+				Enabled: true,
+				Options: []DatastoreAutomationOption{
+					{Key: "workflow_id", Value: targetWorkflowId},
+				},
+			},
+			{
+				Name:    "send_webhook",
+				Enabled: true,
+				Options: []DatastoreAutomationOption{
+					{Key: "webhook_url", Value: targetWebhookUrl},
+				},
+			},
+			{
+				Name:    "enrich",
+				Enabled: true,
+				Options: []DatastoreAutomationOption{},
+			},
+			{
+				Name:    "run_ai_agent",
+				Enabled: true,
+				Options: []DatastoreAutomationOption{
+					{
+						Key:      "action_triage",
+						Value:    "Analyze the alert and summarize severity",
+						Template: "incident-handler",
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SetDatastoreCategoryConfig(auto_cat) failed: %v", err)
+	}
+
+	// Trigger all 4 automations via SetDatastoreKeyBulk
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      "alert_101",
+			Category: "auto_cat",
+			Value:    `{"alert":"suspicious login","ip":"198.51.100.42"}`,
+		},
+	}); err != nil {
+		t.Fatalf("SetDatastoreKeyBulk(alert_101) failed: %v", err)
+	}
+
+	// Wait for all 4 HTTP requests to arrive at the test server
+	expectedPaths := 4
+	timeout := time.After(3 * time.Second)
+	for i := 0; i < expectedPaths; i++ {
+		select {
+		case <-reqSignal:
+		case <-timeout:
+			mu.Lock()
+			t.Fatalf("timed out waiting for automation requests; received so far: %+v", receivedRequests)
+			mu.Unlock()
+		}
+	}
+
+	// Compute deterministic enrich workflow ID
+	seedString := fmt.Sprintf("%s_Enable Threat feeds_webhook", datastoreTestOrg)
+	hash := sha1.New()
+	hash.Write([]byte(seedString))
+	uuidBytes := make([]byte, 16)
+	copy(uuidBytes, hash.Sum(nil))
+	enrichWorkflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
+	mu.Lock()
+	wfReqs := receivedRequests["/api/v1/workflows/"+targetWorkflowId+"/execute"]
+	webhookReqs := receivedRequests["/api/v1/apps/HTTP/run"]
+	enrichReqs := receivedRequests["/api/v1/workflows/"+enrichWorkflowId+"/execute"]
+	agentReqs := receivedRequests["/api/v1/agent"]
+	mu.Unlock()
+
+	if len(wfReqs) != 1 || !strings.Contains(wfReqs[0], "shuffle_datastore") || !strings.Contains(wfReqs[0], "alert_101") {
+		t.Fatalf("expected 1 run_workflow request with shuffle_datastore metadata, got %+v", wfReqs)
+	}
+	if len(webhookReqs) != 1 || !strings.Contains(webhookReqs[0], targetWebhookUrl) || !strings.Contains(webhookReqs[0], "alert_101") {
+		t.Fatalf("expected 1 send_webhook request with target URL and key metadata, got %+v", webhookReqs)
+	}
+	if len(enrichReqs) != 1 || !strings.Contains(enrichReqs[0], "datastore|auto_cat|alert_101") {
+		t.Fatalf("expected 1 enrich workflow request, got %+v", enrichReqs)
+	}
+	if len(agentReqs) != 1 || !strings.Contains(agentReqs[0], "incident-handler") || !strings.Contains(agentReqs[0], "Analyze the alert") {
+		t.Fatalf("expected 1 run_ai_agent MCP request, got %+v", agentReqs)
+	}
+
+	// Verify run_ai_agent tagged alert_101 with "agent-action_triage" via SetDatastoreKeyMeta
+	updatedKey, err := GetDatastoreKey(ctx, datastoreTestOrg+"_alert_101", "auto_cat")
+	if err != nil || !ArrayContains(updatedKey.Tags, "agent-action_triage") {
+		t.Fatalf("expected alert_101 to have tag 'agent-action_triage', got err=%v, tags=%+v", err, updatedKey.Tags)
+	}
+
+	// Verify writing an unchanged value sets datastore_unchanged_* and skips automations even when cooldown is cleared
+	DeleteCache(ctx, fmt.Sprintf("automation_wait_run_workflow_%s_auto_cat_alert_101", datastoreTestOrg))
+	DeleteCache(ctx, fmt.Sprintf("workflow_wait_%s_auto_cat_alert_101_%s", datastoreTestOrg, targetWorkflowId))
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      "alert_101",
+			Category: "auto_cat",
+			Value:    `{"alert":"suspicious login","ip":"198.51.100.42"}`,
+		},
+	}); err != nil {
+		t.Fatalf("unchanged SetDatastoreKeyBulk failed: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	wfCountAfterUnchanged := len(receivedRequests["/api/v1/workflows/"+targetWorkflowId+"/execute"])
+	mu.Unlock()
+	if wfCountAfterUnchanged != 1 {
+		t.Fatalf("expected unchanged value write to skip run_workflow, got %d requests", wfCountAfterUnchanged)
+	}
+}
+
+func TestDatastoreEnrichmentsTagsRevisionsSuborgAndTimeout(t *testing.T) {
+	fixture := newDatastoreAPIFixture(t)
+	fixture.lookupErrKind = ""
+	ctx := context.Background()
+
+	// 1. Observable Enrichments merging & preservation across updates
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      "ioc_host_1",
+			Category: "enrich_cat",
+			Value:    `{"hostname":"web-prod-1"}`,
+			Tags:     []string{"initial-tag"},
+			Enrichments: []Observable{
+				{Type: "ipv4", Value: "203.0.113.10"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("initial enrichment write failed: %v", err)
+	}
+
+	k1, err := GetDatastoreKey(ctx, datastoreTestOrg+"_ioc_host_1", "enrich_cat")
+	if err != nil || len(k1.Enrichments) != 1 || k1.Enrichments[0].FirstSeen == 0 {
+		t.Fatalf("expected 1 enrichment with FirstSeen populated, got err=%v, k1=%+v", err, k1)
+	}
+
+	// Enrichment-only update (empty Value) with existing observable + new observable
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      "ioc_host_1",
+			Category: "enrich_cat",
+			Value:    "",
+			Enrichments: []Observable{
+				{Type: "ipv4", Value: "203.0.113.10"},
+				{Type: "domain", Value: "evil.example.org"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("second enrichment write failed: %v", err)
+	}
+
+	k2, err := GetDatastoreKey(ctx, datastoreTestOrg+"_ioc_host_1", "enrich_cat")
+	if err != nil || k2.Value != `{"hostname":"web-prod-1"}` || len(k2.Enrichments) != 2 {
+		t.Fatalf("expected Value preserved and 2 merged enrichments, got err=%v, k2=%+v", err, k2)
+	}
+
+	// Value-only update (empty Enrichments) preserves existing Enrichments & Tags
+	if _, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{
+		{
+			OrgId:    datastoreTestOrg,
+			Key:      "ioc_host_1",
+			Category: "enrich_cat",
+			Value:    `{"hostname":"web-prod-1","patched":true}`,
+		},
+	}); err != nil {
+		t.Fatalf("third enrichment write failed: %v", err)
+	}
+	k3, err := GetDatastoreKey(ctx, datastoreTestOrg+"_ioc_host_1", "enrich_cat")
+	if err != nil || len(k3.Enrichments) != 2 || !ArrayContains(k3.Tags, "initial-tag") {
+		t.Fatalf("expected existing enrichments and tags preserved on value-only update, got err=%v, k3=%+v", err, k3)
+	}
+
+	// 2. SetDatastoreKeyMeta filters "none" tag and updates list cache in-place
+	_, _, _ = GetAllCacheKeys(ctx, datastoreTestOrg, "enrich_cat", 100, "")
+	k3.Tags = []string{"none", "verified", "agent-triage"}
+	if err := SetDatastoreKeyMeta(ctx, *k3); err != nil {
+		t.Fatalf("SetDatastoreKeyMeta failed: %v", err)
+	}
+	listedAfterMeta, _, err := GetAllCacheKeys(ctx, datastoreTestOrg, "enrich_cat", 100, "")
+	if err != nil || len(listedAfterMeta) != 1 || ArrayContains(listedAfterMeta[0].Tags, "none") || !ArrayContains(listedAfterMeta[0].Tags, "verified") {
+		t.Fatalf("expected SetDatastoreKeyMeta to filter 'none' tag and update list cache, got err=%v, list=%+v", err, listedAfterMeta)
+	}
+
+	// 3. Revisions: SetDatastoreKeyRevision & GetDatastoreRevisions
+	if err := SetDatastoreKeyRevision(ctx, *k1); err != nil {
+		t.Fatalf("SetDatastoreKeyRevision(k1) failed: %v", err)
+	}
+	k3.Edited = k1.Edited + 10
+	if err := SetDatastoreKeyRevision(ctx, *k3); err != nil {
+		t.Fatalf("SetDatastoreKeyRevision(k3) failed: %v", err)
+	}
+	revisions, err := GetDatastoreRevisions(ctx, "ioc_host_1", "enrich_cat", datastoreTestOrg)
+	if err != nil || len(revisions) < 2 {
+		t.Fatalf("expected at least 2 revisions for ioc_host_1, got err=%v, len=%d", err, len(revisions))
+	}
+
+	// 4. SuborgDistribution via HandleCacheConfig and parent-to-child GetAllCacheKeys inheritance
+	childOrgId := "00000000-0000-4000-8000-000000000099"
+	childOrg := Org{
+		Id:         childOrgId,
+		Name:       "Child Org",
+		CreatorOrg: datastoreTestOrg,
+	}
+	childOrgBytes, _ := json.Marshal(childOrg)
+	_ = SetCache(ctx, fmt.Sprintf("Organizations_%s", childOrgId), childOrgBytes, 60)
+	_ = SetCache(ctx, fmt.Sprintf("organizations_%s", childOrgId), childOrgBytes, 60)
+	_, _ = project.Dbclient.Put(ctx, datastore.NameKey("Organizations", childOrgId, nil), &childOrg)
+
+	distBody := fmt.Sprintf(`{"key":"ioc_host_1","category":"enrich_cat","action":"suborg_distribute","selected_suborgs":["%s"]}`, childOrgId)
+	distResp := requestDatastoreAPI(HandleCacheConfig, http.MethodPost, "/api/v1/orgs/"+datastoreTestOrg+"/cache_config", distBody)
+	if distResp.Code != http.StatusOK {
+		t.Fatalf("HandleCacheConfig(suborg_distribute) failed: HTTP %d: %s", distResp.Code, distResp.Body.String())
+	}
+
+	childKeys, _, err := GetAllCacheKeys(ctx, childOrgId, "enrich_cat", 100, "")
+	if err != nil || len(childKeys) != 1 || childKeys[0].Key != "ioc_host_1" || childKeys[0].PublicAuthorization != "" {
+		t.Fatalf("expected child org to inherit distributed key with PublicAuthorization stripped, got err=%v, keys=%+v", err, childKeys)
+	}
+
+	// 5. Category Settings.Timeout >= 60 auto-expiration in GetAllCacheKeys
+	if err := SetDatastoreCategoryConfig(ctx, DatastoreCategoryUpdate{
+		OrgId:    datastoreTestOrg,
+		Category: "ttl_cat",
+		Settings: DatastoreCategorySettings{
+			Timeout: 120,
+		},
+	}); err != nil {
+		t.Fatalf("SetDatastoreCategoryConfig(ttl_cat) failed: %v", err)
+	}
+
+	now := time.Now().Unix()
+	freshKey := CacheKeyData{
+		OrgId:    datastoreTestOrg,
+		Key:      "fresh_key",
+		Category: "ttl_cat",
+		Value:    "still_valid",
+		Created:  now,
+		Edited:   now,
+	}
+	expiredKey := CacheKeyData{
+		OrgId:    datastoreTestOrg,
+		Key:      "expired_key",
+		Category: "ttl_cat",
+		Value:    "stale_value",
+		Created:  now - 500,
+		Edited:   now - 300,
+	}
+	if _, err := project.Dbclient.Put(ctx, datastore.NameKey("org_cache", datastoreTestOrg+"_fresh_key_ttl_cat", nil), &freshKey); err != nil {
+		t.Fatalf("failed putting fresh_key: %v", err)
+	}
+	if _, err := project.Dbclient.Put(ctx, datastore.NameKey("org_cache", datastoreTestOrg+"_expired_key_ttl_cat", nil), &expiredKey); err != nil {
+		t.Fatalf("failed putting expired_key: %v", err)
+	}
+	// Pre-populate list cache with both keys to verify even cached lists evict expired keys when Timeout >= 60
+	upsertOrgCacheKeysInListCache(ctx, datastoreTestOrg, "ttl_cat", []CacheKeyData{freshKey, expiredKey})
+
+	ttlKeys, _, err := GetAllCacheKeys(ctx, datastoreTestOrg, "ttl_cat", 100, "")
+	if err != nil {
+		t.Fatalf("GetAllCacheKeys(ttl_cat) failed: %v", err)
+	}
+	if len(ttlKeys) != 1 || ttlKeys[0].Key != "fresh_key" {
+		t.Fatalf("expected expired_key to be auto-removed by category Timeout=120, got %+v", ttlKeys)
 	}
 }
