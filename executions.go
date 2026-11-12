@@ -18,8 +18,70 @@ import (
 	"io/ioutil"
 
 	"cloud.google.com/go/datastore"
+	gomemcache "github.com/bradfitz/gomemcache/memcache"
 	"github.com/shuffle/opensearch-go/v4/opensearchapi"
 )
+
+// MergeExecutionResults retains completed work and merges out-of-order subflow children.
+func MergeExecutionResults(incoming, saved []ActionResult) []ActionResult {
+	retained := make(map[string]ActionResult, len(saved))
+	for _, result := range saved {
+		retained[result.Action.ID] = result
+	}
+	for index, result := range incoming {
+		previous, found := retained[result.Action.ID]
+		if !found {
+			continue
+		}
+		delete(retained, result.Action.ID)
+		if previous.Status == "SUCCESS" || previous.Status == "FINISHED" || previous.Status == "SKIPPED" || previous.Status == "FAILURE" || previous.Status == "ABORTED" ||
+			(previous.Status == "WAITING" && (result.Status == "EXECUTING" || (result.Status == "WAITING" && result.Result == ""))) {
+			incoming[index] = previous
+			continue
+		}
+		if previous.Status != "WAITING" || (result.Status != "WAITING" && result.Status != "SUCCESS") ||
+			(previous.Action.AppName != "shuffle-subflow" && result.Action.AppName != "shuffle-subflow") {
+			continue
+		}
+		var children, previousChildren []SubflowData
+		if json.Unmarshal([]byte(result.Result), &children) != nil || len(children) == 0 ||
+			json.Unmarshal([]byte(previous.Result), &previousChildren) != nil || len(previousChildren) == 0 {
+			continue
+		}
+		positions := make(map[string]int, len(children))
+		for childIndex, child := range children {
+			positions[child.ExecutionId] = childIndex
+		}
+		for _, child := range previousChildren {
+			if childIndex, exists := positions[child.ExecutionId]; exists {
+				if child.ResultSet || child.Result != "" {
+					children[childIndex] = child
+				}
+			} else {
+				positions[child.ExecutionId] = len(children)
+				children = append(children, child)
+			}
+		}
+		result.Status = "SUCCESS"
+		for _, child := range children {
+			if !child.ResultSet && child.Result == "" {
+				result.Status = "WAITING"
+				break
+			}
+		}
+		if data, err := json.Marshal(children); err == nil {
+			result.Result = string(data)
+			incoming[index] = result
+		}
+	}
+	for _, result := range saved {
+		if _, missing := retained[result.Action.ID]; missing {
+			incoming = append(incoming, result)
+			delete(retained, result.Action.ID)
+		}
+	}
+	return incoming
+}
 
 // A file built single-handedly for optimising executions. Functions:
 // - Fixexecution 
@@ -1336,14 +1398,30 @@ func GetWorkflowExecution(ctx context.Context, id string, bypassCache ...bool) (
 
 	//log.Printf("[DEBUG] Returned execution %s with %d results (2)", id, len(workflowExecution.Results))
 
-	if project.CacheDb && workflowExecution.Authorization != "" {
+	if project.CacheDb && !skipCache && workflowExecution.Authorization != "" {
+		if len(memcached) > 0 {
+			claimKey := cacheKey + "_update"
+			claimed, err := ClaimCacheKey(claimKey, 120)
+			if err != nil || !claimed {
+				return workflowExecution, getErr
+			}
+			defer DeleteCache(ctx, claimKey)
+			// A database read started before a Worker update must not overwrite its cache.
+			if _, err := GetCache(ctx, cacheKey); !errors.Is(err, gomemcache.ErrCacheMiss) {
+				return workflowExecution, getErr
+			}
+		}
 		newexecution, err := json.Marshal(workflowExecution)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling execution: %s", err)
 			return workflowExecution, getErr
 		}
 
-		err = SetCache(ctx, id, newexecution, 600)
+		if len(memcached) == 0 {
+			_ = requestCache.Add(cacheKey, newexecution, 600*time.Minute)
+			return workflowExecution, getErr
+		}
+		err = SetCache(ctx, cacheKey, newexecution, 600)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating execution: %s", err)
 		}

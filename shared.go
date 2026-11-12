@@ -3227,6 +3227,7 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 			err = SetWorkflowQueue(ctx, executionRequest, environment)
 			if err != nil {
 				log.Printf("[ERROR] Failed re-adding execution to db: %s", err)
+				continue
 			}
 		} else {
 			//log.Printf("[DEBUG] Rerunning executions is not available in cloud yet.")
@@ -15657,6 +15658,11 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+		if user.Role == "org-reader" {
+			resp.WriteHeader(http.StatusForbidden)
+			resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+			return
+		}
 
 		if user.Id != workflowExecution.Workflow.Owner {
 			if workflowExecution.Workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
@@ -15670,6 +15676,33 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		}
 	} else {
 		//log.Printf("[INFO] API key to abort/finish execution %s is correct.", executionId)
+	}
+
+	if len(memcached) > 0 {
+		claimKey := fmt.Sprintf("workflowexecution_%s_update", executionId)
+		claimed := false
+		for attempt := 0; attempt < 300; attempt++ {
+			if err := ctx.Err(); err != nil {
+				resp.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			claimed, err = ClaimCacheKey(claimKey, 120)
+			if err != nil || claimed {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err != nil || !claimed {
+			resp.WriteHeader(http.StatusServiceUnavailable)
+			resp.Write([]byte(`{"success": false, "reason": "Execution update is busy. Retry the abort."}`))
+			return
+		}
+		defer DeleteCache(ctx, claimKey)
+		workflowExecution, err = GetWorkflowExecution(ctx, executionId)
+		if err != nil {
+			resp.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 	}
 
 	if workflowExecution.Status == "ABORTED" || workflowExecution.Status == "FAILURE" || workflowExecution.Status == "FINISHED" {
@@ -15698,9 +15731,10 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 	newResults := []ActionResult{}
 	// type ActionResult struct {
 	for _, result := range workflowExecution.Results {
-		if result.Status == "EXECUTING" {
+		if result.Status == "EXECUTING" || result.Status == "WAITING" {
 			result.Status = "ABORTED"
 			result.Result = "Aborted because of error in another node (1)"
+			result.CompletedAt = workflowExecution.CompletedAt
 		}
 
 		if len(result.Result) > 0 && result.Status == "SUCCESS" {
@@ -15842,15 +15876,16 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// This is the same as aborted
-	IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_failed")
 	err = SetWorkflowExecution(ctx, *workflowExecution, true)
 	if err != nil {
+		// The cache is written before the database; a failed write must remain retryable.
+		DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", executionId))
 		log.Printf("[WARNING] Error saving workflow execution for updates when aborting (2) %s: %s", topic, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting workflowexecution status to abort"}`)))
 		return
 	} else {
+		IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_failed")
 		log.Printf("[INFO][%s] Set workflowexecution to aborted.", workflowExecution.ExecutionId)
 	}
 
@@ -21072,7 +21107,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// it will be necessary to use later. E.g. for wait for results
 			// + subflow data
 			newCacheKey := fmt.Sprintf("%s_%s_sinkholed_result", workflowExecution.ExecutionId, actionResult.Action.ID)
-			go SetCache(ctx, newCacheKey, []byte(actionResult.Result), 35)
+			SetCache(ctx, newCacheKey, []byte(actionResult.Result), 35)
 
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				log.Printf("[INFO][%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem", workflowExecution.ExecutionId, len(workflowExecution.Results))
@@ -24591,43 +24626,22 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 		return SetWorkflowExecution(ctx, *baseExecution, true)
 	}
 
-	if len(baseExecution.Results) > len(execution.Results) {
-		if shouldReset == true {
-			// Letting it pass and override. This is to ensure worker can override
-			log.Printf("[INFO][%s] Allowing workflow execution override with status %s, %d results and %d actions", execution.ExecutionId, execution.Status, len(execution.Results), len(execution.Workflow.Actions))
+	if len(baseExecution.Results) > len(execution.Results) && shouldReset {
+		// Letting it pass and override. This is to ensure worker can override
+		log.Printf("[INFO][%s] Allowing workflow execution override with status %s, %d results and %d actions", execution.ExecutionId, execution.Status, len(execution.Results), len(execution.Workflow.Actions))
 
-			// Reset cache for all action results for Fixexecution
-			for _, result := range baseExecution.Results {
-				DeleteCache(ctx, fmt.Sprintf("%s_%s_result", execution.ExecutionId, result.Action.ID))
-				DeleteCache(ctx, fmt.Sprintf("%s_%s_sent", execution.ExecutionId, result.Action.ID))
-			}
-
-		} else {
-			return errors.New(fmt.Sprintf("Can't have less actions in a full execution than what exists: %d (old) vs %d (new)", len(baseExecution.Results), len(execution.Results)))
+		// Reset cache for all action results for Fixexecution
+		for _, result := range baseExecution.Results {
+			DeleteCache(ctx, fmt.Sprintf("%s_%s_result", execution.ExecutionId, result.Action.ID))
+			DeleteCache(ctx, fmt.Sprintf("%s_%s_sent", execution.ExecutionId, result.Action.ID))
 		}
 	}
 
 	if !shouldReset {
-		completed := make(map[string]ActionResult, len(baseExecution.Results))
-		for _, result := range baseExecution.Results {
-			if result.Status == "SUCCESS" || result.Status == "FINISHED" || result.Status == "SKIPPED" || result.Status == "FAILURE" || result.Status == "ABORTED" {
-				completed[result.Action.ID] = result
-			}
-		}
-		for index, result := range execution.Results {
-			if saved, found := completed[result.Action.ID]; found {
-				execution.Results[index] = saved
-				delete(completed, result.Action.ID)
-			}
-		}
-		for _, result := range baseExecution.Results {
-			if _, missing := completed[result.Action.ID]; missing {
-				execution.Results = append(execution.Results, result)
-				delete(completed, result.Action.ID)
-			}
-		}
+		// Delayed workers may omit newer results; retain them without reopening completed actions.
+		execution.Results = MergeExecutionResults(execution.Results, baseExecution.Results)
 	}
-	if execution.Status == "EXECUTING" {
+	if execution.Status == "EXECUTING" || (!shouldReset && execution.Status == "FINISHED") {
 		//log.Printf("[INFO] Inside executing.")
 		extra := 0
 		for _, trigger := range execution.Workflow.Triggers {
@@ -24650,6 +24664,10 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 			// 0x0elliot: remove log later
 			log.Printf("[INFO][%s] All actions have results (%d). Setting status to FINISHED. Actions: %d, Triggers: %d, Results: %d", execution.ExecutionId, len(execution.Workflow.Actions)+extra, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results))
 			execution.Status = "FINISHED"
+		} else if execution.Status == "FINISHED" {
+			// A delayed snapshot cannot finish work that its merged results still leave pending.
+			execution.Status = baseExecution.Status
+			execution.CompletedAt = baseExecution.CompletedAt
 		}
 	}
 

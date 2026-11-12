@@ -304,7 +304,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 			}
 		}
 
-		return "", errors.New(fmt.Sprintf("No cache found in SHUFFLE_MEMCACHED for %s", originalKey))
+		return "", fmt.Errorf("No cache found in SHUFFLE_MEMCACHED for %s: %w", originalKey, err)
 	}
 
 	if false {
@@ -9256,6 +9256,25 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 	var workflows []Workflow
 	var err error
 
+	latestChildren := func(children []Workflow) []Workflow {
+		sort.SliceStable(children, func(i, j int) bool {
+			if children[i].Edited == children[j].Edited {
+				return children[i].Created > children[j].Created
+			}
+			return children[i].Edited > children[j].Edited
+		})
+		seen := make(map[string]bool, len(children))
+		latest := make([]Workflow, 0, len(children))
+		for _, child := range children {
+			if seen[child.ID] {
+				continue
+			}
+			seen[child.ID] = true
+			latest = append(latest, child)
+		}
+		return latest
+	}
+
 	nameKey := "workflow"
 	cacheKey := fmt.Sprintf("%s_%s_childworkflows", nameKey, originalId)
 	if project.CacheDb {
@@ -9264,12 +9283,7 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflows)
 			if err == nil || len(workflows) > 0 {
-
-				sort.Slice(workflows, func(i, j int) bool {
-					return workflows[i].Edited > workflows[j].Edited
-				})
-
-				return workflows, nil
+				return latestChildren(workflows), nil
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for workflow (3): %s", err)
@@ -9286,6 +9300,9 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": 1000,
+			"sort": []map[string]interface{}{
+				{"edited": map[string]interface{}{"order": "desc", "unmapped_type": "long"}},
+			},
 			"query": map[string]interface{}{
 				"match": map[string]interface{}{
 					"parentorg_workflow": originalId,
@@ -9403,10 +9420,8 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 		}
 	}
 
-	// Sort by edited
-	sort.Slice(workflows, func(i, j int) bool {
-		return workflows[i].Edited > workflows[j].Edited
-	})
+	// Rollover aliases can return older copies of the same child; never propagate both.
+	workflows = latestChildren(workflows)
 
 	// Reduces it in case the distribution changes
 	// Ensures suborg workflows can still exist, but not be shown
@@ -9490,6 +9505,9 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": amount,
+			"sort": []map[string]interface{}{
+				{"edited": map[string]interface{}{"order": "desc", "unmapped_type": "long"}},
+			},
 			"query": map[string]interface{}{
 				"match": map[string]interface{}{
 					"id": originalId,

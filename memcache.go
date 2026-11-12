@@ -202,6 +202,10 @@ func (client *shuffleMemcacheClient) Add(item *gomemcache.Item) (bool, error) {
 		server := servers[(start+offset)%serverCount]
 		err := server.client.Add(item)
 		if err == nil {
+			// A recovered replica used by this claim must also participate in its release.
+			client.mutex.Lock()
+			server.disabledUntil = time.Time{}
+			client.mutex.Unlock()
 			successes++
 			successfulServers = append(successfulServers, server)
 			if successes >= quorum {
