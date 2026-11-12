@@ -9094,8 +9094,21 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		execution.Workflow.OrgId = execution.ExecutionOrg
 	}
 
+	testCase := ""
+	for _, param := range startNode.Parameters {
+		if param.Name == "test_case" && len(strings.TrimSpace(param.Value)) > 0 {
+			testCase = strings.TrimSpace(param.Value)
+			break
+		}
+	}
+
+	isTestMode := false
+	if len(testCase) > 0 {
+		isTestMode = true
+	}
+
 	// Validate On-Prem Configuration immediately
-	if project.Environment == "onprem" {
+	if project.Environment == "onprem" && !isTestMode {
 		cloudSyncConfigured := false
 		if len(execution.Workflow.OrgId) > 0 {
 			if validationOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId); orgErr == nil {
@@ -10690,7 +10703,7 @@ data_filter:
 
 	billingOrgId := execution.Workflow.OrgId
 	var billingOrg *Org
-	if !standalone && len(execution.Workflow.OrgId) > 0 {
+	if !standalone && len(execution.Workflow.OrgId) > 0 && !isTestMode {
 		currentOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId)
 		billingOrg = currentOrg
 
@@ -10785,13 +10798,24 @@ data_filter:
 			callInfo.AuthenticationId = startNode.AuthenticationId
 		}
 
-		output, err := RunAiQuery(
-			ctx,
-			callInfo,
-			"",
-			"",
-			completionRequest,
-		)
+		var output string
+		var err error
+		if isTestMode {
+			step := oldAgentOutput.LLMCallCount + 1
+			if oldAgentOutput.LLMCallCount == 0 && len(oldAgentOutput.LLMRequests) > 0 {
+				step = len(oldAgentOutput.LLMRequests) + 1
+			}
+			completionRequest.Stream = true
+			output, err = RunAiQueryMock(testCase, step, completionRequest, callInfo)
+		} else {
+			output, err = RunAiQuery(
+				ctx,
+				callInfo,
+				"",
+				"",
+				completionRequest,
+			)
+		}
 
 		if err != nil {
 			log.Printf("[ERROR][%s] AI Agent: Failed running AI query for action %s: %s", execution.ExecutionId, startNode.ID, err)
