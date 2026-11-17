@@ -524,7 +524,7 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig, paramNa
 }
 
 // Used for recursively fixing HTTP outputs that are bad
-func FindNextApiStep(ctx context.Context, originalFields []Valuereplace, action Action, stepOutput []byte, additionalInfo, inputdata, originalAppname string, attempt ...int) (string, Action, error, string) {
+func FindNextApiStep(ctx context.Context, originalFields []Valuereplace, action Action, stepOutput []byte, additionalInfo, inputdata, originalAppname, orgId string, attempt ...int) (string, Action, error, string) {
 	// 1. Find the result field in json
 	// 2. Check the status code if it's a good one (<300). If it is, make the output correct based on it and add context based on output.
 	// 3. If 400-499, check for error message and self-correct. e.g. if body says something is wrong, try to fix it. If status is 415, try to add content-type header.
@@ -686,7 +686,7 @@ func FindNextApiStep(ctx context.Context, originalFields []Valuereplace, action 
 
 			// Body = previous requests' body
 			intent := ""
-			action, additionalInfo, err := RunSelfCorrectingRequest(ctx, originalFields, action, status, additionalInfo, fullUrl, string(body), useApp, intent, inputdata, curAttempt)
+			action, additionalInfo, err := RunSelfCorrectingRequest(ctx, originalFields, action, status, additionalInfo, fullUrl, string(body), useApp, intent, inputdata, orgId, curAttempt)
 			if err != nil {
 				if !strings.Contains(err.Error(), "missing_fields") {
 					log.Printf("[ERROR] Error running self-correcting request: %s", err)
@@ -720,7 +720,7 @@ func FindNextApiStep(ctx context.Context, originalFields []Valuereplace, action 
 // 1. The fully filled-in action
 // 2. The additional info from the previous request
 // 3. Any error that may have occurred
-func RunSelfCorrectingRequest(ctx context.Context, originalFields []Valuereplace, action Action, status int, additionalInfo, fullUrl, outputBody, appname, intent, inputdata string, attempt ...int) (Action, string, error) {
+func RunSelfCorrectingRequest(ctx context.Context, originalFields []Valuereplace, action Action, status int, additionalInfo, fullUrl, outputBody, appname, intent, inputdata, orgId string, attempt ...int) (Action, string, error) {
 	// Add all fields with value from here
 	additionalInfo = ""
 	inputBody := "{\n"
@@ -913,6 +913,10 @@ Input JSON Payload (ensure VALID JSON):
 		log.Printf("\n\n[DEBUG] SYSTEM MESSAGE: %#v\n\nINPUTDATA:\n\n\n%s\n\n\n\n", systemMessage, inputData)
 	}
 
+	if len(systemMessage)+len(inputData) > 100000 {
+		return action, additionalInfo, fmt.Errorf("request payload too large for self-correction (%d chars)", len(systemMessage)+len(inputData))
+	}
+
 	chatCompletion := openai.ChatCompletionRequest{
 		Model: model,
 		Messages: []openai.ChatCompletionMessage{
@@ -931,8 +935,9 @@ Input JSON Payload (ensure VALID JSON):
 	}
 
 	callInfo := AiCallInfo{
-		Caller: "RunSelfCorrectingRequest",
-		//OrgID: orgID,
+		Caller:      "RunSelfCorrectingRequest",
+		OrgID:       orgId,
+		ExecutionId: action.SourceExecution,
 	}
 	contentOutput, err := RunAiQuery(ctx, callInfo, systemMessage, inputData, chatCompletion)
 	if err != nil {
