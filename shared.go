@@ -4841,6 +4841,10 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	for index := range workflowExecutions {
+		rehydrateExecutionValues(ctx, &workflowExecutions[index])
+	}
+
 	for index, execution := range workflowExecutions {
 		if project.Environment != "cloud" && execution.Status != "FINISHED" && execution.Status != "ABORTED" {
 			execution, _ = Fixexecution(ctx, execution)
