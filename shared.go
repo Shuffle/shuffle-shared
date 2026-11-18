@@ -97,6 +97,20 @@ var sandboxProject = "shuffle-sandbox-337810"
 // list routes expand into a single response.
 const maxExecutionListRehydrationBytes int64 = 32 << 20
 
+// getWorkflowQueueEnvironment returns the queue key for an environment. On-prem
+// deployments use the environment name (spaces become dashes); cloud uses the
+// historical <environment>_<orgid> format. Underscores are significant in
+// environment names and must not be rewritten on-prem.
+func getWorkflowQueueEnvironment(environment, orgId string) string {
+	parsedEnv := strings.ToLower(strings.ReplaceAll(environment, " ", "-"))
+	if project.Environment != "cloud" {
+		return parsedEnv
+	}
+
+	parsedEnv = strings.ReplaceAll(parsedEnv, "_", "-")
+	return fmt.Sprintf("%s_%s", parsedEnv, orgId)
+}
+
 func GetProject() ShuffleStorage {
 	return project
 }
@@ -19179,10 +19193,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 					Priority:      11, // I'm assuming 11 is the max priority
 				}
 
-				parsedEnv := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(agentEnvironment, " ", "-"), "_", "-"))
-				if project.Environment == "cloud" {
-					parsedEnv = fmt.Sprintf("%s_%s", parsedEnv, fullExecution.ExecutionOrg)
-				}
+				parsedEnv := getWorkflowQueueEnvironment(agentEnvironment, fullExecution.ExecutionOrg)
 
 				log.Printf("[INFO][%s] Redeploying workflow to queue: %s with priority %d", fullExecution.ExecutionId, parsedEnv, executionRequest.Priority)
 				// log.Printf("[DEBUG] AI Agent finished - REDEPLOYING workflow to Queue: '%s' (Priority: %d). Original Env: '%s', Org: '%s'", parsedEnv, executionRequest.Priority, agentEnvironment, fullExecution.ExecutionOrg)
@@ -19592,6 +19603,8 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			log.Printf("[ERROR][%s] Agent action %s has no decisions; marking it FAILURE instead of leaving the agent blocked", workflowExecution.ExecutionId, actionResult.Action.ID)
 
 			workflowExecution = markAgentResultFailure(workflowExecution, foundActionResultIndex, fmt.Sprintf("Agent decision %s could not be recovered: the stored agent output has no decisions", decisionId))
+			workflowExecution.Status = "ABORTED"
+			workflowExecution.CompletedAt = time.Now().Unix()
 			if saveErr := SetWorkflowExecution(ctx, workflowExecution, true); saveErr != nil {
 				log.Printf("[ERROR][%s] Failed persisting agent FAILURE: %s", workflowExecution.ExecutionId, saveErr)
 			}
@@ -21307,7 +21320,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 
-		if rerunFound && found {
+		if rerunFound && found && !executionHasUnfinishedAgentResults(workflowExecution) {
 			// Continue -> this means finished check is ok
 			workflowExecution.Status = "FINISHED"
 			workflowExecution.CompletedAt = int64(time.Now().Unix())
@@ -24938,7 +24951,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 									}
 								}
 
-								if len(newParentExecution.Workflow.Actions)+extra == len(newParentExecution.Results) {
+								if len(newParentExecution.Workflow.Actions)+extra == len(newParentExecution.Results) && !executionHasUnfinishedAgentResults(*newParentExecution) {
 									newParentExecution.Status = "FINISHED"
 								}
 
@@ -27731,11 +27744,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 								// Increase priority on User Input catch-ups
 								executionRequest.Priority = 11
-								parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(result.Action.Environment, " ", "-"), "_", "-")), oldExecution.ExecutionOrg)
-
-								if project.Environment != "cloud" {
-									parsedEnv = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(result.Action.Environment, " ", "-"), "_", "-"))
-								}
+								parsedEnv := getWorkflowQueueEnvironment(result.Action.Environment, oldExecution.ExecutionOrg)
 
 								err = SetWorkflowQueue(ctx, executionRequest, parsedEnv)
 								if err != nil {
@@ -35524,10 +35533,7 @@ func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string
 			Priority:          11,
 		}
 
-		parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), org.Id)
-		if project.Environment != "cloud" {
-			parsedId = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-"))
-		}
+		parsedId := getWorkflowQueueEnvironment(env.Name, org.Id)
 
 		err = SetWorkflowQueue(ctx, request, parsedId)
 		if err != nil {

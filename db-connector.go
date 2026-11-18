@@ -17858,6 +17858,20 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 			return true
 		}
 
+		if executionHasUnfinishedAgentResults(workflowExecution) {
+			if workflowExecution.Status == "ABORTED" || workflowExecution.Status == "FAILURE" {
+				workflowExecution.CompletedAt = int64(time.Now().Unix())
+				if err := SetWorkflowExecution(ctx, workflowExecution, true); err != nil {
+					log.Printf("[ERROR][%s] Failed persisting terminal execution in ValidateFinished: %s", workflowExecution.ExecutionId, err)
+				}
+
+				return true
+			}
+
+			log.Printf("[INFO][%s] Not setting execution to FINISHED because an agent result is not finished (ValidateFinished)", workflowExecution.ExecutionId)
+			return false
+		}
+
 		if len(workflowExecution.Result) == 0 && len(lastResult.Result) > 0 {
 			workflowExecution.Result = lastResult.Result
 		}

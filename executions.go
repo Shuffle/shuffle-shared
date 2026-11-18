@@ -146,6 +146,25 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					}
 				}
 
+				// A SUCCESS agent row must contain a terminal agent output. Empty,
+				// malformed or RUNNING-without-decisions results cannot make progress;
+				// persist a failure instead of leaving the execution looping in EXECUTING.
+				if innerresult.Status == "SUCCESS" && !strings.Contains(innerresult.Result, "Result too large to handle") {
+					incomplete := err != nil
+					if err == nil && len(mappedOutput.Decisions) == 0 && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
+						incomplete = true
+					}
+
+					if incomplete {
+						log.Printf("[WARNING][%s] Agent action %s returned SUCCESS with an incomplete result; marking it FAILURE", workflowExecution.ExecutionId, innerresult.Action.ID)
+						mappedOutput.Status = "FAILURE"
+						mappedOutput.CompletedAt = time.Now().UnixMilli()
+						mappedOutput.Error = "Agent result is incomplete: no decisions and no terminal agent status"
+						decisionsUpdated = true
+						workflowExecution.Results[resultIndex].Status = "FAILURE"
+						workflowExecution.Results[resultIndex].CompletedAt = time.Now().Unix()
+					}
+				}
 
 				// Overwrites missing statuses
 				setFinished := mappedOutput.Status == "FINISHED" && mappedOutput.CompletedAt > 0 
@@ -1013,6 +1032,31 @@ func rehydrateExecutionValues(ctx context.Context, workflowExecution *WorkflowEx
 	rehydrateExecutionValuesWithLimit(ctx, workflowExecution, nil)
 }
 
+// offloadedValueSize returns the original byte size recorded in an offload
+// placeholder, or 0 when the placeholder does not carry one. It lets the list
+// rehydration budget reject a value before reading it.
+func offloadedValueSize(placeholder string) int64 {
+	parsed := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(placeholder), &parsed); err != nil {
+		return 0
+	}
+
+	switch value := parsed["size"].(type) {
+	case float64:
+		return int64(value)
+	case int64:
+		return value
+	case json.Number:
+		parsedSize, err := value.Int64()
+		if err != nil {
+			return 0
+		}
+		return parsedSize
+	}
+
+	return 0
+}
+
 // rehydrateExecutionValuesWithLimit is the budget-aware variant used by list
 // routes, where dozens of executions can each reference multi-megabyte files.
 // When remaining is non-nil, no further file reads happen once it reaches zero;
@@ -1025,6 +1069,12 @@ func rehydrateExecutionValuesWithLimit(ctx context.Context, workflowExecution *W
 	readValue := func(action ActionResult) (string, bool) {
 		if remaining != nil && *remaining <= 0 {
 			return "", false
+		}
+
+		if remaining != nil {
+			if size := offloadedValueSize(action.Result); size > *remaining {
+				return "", false
+			}
 		}
 
 		newValue, err := getExecutionFileValue(ctx, *workflowExecution, action)

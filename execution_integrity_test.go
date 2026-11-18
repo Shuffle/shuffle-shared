@@ -309,7 +309,19 @@ func TestFixexecutionDoesNotFinishUnfinishedAgent(t *testing.T) {
 			name:           "running agent output must not finish the execution",
 			resultStatus:   "SUCCESS",
 			result:         `{"status":"RUNNING","decisions":[]}`,
-			expectedStatus: "EXECUTING",
+			expectedStatus: "ABORTED",
+		},
+		{
+			name:           "empty agent output must not finish the execution",
+			resultStatus:   "SUCCESS",
+			result:         "",
+			expectedStatus: "ABORTED",
+		},
+		{
+			name:           "malformed agent output must not finish the execution",
+			resultStatus:   "SUCCESS",
+			result:         "not-json",
+			expectedStatus: "ABORTED",
 		},
 		{
 			name:           "finished agent output may finish the execution",
@@ -336,6 +348,10 @@ func TestFixexecutionDoesNotFinishUnfinishedAgent(t *testing.T) {
 			fixed, _ := Fixexecution(context.Background(), execution)
 			if fixed.Status != test.expectedStatus {
 				t.Fatalf("expected execution status %q, got %q", test.expectedStatus, fixed.Status)
+			}
+
+			if test.expectedStatus == "ABORTED" && fixed.Results[0].Status != "FAILURE" {
+				t.Fatalf("expected the invalid agent result to be marked FAILURE, got %q", fixed.Results[0].Status)
 			}
 		})
 	}
@@ -388,28 +404,77 @@ func TestRehydrateExecutionValuesRespectsBudget(t *testing.T) {
 	writeOffloadFile(t, basePath, orgId, executionId, "action-one", firstValue)
 	writeOffloadFile(t, basePath, orgId, executionId, "action-two", secondValue)
 
-	placeholder := `{"reason":"Result too large to handle (https://github.com/frikky/shuffle/issues/171)."}`
+	firstPlaceholder := `{"reason":"Result too large to handle (https://github.com/frikky/shuffle/issues/171).","size":21}`
+	secondPlaceholder := `{"reason":"Result too large to handle (https://github.com/frikky/shuffle/issues/171).","size":22}`
 	execution := WorkflowExecution{
 		ExecutionId:  executionId,
 		ExecutionOrg: orgId,
 		Results: []ActionResult{
-			{Action: Action{ID: "action-one"}, Result: placeholder},
-			{Action: Action{ID: "action-two"}, Result: placeholder},
+			{Action: Action{ID: "action-one"}, Result: firstPlaceholder},
+			{Action: Action{ID: "action-two"}, Result: secondPlaceholder},
 		},
 	}
 
-	budget := int64(4)
+	budget := int64(30)
 	rehydrateExecutionValuesWithLimit(context.Background(), &execution, &budget)
 
 	if execution.Results[0].Result != firstValue {
 		t.Fatalf("expected the first value to be rehydrated, got %q", execution.Results[0].Result)
 	}
 
-	if execution.Results[1].Result != placeholder {
+	if execution.Results[1].Result != secondPlaceholder {
 		t.Fatalf("expected the second value to keep its placeholder, got %q", execution.Results[1].Result)
 	}
 
-	if budget > 0 {
-		t.Fatalf("expected the rehydration budget to be exhausted, got %d", budget)
+	// The second value is larger than the remaining budget and must not be read.
+	if budget != 9 {
+		t.Fatalf("expected 9 bytes of remaining budget, got %d", budget)
+	}
+}
+
+func TestRehydrateExecutionValuesSkipsValueLargerThanBudget(t *testing.T) {
+	basePath := withLocalOffloadStorage(t)
+
+	const (
+		orgId       = "org-id"
+		executionId = "execution-id"
+	)
+	writeOffloadFile(t, basePath, orgId, executionId, "large-action", "a-large-offloaded-value")
+
+	placeholder := `{"reason":"Result too large to handle (https://github.com/frikky/shuffle/issues/171).","size":100}`
+	execution := WorkflowExecution{
+		ExecutionId:  executionId,
+		ExecutionOrg: orgId,
+		Results: []ActionResult{
+			{Action: Action{ID: "large-action"}, Result: placeholder},
+		},
+	}
+
+	budget := int64(10)
+	rehydrateExecutionValuesWithLimit(context.Background(), &execution, &budget)
+
+	if execution.Results[0].Result != placeholder {
+		t.Fatalf("expected a value larger than the budget to keep its placeholder, got %q", execution.Results[0].Result)
+	}
+
+	if budget != 10 {
+		t.Fatalf("expected the budget to be untouched, got %d", budget)
+	}
+}
+
+func TestGetWorkflowQueueEnvironment(t *testing.T) {
+	previousEnvironment := project.Environment
+	t.Cleanup(func() {
+		project.Environment = previousEnvironment
+	})
+
+	project.Environment = "onprem"
+	if actual := getWorkflowQueueEnvironment("My_Env Name", "org-id"); actual != "my_env-name" {
+		t.Fatalf("on-prem queue environment = %q, want %q", actual, "my_env-name")
+	}
+
+	project.Environment = "cloud"
+	if actual := getWorkflowQueueEnvironment("My_Env Name", "org-id"); actual != "my-env-name_org-id" {
+		t.Fatalf("cloud queue environment = %q, want %q", actual, "my-env-name_org-id")
 	}
 }

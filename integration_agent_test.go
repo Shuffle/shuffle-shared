@@ -96,7 +96,7 @@ func TestAgentCompletionAndFailurePersistence(t *testing.T) {
 		ExecutionOrg:  uuid.NewV4().String(),
 		WorkflowId:    uuid.NewV4().String(),
 		Authorization: uuid.NewV4().String(),
-		Status:        "EXECUTING",
+		Status:        "WAITING",
 		Workflow: Workflow{
 			ID:      uuid.NewV4().String(),
 			Actions: []Action{agentAction},
@@ -104,7 +104,7 @@ func TestAgentCompletionAndFailurePersistence(t *testing.T) {
 		Results: []ActionResult{
 			{
 				Action: agentAction,
-				Status: "SUCCESS",
+				Status: "WAITING",
 				Result: `{"status":"RUNNING","decisions":[]}`,
 			},
 		},
@@ -145,8 +145,64 @@ func TestAgentCompletionAndFailurePersistence(t *testing.T) {
 	if len(stored.Results) == 0 {
 		t.Fatal("no results after failure")
 	}
-	if stored.Results[0].Status != "FAILURE" && stored.Status != "ABORTED" && stored.Status != "FAILURE" {
+	if stored.Results[0].Status != "FAILURE" {
 		body, _ := json.Marshal(stored.Results[0])
-		t.Fatalf("agent failure was not persisted: execution=%s result=%s", stored.Status, string(body))
+		t.Fatalf("agent result failure was not persisted: execution=%s result=%s", stored.Status, string(body))
+	}
+
+	if stored.Status != "ABORTED" && stored.Status != "FAILURE" {
+		t.Fatalf("agent failure left a non-terminal execution: %s", stored.Status)
+	}
+}
+
+func TestValidateFinishedDoesNotFinishUnfinishedAgent(t *testing.T) {
+	ctx := requireIntegrationBackends(t)
+
+	agentAction := Action{ID: "agent-action-" + uuid.NewV4().String(), Name: "agent", AppName: "AI Agent", Label: "Agent"}
+	execution := WorkflowExecution{
+		ExecutionId:   uuid.NewV4().String(),
+		ExecutionOrg:  uuid.NewV4().String(),
+		WorkflowId:    uuid.NewV4().String(),
+		Authorization: uuid.NewV4().String(),
+		Status:        "EXECUTING",
+		Workflow: Workflow{
+			ID:      uuid.NewV4().String(),
+			Actions: []Action{agentAction},
+		},
+		Results: []ActionResult{
+			{
+				Action: agentAction,
+				Status: "SUCCESS",
+				Result: `{"status":"WAITING","decisions":[{"i":1,"action":"ask"}]}`,
+			},
+		},
+	}
+
+	t.Cleanup(func() {
+		DeleteKey(context.Background(), "workflowexecution", execution.ExecutionId)
+	})
+
+	if err := SetWorkflowExecution(ctx, execution, true); err != nil {
+		t.Fatalf("SetWorkflowExecution: %s", err)
+	}
+
+	stored, err := GetWorkflowExecution(ctx, execution.ExecutionId, true)
+	if err != nil {
+		t.Fatalf("GetWorkflowExecution: %s", err)
+	}
+	if stored.Status == "FINISHED" {
+		t.Fatal("SetWorkflowExecution marked an unfinished agent execution FINISHED")
+	}
+
+	if ValidateFinished(ctx, -1, *stored) {
+		t.Fatal("ValidateFinished returned true for an unfinished agent execution")
+	}
+
+	stored, err = GetWorkflowExecution(ctx, execution.ExecutionId, true)
+	if err != nil {
+		t.Fatalf("GetWorkflowExecution after ValidateFinished: %s", err)
+	}
+	if stored.Status == "FINISHED" {
+		t.Fatal("ValidateFinished marked an unfinished agent execution FINISHED")
 	}
 }
