@@ -462,6 +462,36 @@ func TestRehydrateExecutionValuesSkipsValueLargerThanBudget(t *testing.T) {
 	}
 }
 
+func TestRehydrateExecutionValuesDiscardsValueLargerThanBudgetWithoutSize(t *testing.T) {
+	basePath := withLocalOffloadStorage(t)
+
+	const (
+		orgId       = "org-id"
+		executionId = "execution-id"
+	)
+	writeOffloadFile(t, basePath, orgId, executionId, "large-action", "a-large-offloaded-value-without-size")
+
+	placeholder := `{"reason":"Result too large to handle (https://github.com/frikky/shuffle/issues/171)."}`
+	execution := WorkflowExecution{
+		ExecutionId:  executionId,
+		ExecutionOrg: orgId,
+		Results: []ActionResult{
+			{Action: Action{ID: "large-action"}, Result: placeholder},
+		},
+	}
+
+	budget := int64(10)
+	rehydrateExecutionValuesWithLimit(context.Background(), &execution, &budget)
+
+	if execution.Results[0].Result != placeholder {
+		t.Fatalf("expected a value larger than the budget to keep its placeholder, got %q", execution.Results[0].Result)
+	}
+
+	if budget != 10 {
+		t.Fatalf("expected the budget to be untouched, got %d", budget)
+	}
+}
+
 func TestGetWorkflowQueueEnvironment(t *testing.T) {
 	previousEnvironment := project.Environment
 	t.Cleanup(func() {

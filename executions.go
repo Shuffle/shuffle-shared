@@ -1083,7 +1083,12 @@ func rehydrateExecutionValuesWithLimit(ctx context.Context, workflowExecution *W
 		}
 
 		if remaining != nil {
-			*remaining -= int64(len(newValue))
+			valueSize := int64(len(newValue))
+			if valueSize > *remaining {
+				return "", false
+			}
+
+			*remaining -= valueSize
 		}
 
 		return newValue, true
