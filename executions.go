@@ -173,6 +173,10 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					}
 				}
 
+				agentFailure := mappedOutput.Status == "FAILURE" || mappedOutput.Status == "ABORTED" ||
+					innerresult.Status == "FAILURE" || innerresult.Status == "ABORTED" ||
+					workflowExecution.Results[resultIndex].Status == "FAILURE" || workflowExecution.Results[resultIndex].Status == "ABORTED"
+
 				// Overwrites missing statuses
 				setFinished := mappedOutput.Status == "FINISHED" && mappedOutput.CompletedAt > 0 
 				finishFound := false
@@ -184,6 +188,12 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					}
 
 					if decision.Action == "finish" || decision.Category == "finish" { 
+						if agentFailure {
+							// A finish decision must not turn a failed/aborted agent output
+							// back into a successful result.
+							finishFound = true
+							continue
+						}
 
 						if decision.RunDetails.Status != "FINISHED" {  
 							if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 { 
@@ -199,7 +209,11 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					}
 				}
 
-				if finishFound { 
+				if finishFound && agentFailure {
+					log.Printf("[WARNING][%s] Ignoring finish decision for agent action %s because the agent output is %s", workflowExecution.ExecutionId, innerresult.Action.ID, mappedOutput.Status)
+				}
+
+				if finishFound && !agentFailure { 
 					mappedOutput.Status = "FINISHED"
 
 					result.Status = "SUCCESS"

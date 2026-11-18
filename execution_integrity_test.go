@@ -551,3 +551,56 @@ func TestUserDeclineExecutionStatus(t *testing.T) {
 		t.Fatalf("regular action decline status = %q, want FINISHED", status)
 	}
 }
+
+func TestFixexecutionFailedAgentWithFinishDecision(t *testing.T) {
+	previousProject := project
+	project.CacheDb = false
+	project.DbType = ""
+	t.Cleanup(func() {
+		project = previousProject
+	})
+
+	agentAction := Action{ID: "agent-action", Name: "agent", AppName: "AI Agent"}
+
+	tests := []struct {
+		name         string
+		resultStatus string
+		result       string
+	}{
+		{
+			name:         "failed output with a finish decision",
+			resultStatus: "SUCCESS",
+			result:       `{"status":"FAILURE","decisions":[{"i":1,"action":"finish","category":"finish","run_details":{"id":"d1","status":"RUNNING"}}]}`,
+		},
+		{
+			name:         "failed row with a finish decision",
+			resultStatus: "FAILURE",
+			result:       `{"status":"FINISHED","decisions":[{"i":1,"action":"finish","category":"finish","run_details":{"id":"d1","status":"FINISHED"}}]}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			execution := WorkflowExecution{
+				ExecutionId: "execution-id",
+				Status:      "EXECUTING",
+				Workflow: Workflow{
+					ID:      "workflow-id",
+					Actions: []Action{agentAction},
+				},
+				Results: []ActionResult{
+					{Action: agentAction, Status: test.resultStatus, Result: test.result},
+				},
+			}
+
+			fixed, _ := Fixexecution(context.Background(), execution)
+			if fixed.Status != "ABORTED" {
+				t.Fatalf("expected execution status ABORTED, got %q", fixed.Status)
+			}
+
+			if fixed.Results[0].Status != "FAILURE" {
+				t.Fatalf("expected agent result FAILURE, got %q", fixed.Results[0].Status)
+			}
+		})
+	}
+}
