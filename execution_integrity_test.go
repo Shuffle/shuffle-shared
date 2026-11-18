@@ -324,6 +324,18 @@ func TestFixexecutionDoesNotFinishUnfinishedAgent(t *testing.T) {
 			expectedStatus: "ABORTED",
 		},
 		{
+			name:           "agent output failure on a SUCCESS row must abort",
+			resultStatus:   "SUCCESS",
+			result:         `{"status":"FAILURE","decisions":[]}`,
+			expectedStatus: "ABORTED",
+		},
+		{
+			name:           "agent output abort on a SUCCESS row must abort",
+			resultStatus:   "SUCCESS",
+			result:         `{"status":"ABORTED","decisions":[]}`,
+			expectedStatus: "ABORTED",
+		},
+		{
 			name:           "finished agent output may finish the execution",
 			resultStatus:   "SUCCESS",
 			result:         `{"status":"FINISHED","decisions":[]}`,
@@ -462,7 +474,7 @@ func TestRehydrateExecutionValuesSkipsValueLargerThanBudget(t *testing.T) {
 	}
 }
 
-func TestRehydrateExecutionValuesDiscardsValueLargerThanBudgetWithoutSize(t *testing.T) {
+func TestRehydrateExecutionValuesSkipsValueWithoutSizeUnderBudget(t *testing.T) {
 	basePath := withLocalOffloadStorage(t)
 
 	const (
@@ -506,5 +518,36 @@ func TestGetWorkflowQueueEnvironment(t *testing.T) {
 	project.Environment = "cloud"
 	if actual := getWorkflowQueueEnvironment("My_Env Name", "org-id"); actual != "my-env-name_org-id" {
 		t.Fatalf("cloud queue environment = %q, want %q", actual, "my-env-name_org-id")
+	}
+}
+
+func TestUserDeclineExecutionStatus(t *testing.T) {
+	agentAction := Action{ID: "agent-action", Name: "agent", AppName: "AI Agent"}
+
+	unfinished := WorkflowExecution{
+		Results: []ActionResult{
+			{Action: agentAction, Status: "SUCCESS", Result: `{"status":"RUNNING","decisions":[]}`},
+		},
+	}
+	if status := userDeclineExecutionStatus(unfinished); status != "ABORTED" {
+		t.Fatalf("unfinished agent decline status = %q, want ABORTED", status)
+	}
+
+	finished := WorkflowExecution{
+		Results: []ActionResult{
+			{Action: agentAction, Status: "SUCCESS", Result: `{"status":"FINISHED","decisions":[]}`},
+		},
+	}
+	if status := userDeclineExecutionStatus(finished); status != "FINISHED" {
+		t.Fatalf("finished agent decline status = %q, want FINISHED", status)
+	}
+
+	regular := WorkflowExecution{
+		Results: []ActionResult{
+			{Action: Action{ID: "action", AppName: "execute_python"}, Status: "SUCCESS", Result: `{"success":true}`},
+		},
+	}
+	if status := userDeclineExecutionStatus(regular); status != "FINISHED" {
+		t.Fatalf("regular action decline status = %q, want FINISHED", status)
 	}
 }

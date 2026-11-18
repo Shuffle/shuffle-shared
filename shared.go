@@ -19282,6 +19282,17 @@ func agentResultBlocksFinish(result ActionResult) bool {
 	return output.Status != "FINISHED"
 }
 
+// userDeclineExecutionStatus returns the terminal status for a user-declined
+// execution. A workflow stopped by the user is ABORTED when an agent result is
+// still unfinished, so the decline does not mask a broken agent as success.
+func userDeclineExecutionStatus(execution WorkflowExecution) string {
+	if executionHasUnfinishedAgentResults(execution) {
+		return "ABORTED"
+	}
+
+	return "FINISHED"
+}
+
 func executionHasUnfinishedAgentResults(execution WorkflowExecution) bool {
 	for _, result := range execution.Results {
 		if agentResultBlocksFinish(result) {
@@ -23063,7 +23074,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 					// Fallback
 					if found { 
-						parsedEnv = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), env.OrgId)
+						parsedEnv = getWorkflowQueueEnvironment(env.Name, env.OrgId)
 						break
 					}
 				}
@@ -23071,7 +23082,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				continue
 			}
 
-			parsedEnv = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(foundEnv, " ", "-"), "_", "-")), env.OrgId)
+			parsedEnv = getWorkflowQueueEnvironment(foundEnv, env.OrgId)
 			break
 		}
 
@@ -27696,7 +27707,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							}
 
 							// Finish execution
-							oldExecution.Status = "FINISHED"
+							oldExecution.Status = userDeclineExecutionStatus(*oldExecution)
+							if oldExecution.Status == "ABORTED" {
+								log.Printf("[WARNING][%s] User declined an execution with an unfinished agent; marking it ABORTED instead of FINISHED", oldExecution.ExecutionId)
+							}
+
 							oldExecution.Result = result.Result
 							oldExecution.CompletedAt = int64(time.Now().Unix())
 							oldExecution.LastNode = result.Action.ID

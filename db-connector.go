@@ -17854,6 +17854,11 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		// Check if status is already set first from cache
 		newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
+			if executionHasUnfinishedAgentResults(*newexec) {
+				log.Printf("[WARNING][%s] Cached execution is terminal but has an unfinished agent result; not confirming completion in ValidateFinished", workflowExecution.ExecutionId)
+				return false
+			}
+
 			//log.Printf("[INFO][%s] Already finished from GetWorkflowExecution (validate)! Stopping the rest of the request for execution.", workflowExecution.ExecutionId)
 			return true
 		}

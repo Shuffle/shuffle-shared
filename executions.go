@@ -151,8 +151,15 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				// persist a failure instead of leaving the execution looping in EXECUTING.
 				if innerresult.Status == "SUCCESS" && !strings.Contains(innerresult.Result, "Result too large to handle") {
 					incomplete := err != nil
-					if err == nil && len(mappedOutput.Decisions) == 0 && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
-						incomplete = true
+					if err == nil {
+						// An agent output that already reports failure/abort on a SUCCESS
+						// row is inconsistent; drive the normal failure path instead of
+						// leaving the execution in EXECUTING forever.
+						if mappedOutput.Status == "FAILURE" || mappedOutput.Status == "ABORTED" {
+							incomplete = true
+						} else if len(mappedOutput.Decisions) == 0 && mappedOutput.Status != "FINISHED" {
+							incomplete = true
+						}
 					}
 
 					if incomplete {
@@ -1072,7 +1079,10 @@ func rehydrateExecutionValuesWithLimit(ctx context.Context, workflowExecution *W
 		}
 
 		if remaining != nil {
-			if size := offloadedValueSize(action.Result); size > *remaining {
+			// Without a declared size the read cannot be bounded; keep the
+			// placeholder rather than reading an arbitrarily large value.
+			size := offloadedValueSize(action.Result)
+			if size <= 0 || size > *remaining {
 				return "", false
 			}
 		}
