@@ -892,11 +892,8 @@ END ERROR HANDLING
    `, action.AppName, intentContext, inputFields)
 
 	inputData := ""
-	if len(attempt) > 1 {
-		currentAttempt := attempt[0]
-		if currentAttempt > 4 {
-			inputData += fmt.Sprintf(`IF we are missing a value from the user, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. If the "path" is wrong, rewrite it. For GET requests, REMOVE the body field. Do not use it for authentication fields such as "apikey". Do NOT do this unless it is absolutely necessary, make SURE the fields are missing. Before returning missing fields, ALWAYS ensure and retry the path, body and query fields to ensure they are correct according to the input data.\n\n`)
-		}
+	if len(attempt) > 0 && attempt[0] >= 1 {
+		inputData += fmt.Sprintf(`IF we are missing a value from the user, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. If the "path" is wrong, rewrite it. For GET requests, REMOVE the body field. Do not use it for authentication fields such as "apikey". Do NOT do this unless it is absolutely necessary, make SURE the fields are missing. Before returning missing fields, ALWAYS ensure and retry the path, body and query fields to ensure they are correct according to the input data.\n\n`)
 	}
 
 	// We are using a unique Action ID here most of the time, meaning the chat will be continued.
