@@ -93,6 +93,10 @@ var kmsDebug = false
 var debug = os.Getenv("DEBUG") == "true"
 var sandboxProject = "shuffle-sandbox-337810"
 
+// maxExecutionListRehydrationBytes caps how much offloaded data the executions
+// list routes expand into a single response.
+const maxExecutionListRehydrationBytes int64 = 32 << 20
+
 func GetProject() ShuffleStorage {
 	return project
 }
@@ -4574,9 +4578,16 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 
 	// The list route used to return the raw OpenSearch documents, so offloaded
 	// values - including AI Agent decisions - were invisible in the UI for every
-	// execution that crossed the offload threshold.
+	// execution that crossed the offload threshold. Cap the total expanded bytes
+	// so a large page cannot turn into a multi-gigabyte response.
+	rehydrationBudget := maxExecutionListRehydrationBytes
 	for index := range workflowExecutions {
-		rehydrateExecutionValues(ctx, &workflowExecutions[index])
+		if rehydrationBudget <= 0 {
+			log.Printf("[WARNING] Reached the %d byte rehydration budget for the executions list; remaining executions keep their offload placeholders", int64(maxExecutionListRehydrationBytes))
+			break
+		}
+
+		rehydrateExecutionValuesWithLimit(ctx, &workflowExecutions[index], &rehydrationBudget)
 	}
 
 	for index, execution := range workflowExecutions {
@@ -4841,8 +4852,14 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	rehydrationBudget := maxExecutionListRehydrationBytes
 	for index := range workflowExecutions {
-		rehydrateExecutionValues(ctx, &workflowExecutions[index])
+		if rehydrationBudget <= 0 {
+			log.Printf("[WARNING] Reached the %d byte rehydration budget for the executions list V2; remaining executions keep their offload placeholders", int64(maxExecutionListRehydrationBytes))
+			break
+		}
+
+		rehydrateExecutionValuesWithLimit(ctx, &workflowExecutions[index], &rehydrationBudget)
 	}
 
 	for index, execution := range workflowExecutions {
@@ -19202,7 +19219,19 @@ func isAgentActionResult(result ActionResult) bool {
 		return true
 	}
 
-	return strings.EqualFold(result.Action.Name, "agent")
+	appName := strings.ToLower(strings.TrimSpace(result.Action.AppName))
+	if appName == "shuffle-ai" {
+		return true
+	}
+
+	if strings.EqualFold(result.Action.Name, "run_agent") {
+		return true
+	}
+
+	// Legacy on-prem agent rows may have lost the app name but kept the node
+	// name. Do not classify a normal app action that happens to be named
+	// "agent" as an AI Agent.
+	return len(appName) == 0 && strings.EqualFold(result.Action.Name, "agent")
 }
 
 // agentResultBlocksFinish reports whether an agent action result is in a state
@@ -19268,6 +19297,54 @@ func loadAgentOutputFromOffload(ctx context.Context, workflowExecution WorkflowE
 	}
 
 	return output, cleanedValue, nil
+}
+
+const (
+	agentOffloadRecoveryAttempts = 3
+	agentOffloadRecoveryDelay    = 100 * time.Millisecond
+)
+
+// loadAgentOutputFromOffloadWithRetry retries the offload read a few times so a
+// transient filesystem/S3 error does not turn into a false agent failure.
+func loadAgentOutputFromOffloadWithRetry(ctx context.Context, workflowExecution WorkflowExecution, action Action) (AgentOutput, string, error) {
+	var lastErr error
+	for attempt := 0; attempt < agentOffloadRecoveryAttempts; attempt++ {
+		output, rawValue, err := loadAgentOutputFromOffload(ctx, workflowExecution, action)
+		if err == nil {
+			return output, rawValue, nil
+		}
+
+		lastErr = err
+		if attempt < agentOffloadRecoveryAttempts-1 {
+			time.Sleep(agentOffloadRecoveryDelay)
+		}
+	}
+
+	return AgentOutput{}, "", lastErr
+}
+
+// markAgentResultFailure turns an agent result into a terminal FAILURE row so
+// the failure survives even if no self-request can be delivered.
+func markAgentResultFailure(workflowExecution WorkflowExecution, resultIndex int, reason string) WorkflowExecution {
+	if resultIndex < 0 || resultIndex >= len(workflowExecution.Results) {
+		return workflowExecution
+	}
+
+	output := AgentOutput{}
+	_ = json.Unmarshal([]byte(cleanAgentResultString(workflowExecution.Results[resultIndex].Result)), &output)
+	output.Status = "FAILURE"
+	output.CompletedAt = time.Now().UnixMilli()
+	if len(reason) > 0 {
+		output.Error = reason
+	}
+
+	if marshalledOutput, err := json.Marshal(output); err == nil {
+		workflowExecution.Results[resultIndex].Result = string(marshalledOutput)
+	}
+
+	workflowExecution.Results[resultIndex].Status = "FAILURE"
+	workflowExecution.Results[resultIndex].CompletedAt = time.Now().Unix()
+	return workflowExecution
 }
 
 func cleanAgentResultString(raw string) string {
@@ -19484,7 +19561,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	// still available in the offload file. Resolve it by action ID rather than by
 	// the offload marker, which may be gone.
 	if decisionIdResultIndex < 0 {
-		offloadOutput, offloadValue, offloadErr := loadAgentOutputFromOffload(ctx, workflowExecution, actionResult.Action)
+		offloadOutput, offloadValue, offloadErr := loadAgentOutputFromOffloadWithRetry(ctx, workflowExecution, actionResult.Action)
 		if offloadErr != nil {
 			if debug {
 				log.Printf("[DEBUG][%s] No offload file available for decision ID '%s': %s", workflowExecution.ExecutionId, decisionId, offloadErr)
@@ -19509,12 +19586,17 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		log.Printf("[ERROR][%s] Decision ID %s was not found. Skipping.", workflowExecution.ExecutionId, decisionId)
 
 		// If the stored agent output has no decisions at all, this callback can
-		// never be applied. Fail the agent action explicitly instead of leaving
-		// the execution blocked forever.
-		if len(mappedResult.Decisions) == 0 {
+		// never be applied. Persist a terminal FAILURE so the agent is not left
+		// blocked forever, even when self-requests are disabled or fail.
+		if len(mappedResult.Decisions) == 0 && workflowExecution.Status != "FINISHED" && workflowExecution.Status != "ABORTED" && workflowExecution.Status != "FAILURE" {
 			log.Printf("[ERROR][%s] Agent action %s has no decisions; marking it FAILURE instead of leaving the agent blocked", workflowExecution.ExecutionId, actionResult.Action.ID)
+
+			workflowExecution = markAgentResultFailure(workflowExecution, foundActionResultIndex, fmt.Sprintf("Agent decision %s could not be recovered: the stored agent output has no decisions", decisionId))
+			if saveErr := SetWorkflowExecution(ctx, workflowExecution, true); saveErr != nil {
+				log.Printf("[ERROR][%s] Failed persisting agent FAILURE: %s", workflowExecution.ExecutionId, saveErr)
+			}
+
 			failedResult := workflowExecution.Results[foundActionResultIndex]
-			failedResult.Status = "FAILURE"
 			go sendAgentActionSelfRequest("FAILURE", workflowExecution, failedResult)
 		}
 
@@ -20925,6 +21007,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			if result.Status == "SUCCESS" {
 				lastResult = result.Result
 			}
+		}
+
+		if finished && executionHasUnfinishedAgentResults(workflowExecution) {
+			log.Printf("[INFO][%s] Not setting execution to FINISHED because an agent result is not finished (ParsedExecutionResult)", workflowExecution.ExecutionId)
+			finished = false
 		}
 
 		if finished {

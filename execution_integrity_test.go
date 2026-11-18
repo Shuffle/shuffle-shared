@@ -2,6 +2,7 @@ package shuffle
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,6 +42,16 @@ func TestAgentResultBlocksFinish(t *testing.T) {
 			name:     "regular action is never inspected",
 			result:   ActionResult{Action: regularAction, Status: "WAITING"},
 			expected: false,
+		},
+		{
+			name:     "regular action named agent is not treated as an AI Agent",
+			result:   ActionResult{Action: Action{AppName: "execute_python", Name: "agent"}, Status: "WAITING", Result: `{"status":"RUNNING"}`},
+			expected: false,
+		},
+		{
+			name:     "shuffle-ai is treated as an AI Agent",
+			result:   ActionResult{Action: Action{AppName: "shuffle-ai", Name: "run_agent"}, Status: "WAITING", Result: `{"status":"RUNNING"}`},
+			expected: true,
 		},
 		{
 			name:     "waiting agent with the RUNNING stub blocks completion",
@@ -275,5 +286,130 @@ func TestLoadAgentOutputFromOffloadMissingFile(t *testing.T) {
 
 	if _, _, err := loadAgentOutputFromOffload(context.Background(), execution, Action{ID: "missing-action", AppName: "AI Agent"}); err == nil {
 		t.Fatal("expected an error for a missing offload file")
+	}
+}
+
+func TestFixexecutionDoesNotFinishUnfinishedAgent(t *testing.T) {
+	previousProject := project
+	project.CacheDb = false
+	project.DbType = ""
+	t.Cleanup(func() {
+		project = previousProject
+	})
+
+	agentAction := Action{ID: "agent-action", Name: "agent", AppName: "AI Agent"}
+
+	tests := []struct {
+		name           string
+		resultStatus   string
+		result         string
+		expectedStatus string
+	}{
+		{
+			name:           "running agent output must not finish the execution",
+			resultStatus:   "SUCCESS",
+			result:         `{"status":"RUNNING","decisions":[]}`,
+			expectedStatus: "EXECUTING",
+		},
+		{
+			name:           "finished agent output may finish the execution",
+			resultStatus:   "SUCCESS",
+			result:         `{"status":"FINISHED","decisions":[]}`,
+			expectedStatus: "FINISHED",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			execution := WorkflowExecution{
+				ExecutionId: "execution-id",
+				Status:      "EXECUTING",
+				Workflow: Workflow{
+					ID:      "workflow-id",
+					Actions: []Action{agentAction},
+				},
+				Results: []ActionResult{
+					{Action: agentAction, Status: test.resultStatus, Result: test.result},
+				},
+			}
+
+			fixed, _ := Fixexecution(context.Background(), execution)
+			if fixed.Status != test.expectedStatus {
+				t.Fatalf("expected execution status %q, got %q", test.expectedStatus, fixed.Status)
+			}
+		})
+	}
+}
+
+func TestMarkAgentResultFailure(t *testing.T) {
+	execution := WorkflowExecution{
+		ExecutionId: "execution-id",
+		Results: []ActionResult{
+			{
+				Action: Action{ID: "agent-action", AppName: "AI Agent"},
+				Status: "WAITING",
+				Result: `{"status":"RUNNING"}`,
+			},
+		},
+	}
+
+	failed := markAgentResultFailure(execution, 0, "decision lost")
+	if failed.Results[0].Status != "FAILURE" {
+		t.Fatalf("expected FAILURE, got %q", failed.Results[0].Status)
+	}
+
+	output := AgentOutput{}
+	if err := json.Unmarshal([]byte(failed.Results[0].Result), &output); err != nil {
+		t.Fatalf("failed parsing failed agent output: %s", err)
+	}
+
+	if output.Status != "FAILURE" {
+		t.Fatalf("expected agent output status FAILURE, got %q", output.Status)
+	}
+
+	if output.Error != "decision lost" {
+		t.Fatalf("expected error message to be preserved, got %q", output.Error)
+	}
+
+	if failed.Results[0].CompletedAt == 0 {
+		t.Fatal("expected CompletedAt to be set")
+	}
+}
+
+func TestRehydrateExecutionValuesRespectsBudget(t *testing.T) {
+	basePath := withLocalOffloadStorage(t)
+
+	const (
+		orgId       = "org-id"
+		executionId = "execution-id"
+	)
+	firstValue := "first-offloaded-value"
+	secondValue := "second-offloaded-value"
+	writeOffloadFile(t, basePath, orgId, executionId, "action-one", firstValue)
+	writeOffloadFile(t, basePath, orgId, executionId, "action-two", secondValue)
+
+	placeholder := `{"reason":"Result too large to handle (https://github.com/frikky/shuffle/issues/171)."}`
+	execution := WorkflowExecution{
+		ExecutionId:  executionId,
+		ExecutionOrg: orgId,
+		Results: []ActionResult{
+			{Action: Action{ID: "action-one"}, Result: placeholder},
+			{Action: Action{ID: "action-two"}, Result: placeholder},
+		},
+	}
+
+	budget := int64(4)
+	rehydrateExecutionValuesWithLimit(context.Background(), &execution, &budget)
+
+	if execution.Results[0].Result != firstValue {
+		t.Fatalf("expected the first value to be rehydrated, got %q", execution.Results[0].Result)
+	}
+
+	if execution.Results[1].Result != placeholder {
+		t.Fatalf("expected the second value to keep its placeholder, got %q", execution.Results[1].Result)
+	}
+
+	if budget > 0 {
+		t.Fatalf("expected the rehydration budget to be exhausted, got %d", budget)
 	}
 }
