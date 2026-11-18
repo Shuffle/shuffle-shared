@@ -4572,6 +4572,13 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// The list route used to return the raw OpenSearch documents, so offloaded
+	// values - including AI Agent decisions - were invisible in the UI for every
+	// execution that crossed the offload threshold.
+	for index := range workflowExecutions {
+		rehydrateExecutionValues(ctx, &workflowExecutions[index])
+	}
+
 	for index, execution := range workflowExecutions {
 		newResults := []ActionResult{}
 		newActions := []Action{}
@@ -19185,6 +19192,80 @@ func isAgentAction(action Action) bool {
 	return name == "ai agent" || name == "shuffle agent"
 }
 
+// isAgentActionResult reports whether an action result belongs to an AI Agent.
+func isAgentActionResult(result ActionResult) bool {
+	if isAgentAction(result.Action) {
+		return true
+	}
+
+	return strings.EqualFold(result.Action.Name, "agent")
+}
+
+// agentResultBlocksFinish reports whether an agent action result is in a state
+// that must not be treated as a completed execution. An agent row left in
+// WAITING with an empty/RUNNING output must not make the execution look
+// FINISHED, because that hides a broken agent behind a successful status.
+func agentResultBlocksFinish(result ActionResult) bool {
+	if !isAgentActionResult(result) {
+		return false
+	}
+
+	if result.Status == "SKIPPED" {
+		return false
+	}
+
+	if result.Status == "FAILURE" || result.Status == "ABORTED" {
+		return true
+	}
+
+	resultString := strings.TrimSpace(result.Result)
+	if len(resultString) == 0 {
+		return true
+	}
+
+	// An offload placeholder is a valid representation of a large result; the
+	// full value lives in the offload file. Its content cannot be inspected
+	// here, so trust the result row only if it is already marked SUCCESS.
+	if strings.Contains(resultString, "Result too large to handle") {
+		return result.Status != "SUCCESS"
+	}
+
+	output := AgentOutput{}
+	if err := json.Unmarshal([]byte(cleanAgentResultString(resultString)), &output); err != nil {
+		return true
+	}
+
+	return output.Status != "FINISHED"
+}
+
+func executionHasUnfinishedAgentResults(execution WorkflowExecution) bool {
+	for _, result := range execution.Results {
+		if agentResultBlocksFinish(result) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// loadAgentOutputFromOffload reads a full agent output from the large-execution
+// offload file. The file is resolved from the action ID, so recovery works even
+// when the stored result no longer contains the offload marker.
+func loadAgentOutputFromOffload(ctx context.Context, workflowExecution WorkflowExecution, action Action) (AgentOutput, string, error) {
+	rawValue, err := getExecutionFileValue(ctx, workflowExecution, ActionResult{Action: action})
+	if err != nil {
+		return AgentOutput{}, "", err
+	}
+
+	cleanedValue := cleanAgentResultString(rawValue)
+	output := AgentOutput{}
+	if err := json.Unmarshal([]byte(cleanedValue), &output); err != nil {
+		return AgentOutput{}, "", err
+	}
+
+	return output, cleanedValue, nil
+}
+
 func cleanAgentResultString(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if len(trimmed) < 10 || !strings.HasPrefix(trimmed, "{") {
@@ -19394,8 +19475,45 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
+	// Last-resort recovery: an earlier writer (for example Fixexecution) may have
+	// replaced the stored agent result with a stub, while the full agent output is
+	// still available in the offload file. Resolve it by action ID rather than by
+	// the offload marker, which may be gone.
+	if decisionIdResultIndex < 0 {
+		offloadOutput, offloadValue, offloadErr := loadAgentOutputFromOffload(ctx, workflowExecution, actionResult.Action)
+		if offloadErr != nil {
+			if debug {
+				log.Printf("[DEBUG][%s] No offload file available for decision ID '%s': %s", workflowExecution.ExecutionId, decisionId, offloadErr)
+			}
+		} else {
+			for resultDecisionIndex, resultDecision := range offloadOutput.Decisions {
+				if resultDecision.RunDetails.Id != decisionId {
+					continue
+				}
+
+				log.Printf("[INFO][%s] Recovered decision ID '%s' from the offload file for action %s", workflowExecution.ExecutionId, decisionId, actionResult.Action.ID)
+				mappedResult = offloadOutput
+				workflowExecution.Results[foundActionResultIndex].Result = offloadValue
+				decisionIdResultIndex = resultDecisionIndex
+				decisionIndex = resultDecision.I
+				break
+			}
+		}
+	}
+
 	if decisionIdResultIndex < 0 {
 		log.Printf("[ERROR][%s] Decision ID %s was not found. Skipping.", workflowExecution.ExecutionId, decisionId)
+
+		// If the stored agent output has no decisions at all, this callback can
+		// never be applied. Fail the agent action explicitly instead of leaving
+		// the execution blocked forever.
+		if len(mappedResult.Decisions) == 0 {
+			log.Printf("[ERROR][%s] Agent action %s has no decisions; marking it FAILURE instead of leaving the agent blocked", workflowExecution.ExecutionId, actionResult.Action.ID)
+			failedResult := workflowExecution.Results[foundActionResultIndex]
+			failedResult.Status = "FAILURE"
+			go sendAgentActionSelfRequest("FAILURE", workflowExecution, failedResult)
+		}
+
 		return &workflowExecution, false, errors.New(fmt.Sprintf("decisionIdResultIndex: Agent node ID for decision ID %s not found", decisionId))
 	}
 
@@ -24481,9 +24599,13 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 		}
 
 		if len(execution.Workflow.Actions)+extra == len(execution.Results) {
-			// 0x0elliot: remove log later
-			log.Printf("[INFO][%s] All actions have results (%d). Setting status to FINISHED. Actions: %d, Triggers: %d, Results: %d", execution.ExecutionId, len(execution.Workflow.Actions)+extra, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results))
-			execution.Status = "FINISHED"
+			if executionHasUnfinishedAgentResults(execution) {
+				log.Printf("[WARNING][%s] All actions have results, but at least one agent result is not finished. Keeping status EXECUTING instead of marking FINISHED.", execution.ExecutionId)
+			} else {
+				// 0x0elliot: remove log later
+				log.Printf("[INFO][%s] All actions have results (%d). Setting status to FINISHED. Actions: %d, Triggers: %d, Results: %d", execution.ExecutionId, len(execution.Workflow.Actions)+extra, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results))
+				execution.Status = "FINISHED"
+			}
 		}
 	}
 

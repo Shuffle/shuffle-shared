@@ -24,6 +24,20 @@ import (
 // - Setexecution
 // - Getexecution
 
+// agentDecisionsComplete reports whether every decision stored in the agent
+// output is in a finished state. An empty decision set is explicitly NOT
+// complete: large agent results are stored as an offload placeholder, which
+// parses to zero decisions. Treating 0 == 0 as completion overwrites the stored
+// result with a RUNNING stub, which also destroys the offload marker and makes
+// the full result unreachable through every automatic rehydration path.
+func agentDecisionsComplete(output AgentOutput, finishedDecisions []string) bool {
+	if len(output.Decisions) == 0 {
+		return false
+	}
+
+	return len(finishedDecisions) == len(output.Decisions)
+}
+
 func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (WorkflowExecution, bool) {
 	dbsave := false
 	workflowExecution.Workflow.Image = ""
@@ -322,7 +336,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 					}
 
-					if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
+					if agentDecisionsComplete(mappedOutput, finishedDecisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
 
 						// Check if requests was recently sent or not
 						cacheId := fmt.Sprintf("agent-%s-%s-fixexec-finished-check", workflowExecution.ExecutionId, action.ID)
@@ -989,6 +1003,137 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	return nil
 }
 
+// rehydrateExecutionValues replaces every offloaded value referenced by the
+// execution with the contents of its offload file. GetWorkflowExecution used to
+// inline this logic on both its cache and DB paths; keeping it in one place lets
+// the executions list route apply the same rehydration.
+func rehydrateExecutionValues(ctx context.Context, workflowExecution *WorkflowExecution) {
+	if workflowExecution == nil || len(workflowExecution.ExecutionId) == 0 {
+		return
+	}
+
+	if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
+		baseArgument := &ActionResult{
+			Result: workflowExecution.ExecutionArgument,
+			Action: Action{ID: "execution_argument"},
+		}
+
+		newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
+		if err != nil {
+			log.Printf("[DEBUG][%s] Failed to parse in execution file value for exec argument: %s", workflowExecution.ExecutionId, err)
+		} else {
+			workflowExecution.ExecutionArgument = newValue
+		}
+	}
+
+	if strings.Contains(workflowExecution.Result, "Result too large to handle") {
+		baseResult := &ActionResult{
+			Result: workflowExecution.Result,
+			Action: Action{ID: "execution_result"},
+		}
+
+		newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseResult)
+		if err != nil {
+			log.Printf("[DEBUG][%s] Failed to parse in execution file value for Result: %s", workflowExecution.ExecutionId, err)
+		} else {
+			workflowExecution.Result = newValue
+		}
+	}
+
+	for valueIndex, value := range workflowExecution.Results {
+		if strings.Contains(value.Result, "Result too large to handle") {
+			newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
+			if err != nil {
+				log.Printf("[DEBUG][%s] Failed to parse in execution file value: %s", workflowExecution.ExecutionId, err)
+				continue
+			}
+
+			workflowExecution.Results[valueIndex].Result = newValue
+		}
+
+		for paramIndex, param := range value.Action.Parameters {
+			if strings.Contains(param.Value, "Result too large to handle") {
+				newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+					Result: param.Value,
+				})
+				if err == nil {
+					workflowExecution.Results[valueIndex].Action.Parameters[paramIndex].Value = newValue
+				}
+			}
+		}
+
+		for paramIndex, param := range value.Action.InvalidParameters {
+			if strings.Contains(param.Value, "Result too large to handle") {
+				newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+					Result: param.Value,
+				})
+				if err == nil {
+					workflowExecution.Results[valueIndex].Action.InvalidParameters[paramIndex].Value = newValue
+				}
+			}
+		}
+	}
+
+	for actionIndex, action := range workflowExecution.Workflow.Actions {
+		for paramIndex, param := range action.Parameters {
+			if strings.Contains(param.Value, "Result too large to handle") {
+				newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+					Result: param.Value,
+				})
+				if err == nil {
+					workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = newValue
+				}
+			}
+		}
+
+		for paramIndex, param := range action.InvalidParameters {
+			if strings.Contains(param.Value, "Result too large to handle") {
+				newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+					Result: param.Value,
+				})
+				if err == nil {
+					workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = newValue
+				}
+			}
+		}
+	}
+
+	for triggerIndex, trigger := range workflowExecution.Workflow.Triggers {
+		for paramIndex, param := range trigger.Parameters {
+			if strings.Contains(param.Value, "Result too large to handle") {
+				newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+					Result: param.Value,
+				})
+				if err == nil {
+					workflowExecution.Workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = newValue
+				}
+			}
+		}
+	}
+
+	for execVarIndex, execVar := range workflowExecution.Workflow.ExecutionVariables {
+		if strings.Contains(execVar.Value, "Result too large to handle") {
+			newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+				Result: execVar.Value,
+			})
+			if err == nil {
+				workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = newValue
+			}
+		}
+	}
+
+	for execVarIndex, execVar := range workflowExecution.ExecutionVariables {
+		if strings.Contains(execVar.Value, "Result too large to handle") {
+			newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+				Result: execVar.Value,
+			})
+			if err == nil {
+				workflowExecution.ExecutionVariables[execVarIndex].Value = newValue
+			}
+		}
+	}
+}
+
 func GetWorkflowExecution(ctx context.Context, id string, bypassCache ...bool) (*WorkflowExecution, error) {
 	nameKey := "workflowexecution"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
@@ -1008,127 +1153,8 @@ func GetWorkflowExecution(ctx context.Context, id string, bypassCache ...bool) (
 
 			if (err == nil && workflowExecution != nil) && len(workflowExecution.ExecutionId) > 0 {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
-				if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
-					baseArgument := &ActionResult{
-						Result: workflowExecution.ExecutionArgument,
-						Action: Action{ID: "execution_argument"},
-					}
 
-					newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
-					if err != nil {
-						log.Printf("[DEBUG][%s] Failed to parse in execution file value for exec argument: %s (3)", workflowExecution.ExecutionId, err)
-					} else {
-						//log.Printf("[DEBUG][%s] Found a new value to parse with exec argument", workflowExecution.ExecutionId)
-						workflowExecution.ExecutionArgument = newValue
-					}
-				}
-
-				if strings.Contains(workflowExecution.Result, "Result too large to handle") {
-					baseResult := &ActionResult{
-						Result: workflowExecution.Result,
-						Action: Action{ID: "execution_result"},
-					}
-
-					newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseResult)
-					if err != nil {
-						log.Printf("[DEBUG][%s] Failed to parse in execution file value for Result: %s", workflowExecution.ExecutionId, err)
-					} else {
-						log.Printf("[DEBUG][%s] Found a new value to parse with Result field", workflowExecution.ExecutionId)
-						workflowExecution.Result = newValue
-					}
-				}
-
-				for valueIndex, value := range workflowExecution.Results {
-					if strings.Contains(value.Result, "Result too large to handle") {
-						newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
-						if err != nil {
-							continue
-						}
-
-						workflowExecution.Results[valueIndex].Result = newValue
-					}
-
-					for paramIndex, param := range value.Action.Parameters {
-						if strings.Contains(param.Value, "Result too large to handle") {
-							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-								Result: param.Value,
-							})
-							if err == nil {
-								workflowExecution.Results[valueIndex].Action.Parameters[paramIndex].Value = newValue
-							}
-						}
-					}
-
-					for paramIndex, param := range value.Action.InvalidParameters {
-						if strings.Contains(param.Value, "Result too large to handle") {
-							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-								Result: param.Value,
-							})
-							if err == nil {
-								workflowExecution.Results[valueIndex].Action.InvalidParameters[paramIndex].Value = newValue
-							}
-						}
-					}
-				}
-
-				for actionIndex, action := range workflowExecution.Workflow.Actions {
-					for paramIndex, param := range action.Parameters {
-						if strings.Contains(param.Value, "Result too large to handle") {
-							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-								Result: param.Value,
-							})
-							if err == nil {
-								workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = newValue
-							}
-						}
-					}
-
-					for paramIndex, param := range action.InvalidParameters {
-						if strings.Contains(param.Value, "Result too large to handle") {
-							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-								Result: param.Value,
-							})
-							if err == nil {
-								workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = newValue
-							}
-						}
-					}
-				}
-
-				for triggerIndex, trigger := range workflowExecution.Workflow.Triggers {
-					for paramIndex, param := range trigger.Parameters {
-						if strings.Contains(param.Value, "Result too large to handle") {
-							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-								Result: param.Value,
-							})
-							if err == nil {
-								workflowExecution.Workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = newValue
-							}
-						}
-					}
-				}
-
-				for execVarIndex, execVar := range workflowExecution.Workflow.ExecutionVariables {
-					if strings.Contains(execVar.Value, "Result too large to handle") {
-						newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-							Result: execVar.Value,
-						})
-						if err == nil {
-							workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = newValue
-						}
-					}
-				}
-
-				for execVarIndex, execVar := range workflowExecution.ExecutionVariables {
-					if strings.Contains(execVar.Value, "Result too large to handle") {
-						newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-							Result: execVar.Value,
-						})
-						if err == nil {
-							workflowExecution.ExecutionVariables[execVarIndex].Value = newValue
-						}
-					}
-				}
+				rehydrateExecutionValues(ctx, workflowExecution)
 
 				// Fixes missing pieces
 				newexec, _ := Fixexecution(ctx, *workflowExecution)
@@ -1204,134 +1230,7 @@ func GetWorkflowExecution(ctx context.Context, id string, bypassCache ...bool) (
 	} else {
 		return workflowExecution, errors.New("no database client configured")
 	}
-	if len(workflowExecution.ExecutionId) > 0 {
-		// A workaround for large bits of information for execution argument
-		if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
-			//log.Printf("[DEBUG] Found prefix %s to be replaced for exec argument (3)", workflowExecution.ExecutionArgument)
-			baseArgument := &ActionResult{
-				Result: workflowExecution.ExecutionArgument,
-				Action: Action{ID: "execution_argument"},
-			}
-
-			newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
-			if err != nil {
-				log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (4)", err)
-			} else {
-				//log.Printf("[DEBUG] Found a new value to parse with exec argument")
-				workflowExecution.ExecutionArgument = newValue
-			}
-		}
-
-		if strings.Contains(workflowExecution.Result, "Result too large to handle") {
-			baseResult := &ActionResult{
-				Result: workflowExecution.Result,
-				Action: Action{ID: "execution_result"},
-			}
-
-			newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseResult)
-			if err != nil {
-				log.Printf("[DEBUG][%s] Failed to parse in execution file value for Result: %s", workflowExecution.ExecutionId, err)
-			} else {
-				workflowExecution.Result = newValue
-			}
-		}
-
-		// Parsing as file.
-		//log.Printf("[DEBUG] Got execution %s. Results: ~%d/%d", id, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
-		for valueIndex, value := range workflowExecution.Results {
-			if strings.Contains(value.Result, "Result too large to handle") {
-				//log.Printf("[DEBUG] Found prefix %s to be replaced (2)", value.Result)
-				newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
-				if err != nil {
-					log.Printf("[DEBUG] Failed to parse in execution file value %s (5)", err)
-					continue
-				}
-
-				workflowExecution.Results[valueIndex].Result = newValue
-			}
-
-			for paramIndex, param := range value.Action.Parameters {
-				if strings.Contains(param.Value, "Result too large to handle") {
-					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-						Result: param.Value,
-					})
-					if err == nil {
-						workflowExecution.Results[valueIndex].Action.Parameters[paramIndex].Value = newValue
-					}
-				}
-			}
-
-			for paramIndex, param := range value.Action.InvalidParameters {
-				if strings.Contains(param.Value, "Result too large to handle") {
-					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-						Result: param.Value,
-					})
-					if err == nil {
-						workflowExecution.Results[valueIndex].Action.InvalidParameters[paramIndex].Value = newValue
-					}
-				}
-			}
-		}
-
-		for actionIndex, action := range workflowExecution.Workflow.Actions {
-			for paramIndex, param := range action.Parameters {
-				if strings.Contains(param.Value, "Result too large to handle") {
-					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-						Result: param.Value,
-					})
-					if err == nil {
-						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = newValue
-					}
-				}
-			}
-
-			for paramIndex, param := range action.InvalidParameters {
-				if strings.Contains(param.Value, "Result too large to handle") {
-					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-						Result: param.Value,
-					})
-					if err == nil {
-						workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = newValue
-					}
-				}
-			}
-		}
-
-		for triggerIndex, trigger := range workflowExecution.Workflow.Triggers {
-			for paramIndex, param := range trigger.Parameters {
-				if strings.Contains(param.Value, "Result too large to handle") {
-					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-						Result: param.Value,
-					})
-					if err == nil {
-						workflowExecution.Workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = newValue
-					}
-				}
-			}
-		}
-
-		for execVarIndex, execVar := range workflowExecution.Workflow.ExecutionVariables {
-			if strings.Contains(execVar.Value, "Result too large to handle") {
-				newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-					Result: execVar.Value,
-				})
-				if err == nil {
-					workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = newValue
-				}
-			}
-		}
-
-		for execVarIndex, execVar := range workflowExecution.ExecutionVariables {
-			if strings.Contains(execVar.Value, "Result too large to handle") {
-				newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
-					Result: execVar.Value,
-				})
-				if err == nil {
-					workflowExecution.ExecutionVariables[execVarIndex].Value = newValue
-				}
-			}
-		}
-	}
+	rehydrateExecutionValues(ctx, workflowExecution)
 
 	//log.Printf("[DEBUG] Returned execution %s with %d results (1)", id, len(workflowExecution.Results))
 
@@ -1348,7 +1247,7 @@ func GetWorkflowExecution(ctx context.Context, id string, bypassCache ...bool) (
 			return workflowExecution, getErr
 		}
 
-		err = SetCache(ctx, id, newexecution, 600)
+		err = SetCache(ctx, cacheKey, newexecution, 600)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating execution: %s", err)
 		}
