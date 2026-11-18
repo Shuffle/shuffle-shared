@@ -727,10 +727,7 @@ func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, 
 			Priority:          11,
 		}
 
-		parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), orgId)
-		if project.Environment != "cloud" {
-			parsedEnv = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-"))
-		}
+		parsedEnv := getWorkflowQueueEnvironment(env.Name, orgId)
 
 		err = SetWorkflowQueue(ctx, execRequest, parsedEnv)
 		if err != nil {
