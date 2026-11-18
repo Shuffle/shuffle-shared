@@ -73,6 +73,16 @@ func TestAgentResultBlocksFinish(t *testing.T) {
 			expected: false,
 		},
 		{
+			name:     "offload placeholder on a waiting agent blocks completion",
+			result:   ActionResult{Action: agentAction, Status: "WAITING", Result: `{"reason":"Result too large to handle (https://github.com/frikky/shuffle/issues/171).","id":"execution-id_agent-action"}`},
+			expected: true,
+		},
+		{
+			name:     "agent is recognized by action name when app name is missing",
+			result:   ActionResult{Action: Action{Name: "agent"}, Status: "WAITING", Result: `{"status":"RUNNING"}`},
+			expected: true,
+		},
+		{
 			name:     "skipped agent does not block completion",
 			result:   ActionResult{Action: agentAction, Status: "SKIPPED", Result: `{"status":"RUNNING"}`},
 			expected: false,
@@ -252,5 +262,18 @@ func TestFixexecutionKeepsOffloadedAgentResult(t *testing.T) {
 
 	if fixed.Results[0].Status != "WAITING" {
 		t.Fatalf("expected the agent result to stay WAITING, got %q", fixed.Results[0].Status)
+	}
+}
+
+func TestLoadAgentOutputFromOffloadMissingFile(t *testing.T) {
+	withLocalOffloadStorage(t)
+
+	execution := WorkflowExecution{
+		ExecutionId:  "execution-id",
+		ExecutionOrg: "org-id",
+	}
+
+	if _, _, err := loadAgentOutputFromOffload(context.Background(), execution, Action{ID: "missing-action", AppName: "AI Agent"}); err == nil {
+		t.Fatal("expected an error for a missing offload file")
 	}
 }
