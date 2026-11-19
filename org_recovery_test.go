@@ -381,8 +381,8 @@ func TestSetOrg_HardFailsOnSevereDataLoss(t *testing.T) {
 	if err := SetOrg(ctx, hollow, orgId); err == nil {
 		t.Fatalf("expected SetOrg to HARD FAIL on hollowed-out org, but it succeeded")
 	}
-	if !strings.Contains(logBuf.String(), "[ORG_CORRUPTION_BLOCKED]") {
-		t.Errorf("expected [ORG_CORRUPTION_BLOCKED] monitor log to be emitted, got logs:\n%s", logBuf.String())
+	if count := strings.Count(logBuf.String(), "[ORG_CORRUPTION_BLOCKED]"); count != 1 {
+		t.Errorf("expected exactly 1 [ORG_CORRUPTION_BLOCKED] monitor log, got %d:\n%s", count, logBuf.String())
 	}
 
 	// 2. Dropping Users + SyncFeatures/Limits simultaneously -> MUST HARD FAIL
@@ -450,6 +450,12 @@ func TestGetOrg_RecoversFromCorruptedCacheAndValidatesDedicatedCache(t *testing.
 	_ = SetCache(ctx, "Organizations_"+orgId, corruptedBytes, 60)
 
 	// GetOrg (with cache enabled) must restore the 300,000 limit from dedicated cache via FixOrg
+	// AND re-save the healed org to Organizations_<id> cache so subsequent GetOrg calls do not re-trigger recovery logs
+	var logBuf bytes.Buffer
+	origOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(origOut)
+
 	recovered, err := GetOrg(ctx, orgId)
 	if err != nil {
 		t.Fatalf("GetOrg failed: %v", err)
@@ -457,6 +463,22 @@ func TestGetOrg_RecoversFromCorruptedCacheAndValidatesDedicatedCache(t *testing.
 	if recovered.SyncFeatures.AppExecutions.Limit != 300000 || recovered.SyncFeatures.OnpremAppExecutions.Limit != 150000 {
 		t.Fatalf("expected GetOrg to restore limits (300000/150000) from dedicated cache, got %d/%d",
 			recovered.SyncFeatures.AppExecutions.Limit, recovered.SyncFeatures.OnpremAppExecutions.Limit)
+	}
+	if count := strings.Count(logBuf.String(), "[ORG_CORRUPTION_RECOVERED]"); count != 1 {
+		t.Errorf("expected 1 [ORG_CORRUPTION_RECOVERED] log on first healing read, got %d", count)
+	}
+
+	// Second GetOrg read must hit the now-healed Organizations_<id> cache with 0 recovery logs!
+	logBuf.Reset()
+	recoveredSecond, err := GetOrg(ctx, orgId)
+	if err != nil {
+		t.Fatalf("second GetOrg failed: %v", err)
+	}
+	if recoveredSecond.SyncFeatures.AppExecutions.Limit != 300000 {
+		t.Fatalf("expected second GetOrg to have 300000 limit, got %d", recoveredSecond.SyncFeatures.AppExecutions.Limit)
+	}
+	if count := strings.Count(logBuf.String(), "[ORG_CORRUPTION_RECOVERED]"); count != 0 {
+		t.Errorf("expected 0 [ORG_CORRUPTION_RECOVERED] logs after cache was healed, got %d:\n%s", count, logBuf.String())
 	}
 
 	// 4. Poison general Organizations_<id> cache with 0 users AND delete dedicated cache -> GetOrg must auto-bypass cache and load from DB

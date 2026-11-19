@@ -4203,10 +4203,10 @@ func isNonDefaultSyncFeatures(sf SyncFeatures) bool {
 	if sf.AppExecutions.Limit > 2000 || sf.OnpremAppExecutions.Limit > 25000 {
 		return true
 	}
-	if sf.MultiEnv.Limit > 1 || sf.MultiEnv.Active {
+	if sf.MultiEnv.Limit > 1 {
 		return true
 	}
-	if sf.MultiTenant.Limit > 3 || sf.MultiTenant.Active {
+	if sf.MultiTenant.Limit > 3 {
 		return true
 	}
 	if sf.AnnualAppRunsGrouping.Active || sf.Branding.Active || sf.MultiRegion.Active {
@@ -4429,8 +4429,15 @@ func GetOrg(ctx context.Context, id string, bypassCache ...bool) (*Org, error) {
 					if curOrg.Id == "" {
 						return curOrg, errors.New("Org doesn't exist")
 					}
+					beforeApp := curOrg.SyncFeatures.AppExecutions.Limit
+					beforeOnprem := curOrg.SyncFeatures.OnpremAppExecutions.Limit
 					*curOrg = FixOrg(ctx, *curOrg)
 					if curOrg.Id == id && len(curOrg.Users) > 0 && curOrg.Name != "" && curOrg.Name != "tmp" && hasSyncFeatureLimits(curOrg.SyncFeatures) {
+						if curOrg.SyncFeatures.AppExecutions.Limit != beforeApp || curOrg.SyncFeatures.OnpremAppExecutions.Limit != beforeOnprem {
+							if healedBytes, mErr := json.Marshal(curOrg); mErr == nil {
+								_ = SetCache(ctx, cacheKey, healedBytes, 1440)
+							}
+						}
 						return curOrg, nil
 					}
 					log.Printf("[WARNING] [ORG_CORRUPTION_RECOVERED] action=GetOrg_CacheBypass org_id=%s org_name=%q caller=%q reason=\"Cached org missing critical fields or limits, bypassing cache to DB\" cached_users=%d cached_app_exec_limit=%d cached_onprem_exec_limit=%d",
@@ -4586,7 +4593,19 @@ func GetOrg(ctx context.Context, id string, bypassCache ...bool) (*Org, error) {
 	}
 
 	curOrg.Priorities = newPriorities
-	*curOrg = FixOrg(ctx, *curOrg)
+	if !skipCache {
+		*curOrg = FixOrg(ctx, *curOrg)
+		if !hasSyncFeatureLimits(curOrg.SyncFeatures) {
+			curOrg.SyncFeatures.AppExecutions.Limit = 2000
+			curOrg.SyncFeatures.AppExecutions.Active = true
+			if curOrg.SyncFeatures.MultiEnv.Limit <= 0 {
+				curOrg.SyncFeatures.MultiEnv.Limit = 1
+			}
+			if curOrg.SyncFeatures.MultiTenant.Limit <= 0 {
+				curOrg.SyncFeatures.MultiTenant.Limit = 3
+			}
+		}
+	}
 
 	if project.CacheDb && !skipCache {
 		neworg, err := json.Marshal(curOrg)
@@ -5108,10 +5127,23 @@ func isOrgNotFoundErr(err error) bool {
 // RecoverAndValidateOrg performs systematic diffing and recovery across all Org fields and sub-structs.
 // If too much data was lost (corrupted update), it HARD FAILS and blocks the write entirely.
 func RecoverAndValidateOrg(ctx context.Context, data Org, id string) (outOrg Org, retErr error) {
+	callerInfo := getOrgCallerInfo()
+	var diffSummary string
+	orgNameForLog := data.Name
+
 	defer func() {
 		if r := recover(); r != nil {
 			retErr = fmt.Errorf("hard-fail: recovered from unexpected panic in RecoverAndValidateOrg for org '%s': %v", id, r)
 			log.Printf("[CRITICAL] %v\nStack: %s", retErr, string(runtimeDebug.Stack()))
+		}
+		if retErr != nil {
+			if diffSummary != "" {
+				log.Printf("[ERROR] [ORG_CORRUPTION_BLOCKED] org_id=%s org_name=%q caller=%q err=%q %s",
+					id, orgNameForLog, callerInfo, retErr.Error(), diffSummary)
+			} else {
+				log.Printf("[ERROR] [ORG_CORRUPTION_BLOCKED] org_id=%s org_name=%q caller=%q err=%q",
+					id, orgNameForLog, callerInfo, retErr.Error())
+			}
 		}
 	}()
 
@@ -5215,7 +5247,9 @@ func RecoverAndValidateOrg(ctx context.Context, data Org, id string) (outOrg Org
 	existingHasCustomFeatures := isNonDefaultSyncFeatures(existingOrg.SyncFeatures)
 	incomingHasCustomFeatures := isNonDefaultSyncFeatures(data.SyncFeatures)
 	incomingMissingLimits := !hasSyncFeatureLimits(data.SyncFeatures) && hasSyncFeatureLimits(existingOrg.SyncFeatures)
-	if !intentionalFeaturesEdit && (incomingMissingLimits || (existingHasCustomFeatures && !incomingHasCustomFeatures)) {
+	appLimitDropped := existingOrg.SyncFeatures.AppExecutions.Limit > 2000 && data.SyncFeatures.AppExecutions.Limit <= 2000
+	onpremLimitDropped := existingOrg.SyncFeatures.OnpremAppExecutions.Limit > 0 && data.SyncFeatures.OnpremAppExecutions.Limit <= 0
+	if !intentionalFeaturesEdit && (incomingMissingLimits || appLimitDropped || onpremLimitDropped || (existingHasCustomFeatures && !incomingHasCustomFeatures)) {
 		lostSections = append(lostSections, "SyncFeatures/Limits")
 	}
 
@@ -5275,8 +5309,11 @@ func RecoverAndValidateOrg(ctx context.Context, data Org, id string) (outOrg Org
 	// -----------------------------------------------------------------
 	// 5. HARD-FAIL GATES: REFUSE TO UPDATE IF TOO MUCH DATA WAS LOST
 	// -----------------------------------------------------------------
-	callerInfo := getOrgCallerInfo()
-	diffSummary := fmt.Sprintf("name=%q->%q users=%d->%d app_exec_limit=%d->%d onprem_exec_limit=%d->%d subs=%d->%d licensed=%t->%t creator_org=%q region=%q",
+	if existingOrg.Name != "" {
+		orgNameForLog = existingOrg.Name
+	}
+	diffSummary = fmt.Sprintf("lost_count=%d missing_sections=%q name=%q->%q users=%d->%d app_exec_limit=%d->%d onprem_exec_limit=%d->%d subs=%d->%d licensed=%t->%t creator_org=%q region=%q",
+		len(lostSections), strings.Join(lostSections, ","),
 		existingOrg.Name, data.Name,
 		existingValidUsers, incomingValidUsers,
 		existingOrg.SyncFeatures.AppExecutions.Limit, data.SyncFeatures.AppExecutions.Limit,
@@ -5286,35 +5323,23 @@ func RecoverAndValidateOrg(ctx context.Context, data Org, id string) (outOrg Org
 		existingOrg.CreatorOrg, existingOrg.Region)
 
 	if len(lostSections) >= 3 {
-		errMsg := fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Corrupted update detected (lost %d critical sections: [%s])",
+		return data, fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Corrupted update detected (lost %d critical sections: [%s])",
 			id, existingOrg.Name, len(lostSections), strings.Join(lostSections, ", "))
-		log.Printf("[ERROR] [ORG_CORRUPTION_BLOCKED] org_id=%s org_name=%q caller=%q lost_count=%d missing_sections=%q %s",
-			id, existingOrg.Name, callerInfo, len(lostSections), strings.Join(lostSections, ","), diffSummary)
-		return data, errMsg
 	}
 
 	if ArrayContains(lostSections, "Users") && ArrayContains(lostSections, "SyncFeatures/Limits") {
-		errMsg := fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Both Users and Execution Limits dropped simultaneously", id, existingOrg.Name)
-		log.Printf("[ERROR] [ORG_CORRUPTION_BLOCKED] org_id=%s org_name=%q caller=%q lost_count=%d missing_sections=%q %s",
-			id, existingOrg.Name, callerInfo, len(lostSections), strings.Join(lostSections, ","), diffSummary)
-		return data, errMsg
+		return data, fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Both Users and Execution Limits dropped simultaneously", id, existingOrg.Name)
 	}
 	if ArrayContains(lostSections, "Users") && ArrayContains(lostSections, "Subscriptions/License") {
-		errMsg := fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Both Users and Subscriptions dropped simultaneously", id, existingOrg.Name)
-		log.Printf("[ERROR] [ORG_CORRUPTION_BLOCKED] org_id=%s org_name=%q caller=%q lost_count=%d missing_sections=%q %s",
-			id, existingOrg.Name, callerInfo, len(lostSections), strings.Join(lostSections, ","), diffSummary)
-		return data, errMsg
+		return data, fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Both Users and Subscriptions dropped simultaneously", id, existingOrg.Name)
 	}
 	if ArrayContains(lostSections, "SyncFeatures/Limits") && ArrayContains(lostSections, "Subscriptions/License") {
-		errMsg := fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Both Execution Limits and Subscriptions dropped simultaneously", id, existingOrg.Name)
-		log.Printf("[ERROR] [ORG_CORRUPTION_BLOCKED] org_id=%s org_name=%q caller=%q lost_count=%d missing_sections=%q %s",
-			id, existingOrg.Name, callerInfo, len(lostSections), strings.Join(lostSections, ","), diffSummary)
-		return data, errMsg
+		return data, fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Both Execution Limits and Subscriptions dropped simultaneously", id, existingOrg.Name)
 	}
 
 	if len(lostSections) > 0 {
-		log.Printf("[WARNING] [ORG_CORRUPTION_RECOVERED] action=SetOrg_DBRecovery org_id=%s org_name=%q caller=%q recovered_count=%d missing_sections=%q %s",
-			id, existingOrg.Name, callerInfo, len(lostSections), strings.Join(lostSections, ","), diffSummary)
+		log.Printf("[WARNING] [ORG_CORRUPTION_RECOVERED] action=SetOrg_DBRecovery org_id=%s org_name=%q caller=%q %s",
+			id, existingOrg.Name, callerInfo, diffSummary)
 	}
 
 	// -----------------------------------------------------------------
@@ -5632,7 +5657,6 @@ func RecoverAndValidateOrg(ctx context.Context, data Org, id string) (outOrg Org
 func SetOrg(ctx context.Context, data Org, id string) error {
 	validatedData, err := RecoverAndValidateOrg(ctx, data, id)
 	if err != nil {
-		log.Printf("[ERROR] [ORG_CORRUPTION_BLOCKED] org_id=%s org_name=%q caller=%q err=%q", id, data.Name, getOrgCallerInfo(), err.Error())
 		return err
 	}
 	data = validatedData
