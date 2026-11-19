@@ -22,7 +22,9 @@ import (
 	"crypto/sha256"
 	"math"
 	"math/rand"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -4137,7 +4139,254 @@ func fixDriftedAlertThresholds(org *Org) bool {
 }
 
 // Handles org grabbing and user / org migrations
-func GetOrg(ctx context.Context, id string) (*Org, error) {
+func getDedicatedOrgSyncFeatures(ctx context.Context, orgId string) (SyncFeatures, error) {
+	if len(orgId) != 36 {
+		return SyncFeatures{}, errors.New("invalid orgId length for sync features cache")
+	}
+
+	cacheKey := fmt.Sprintf("org_sync_features_%s", orgId)
+	cache, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		return SyncFeatures{}, err
+	}
+
+	var data []byte
+	switch v := cache.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		return SyncFeatures{}, errors.New("invalid cache format for sync features")
+	}
+
+	if len(data) == 0 {
+		return SyncFeatures{}, errors.New("empty cache payload for sync features")
+	}
+
+	var features SyncFeatures
+	if err := json.Unmarshal(data, &features); err != nil {
+		return SyncFeatures{}, err
+	}
+
+	if !hasSyncFeatureLimits(features) {
+		return SyncFeatures{}, errors.New("cached sync features is empty or missing execution limits")
+	}
+
+	return features, nil
+}
+
+func setDedicatedOrgSyncFeatures(ctx context.Context, orgId string, features SyncFeatures) error {
+	if len(orgId) != 36 {
+		return errors.New("invalid orgId length for sync features cache")
+	}
+
+	if !hasSyncFeatureLimits(features) {
+		return errors.New("refusing to cache empty sync features without execution limits")
+	}
+
+	features.Editing = false
+	data, err := json.Marshal(features)
+	if err != nil {
+		return err
+	}
+
+	cacheKey := fmt.Sprintf("org_sync_features_%s", orgId)
+	return SetCache(ctx, cacheKey, data, 10080)
+}
+
+func hasSyncFeatureLimits(sf SyncFeatures) bool {
+	return sf.AppExecutions.Limit > 0 || sf.OnpremAppExecutions.Limit > 0
+}
+
+func isNonDefaultSyncFeatures(sf SyncFeatures) bool {
+	if sf.AppExecutions.Limit > 2000 || sf.OnpremAppExecutions.Limit > 25000 {
+		return true
+	}
+	if sf.MultiEnv.Limit > 1 {
+		return true
+	}
+	if sf.MultiTenant.Limit > 3 {
+		return true
+	}
+	if sf.AnnualAppRunsGrouping.Active || sf.Branding.Active || sf.MultiRegion.Active {
+		return true
+	}
+	if sf.Webhook.Limit > 5 || sf.Schedules.Limit > 5 || sf.UserInput.Limit > 5 || sf.EmailTrigger.Limit > 5 {
+		return true
+	}
+	if sf.Workflows.Limit > 0 || sf.WorkflowExecutions.Limit > 0 || sf.Updates.Limit > 0 ||
+		sf.Notifications.Limit > 0 || sf.Autocomplete.Limit > 0 || sf.Authentication.Limit > 0 ||
+		sf.Schedule.Limit > 0 || sf.Apps.Limit > 0 || sf.ShuffleGPT.Limit > 0 ||
+		sf.AgentExecutions.Limit > 0 || sf.LLMTokens.Limit > 0 {
+		return true
+	}
+	if sf.SendMail.Limit > 0 && sf.SendMail.Limit != 100 && sf.SendMail.Limit != 1000 {
+		return true
+	}
+	if sf.SendSms.Limit > 0 && sf.SendSms.Limit != 30 && sf.SendSms.Limit != 50 {
+		return true
+	}
+	if sf.AgentTokens.Limit > 0 && sf.AgentTokens.Limit != 10000000 {
+		return true
+	}
+	return false
+}
+
+func recoverSyncDataField(incoming, existing SyncData, defaultLimit int64) SyncData {
+	if incoming.Limit <= 0 && existing.Limit > 0 {
+		incoming.Limit = existing.Limit
+		if existing.Active {
+			incoming.Active = true
+		}
+	} else if defaultLimit > 0 && incoming.Limit == defaultLimit && existing.Limit > defaultLimit {
+		incoming.Limit = existing.Limit
+		if existing.Active {
+			incoming.Active = true
+		}
+	}
+	if incoming.Type == "" && existing.Type != "" {
+		incoming.Type = existing.Type
+	}
+	if incoming.Name == "" && existing.Name != "" {
+		incoming.Name = existing.Name
+	}
+	if incoming.Description == "" && existing.Description != "" {
+		incoming.Description = existing.Description
+	}
+	if incoming.Usage == 0 && existing.Usage > 0 {
+		incoming.Usage = existing.Usage
+	}
+	if incoming.StartDate == 0 && existing.StartDate > 0 {
+		incoming.StartDate = existing.StartDate
+	}
+	if incoming.EndDate == 0 && existing.EndDate > 0 {
+		incoming.EndDate = existing.EndDate
+	}
+	if incoming.DataCollection == 0 && existing.DataCollection > 0 {
+		incoming.DataCollection = existing.DataCollection
+	}
+	return incoming
+}
+
+func mergeMissingSyncFeatures(incoming, existing SyncFeatures, intentionalEdit bool) SyncFeatures {
+	if !intentionalEdit {
+		incoming.AppExecutions = recoverSyncDataField(incoming.AppExecutions, existing.AppExecutions, 2000)
+		incoming.OnpremAppExecutions = recoverSyncDataField(incoming.OnpremAppExecutions, existing.OnpremAppExecutions, 0)
+		incoming.MultiEnv = recoverSyncDataField(incoming.MultiEnv, existing.MultiEnv, 1)
+		incoming.MultiTenant = recoverSyncDataField(incoming.MultiTenant, existing.MultiTenant, 3)
+		incoming.MultiRegion = recoverSyncDataField(incoming.MultiRegion, existing.MultiRegion, 0)
+		incoming.Webhook = recoverSyncDataField(incoming.Webhook, existing.Webhook, 0)
+		incoming.Schedules = recoverSyncDataField(incoming.Schedules, existing.Schedules, 0)
+		incoming.UserInput = recoverSyncDataField(incoming.UserInput, existing.UserInput, 0)
+		incoming.SendMail = recoverSyncDataField(incoming.SendMail, existing.SendMail, 100)
+		incoming.SendSms = recoverSyncDataField(incoming.SendSms, existing.SendSms, 30)
+		incoming.Updates = recoverSyncDataField(incoming.Updates, existing.Updates, 0)
+		incoming.EmailTrigger = recoverSyncDataField(incoming.EmailTrigger, existing.EmailTrigger, 0)
+		incoming.Notifications = recoverSyncDataField(incoming.Notifications, existing.Notifications, 0)
+		incoming.Workflows = recoverSyncDataField(incoming.Workflows, existing.Workflows, 0)
+		incoming.Autocomplete = recoverSyncDataField(incoming.Autocomplete, existing.Autocomplete, 0)
+		incoming.WorkflowExecutions = recoverSyncDataField(incoming.WorkflowExecutions, existing.WorkflowExecutions, 0)
+		incoming.Authentication = recoverSyncDataField(incoming.Authentication, existing.Authentication, 0)
+		incoming.Schedule = recoverSyncDataField(incoming.Schedule, existing.Schedule, 0)
+		incoming.Apps = recoverSyncDataField(incoming.Apps, existing.Apps, 0)
+		incoming.ShuffleGPT = recoverSyncDataField(incoming.ShuffleGPT, existing.ShuffleGPT, 0)
+		incoming.AgentExecutions = recoverSyncDataField(incoming.AgentExecutions, existing.AgentExecutions, 0)
+		incoming.AgentTokens = recoverSyncDataField(incoming.AgentTokens, existing.AgentTokens, 10000000)
+		incoming.LLMTokens = recoverSyncDataField(incoming.LLMTokens, existing.LLMTokens, 0)
+
+		if existing.AnnualAppRunsGrouping.Active && !incoming.AnnualAppRunsGrouping.Active {
+			incoming.AnnualAppRunsGrouping = existing.AnnualAppRunsGrouping
+		}
+		if existing.Branding.Active && !incoming.Branding.Active {
+			incoming.Branding = existing.Branding
+		}
+		if existing.Multiplayer.Active && !incoming.Multiplayer.Active {
+			incoming.Multiplayer = existing.Multiplayer
+		}
+	} else {
+		// Even on intentional edits, ensure AppExecutions or OnpremAppExecutions didn't accidentally zero out both
+		if incoming.AppExecutions.Limit <= 0 && incoming.OnpremAppExecutions.Limit <= 0 {
+			if existing.AppExecutions.Limit > 0 {
+				incoming.AppExecutions.Limit = existing.AppExecutions.Limit
+			}
+			if existing.OnpremAppExecutions.Limit > 0 {
+				incoming.OnpremAppExecutions.Limit = existing.OnpremAppExecutions.Limit
+			}
+		}
+	}
+
+	if len(incoming.MailSent) == 0 && len(existing.MailSent) > 0 {
+		incoming.MailSent = existing.MailSent
+	}
+	incoming.Editing = false
+	return incoming
+}
+
+func getOrgCallerInfo() string {
+	for skip := 2; skip <= 6; skip++ {
+		pc, file, line, ok := runtime.Caller(skip)
+		if !ok {
+			break
+		}
+		fnName := "unknown"
+		if fn := runtime.FuncForPC(pc); fn != nil {
+			fnName = fn.Name()
+			if idx := strings.LastIndex(fnName, "."); idx != -1 {
+				fnName = fnName[idx+1:]
+			}
+		}
+		if fnName == "RecoverAndValidateOrg" || fnName == "SetOrg" || fnName == "GetOrg" || fnName == "FixOrg" {
+			continue
+		}
+		return fmt.Sprintf("%s (%s:%d)", fnName, filepath.Base(file), line)
+	}
+	return "unknown"
+}
+
+// FixOrg ensures SyncFeatures limits are not lost due to
+// cache corruption or partial/stripped Org structs.
+func FixOrg(ctx context.Context, org Org) Org {
+	if len(org.Id) != 36 {
+		return org
+	}
+
+	// BEFORE CHECK: Does the tenant already have real/non-default limits?
+	if hasSyncFeatureLimits(org.SyncFeatures) && isNonDefaultSyncFeatures(org.SyncFeatures) {
+		_ = setDedicatedOrgSyncFeatures(ctx, org.Id, org.SyncFeatures)
+	} else {
+		// Missing or default limits: check the dedicated cache
+		cachedFeatures, err := getDedicatedOrgSyncFeatures(ctx, org.Id)
+
+		// AFTER CHECK: Verify cached data actually has limits before adopting it
+		if err == nil && hasSyncFeatureLimits(cachedFeatures) {
+			if !hasSyncFeatureLimits(org.SyncFeatures) || isNonDefaultSyncFeatures(cachedFeatures) {
+				beforeApp := org.SyncFeatures.AppExecutions.Limit
+				beforeOnprem := org.SyncFeatures.OnpremAppExecutions.Limit
+				beforeEnv := org.SyncFeatures.MultiEnv.Limit
+				beforeTenant := org.SyncFeatures.MultiTenant.Limit
+
+				merged := mergeMissingSyncFeatures(org.SyncFeatures, cachedFeatures, false)
+				if merged.AppExecutions.Limit != beforeApp ||
+					merged.OnpremAppExecutions.Limit != beforeOnprem ||
+					merged.MultiEnv.Limit != beforeEnv ||
+					merged.MultiTenant.Limit != beforeTenant {
+					log.Printf("[WARNING] [ORG_CORRUPTION_RECOVERED] action=FixOrg org_id=%s org_name=%q caller=%q reason=\"SyncFeatures limits missing or default in org struct, restored from dedicated cache\" app_exec_limit=\"%d->%d\" onprem_exec_limit=\"%d->%d\" multi_env_limit=\"%d->%d\" multi_tenant_limit=\"%d->%d\"",
+						org.Id, org.Name, getOrgCallerInfo(),
+						beforeApp, merged.AppExecutions.Limit,
+						beforeOnprem, merged.OnpremAppExecutions.Limit,
+						beforeEnv, merged.MultiEnv.Limit,
+						beforeTenant, merged.MultiTenant.Limit)
+				}
+				org.SyncFeatures = merged
+			}
+		}
+	}
+
+	return org
+}
+
+func GetOrg(ctx context.Context, id string, bypassCache ...bool) (*Org, error) {
 	if id == "public" {
 		//return &Org{}, errors.New("'public' org is used for Singul action without being logged in. Not relevant.")
 		return &Org{
@@ -4159,19 +4408,41 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		log.Printf("[WARNING] GetOrg ID was cleaned from '%s' to '%s' - check data source", originalId, id)
 	}
 
+	skipCache := len(bypassCache) > 0 && bypassCache[0]
+
 	nameKey := "Organizations"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	curOrg := &Org{}
-	if project.CacheDb {
+	if !skipCache && project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, curOrg)
-			if err == nil {
-				if curOrg.Id == "" {
-					return curOrg, errors.New("Org doesn't exist")
-				} else {
-					return curOrg, nil
+			var cacheData []byte
+			switch v := cache.(type) {
+			case []uint8:
+				cacheData = []byte(v)
+			case string:
+				cacheData = []byte(v)
+			}
+			if len(cacheData) > 0 {
+				err = json.Unmarshal(cacheData, curOrg)
+				if err == nil {
+					if curOrg.Id == "" {
+						return curOrg, errors.New("Org doesn't exist")
+					}
+					beforeApp := curOrg.SyncFeatures.AppExecutions.Limit
+					beforeOnprem := curOrg.SyncFeatures.OnpremAppExecutions.Limit
+					*curOrg = FixOrg(ctx, *curOrg)
+					if curOrg.Id == id && len(curOrg.Users) > 0 && curOrg.Name != "" && curOrg.Name != "tmp" && hasSyncFeatureLimits(curOrg.SyncFeatures) {
+						if curOrg.SyncFeatures.AppExecutions.Limit != beforeApp || curOrg.SyncFeatures.OnpremAppExecutions.Limit != beforeOnprem {
+							if healedBytes, mErr := json.Marshal(curOrg); mErr == nil {
+								_ = SetCache(ctx, cacheKey, healedBytes, 1440)
+							}
+						}
+						return curOrg, nil
+					}
+					log.Printf("[WARNING] [ORG_CORRUPTION_RECOVERED] action=GetOrg_CacheBypass org_id=%s org_name=%q caller=%q reason=\"Cached org missing critical fields or limits, bypassing cache to DB\" cached_users=%d cached_app_exec_limit=%d cached_onprem_exec_limit=%d",
+						id, curOrg.Name, getOrgCallerInfo(), len(curOrg.Users), curOrg.SyncFeatures.AppExecutions.Limit, curOrg.SyncFeatures.OnpremAppExecutions.Limit)
+					curOrg = &Org{}
 				}
 			}
 		} else {
@@ -4233,18 +4504,18 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
 			} else {
-				if strings.Contains(err.Error(), `no such entity`) && project.CacheDb {
-					neworg, err := json.Marshal(curOrg)
-					if err != nil {
-						return &Org{}, err
+				if strings.Contains(err.Error(), `no such entity`) && project.CacheDb && !skipCache {
+					neworg, marshalErr := json.Marshal(curOrg)
+					if marshalErr != nil {
+						return &Org{}, marshalErr
 					}
 
 					// Set cache for it
-					err = SetCache(ctx, cacheKey, neworg, 30)
-					if err != nil {
-						log.Printf("[ERROR] Failed updating org cache (3): %s", err)
+					cacheErr := SetCache(ctx, cacheKey, neworg, 30)
+					if cacheErr != nil {
+						log.Printf("[ERROR] Failed updating org cache (3): %s", cacheErr)
 					}
-				} else {
+				} else if !strings.Contains(err.Error(), `no such entity`) {
 					log.Printf("[ERROR] Problem in org loading (2) for %s: %s", key, err)
 				}
 
@@ -4260,8 +4531,8 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		//return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID '%s'", curOrg.Id))
 	}
 
-	if len(curOrg.Tutorials) == 0 {
-		curOrg = GetTutorials(ctx, *curOrg, true)
+	if len(curOrg.Tutorials) == 0 && !skipCache {
+		curOrg = GetTutorials(ctx, *curOrg, false)
 	}
 
 	// Making sure to skip old irrelevant priorities
@@ -4322,7 +4593,21 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	curOrg.Priorities = newPriorities
-	if project.CacheDb {
+	if !skipCache {
+		*curOrg = FixOrg(ctx, *curOrg)
+		if !hasSyncFeatureLimits(curOrg.SyncFeatures) {
+			curOrg.SyncFeatures.AppExecutions.Limit = 2000
+			curOrg.SyncFeatures.AppExecutions.Active = true
+			if curOrg.SyncFeatures.MultiEnv.Limit <= 0 {
+				curOrg.SyncFeatures.MultiEnv.Limit = 1
+			}
+			if curOrg.SyncFeatures.MultiTenant.Limit <= 0 {
+				curOrg.SyncFeatures.MultiTenant.Limit = 3
+			}
+		}
+	}
+
+	if project.CacheDb && !skipCache {
 		neworg, err := json.Marshal(curOrg)
 		if err != nil {
 			log.Printf("[ERROR] Failed marshalling org for cache: %s", err)
@@ -4821,89 +5106,574 @@ func GetUsersByOrg(ctx context.Context, orgId string) ([]User, error) {
 	return users, nil
 }
 
-func SetOrg(ctx context.Context, data Org, id string) error {
-	if len(id) == 0 {
-		return errors.New(fmt.Sprintf("No ID provided for org %s", data.Name))
-	}
-
-	if len(data.Users) == 0 {
-		// Where do users go sometimes? wtf.
-		if project.Environment == "cloud" {
-			orgUsers, err := GetUsersByOrg(ctx, id)
-			if err != nil {
-				log.Printf("[ERROR] Error loading users during org autocorrecting: %s", err)
-			}
-
-			if len(orgUsers) > 0 {
-				usersOrg, err := GetOrg(ctx, data.Id)
-				if err != nil {
-					log.Printf("[ERROR] Error loading users during org autocorrecting: %s", err)
-				}
-
-				if len(usersOrg.Users) == len(orgUsers) {
-					data.Users = usersOrg.Users
-				} else {
-					log.Printf("[ERROR] Using actual Users[], this might cause roles issue")
-					data.Users = orgUsers
-				}
-
-				log.Printf("[ERROR] Found 0 users for org %s. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", data.Id, len(orgUsers))
-			}
-		}
-
-		if len(data.Users) == 0 {
-			return errors.New("Not allowed to update an org without any users in the organization. Need AT LEAST one user to update")
+func countValidUsers(users []User) int {
+	count := 0
+	for _, u := range users {
+		if len(strings.TrimSpace(u.Id)) > 0 || len(strings.TrimSpace(u.Username)) > 0 || len(strings.TrimSpace(u.GeneratedUsername)) > 0 {
+			count++
 		}
 	}
+	return count
+}
 
-	if id != data.Id && len(data.Id) > 0 {
-		log.Printf("[ERROR] Org ID mismatch: %s != %s. Resetting ID", id, data.Id)
-		id = data.Id
+func isOrgNotFoundErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return msg == "Org doesn't exist" || strings.Contains(msg, "no such entity")
+}
+
+// RecoverAndValidateOrg performs systematic diffing and recovery across all Org fields and sub-structs.
+// If too much data was lost (corrupted update), it HARD FAILS and blocks the write entirely.
+func RecoverAndValidateOrg(ctx context.Context, data Org, id string) (outOrg Org, retErr error) {
+	callerInfo := getOrgCallerInfo()
+	var diffSummary string
+	orgNameForLog := data.Name
+
+	defer func() {
+		if r := recover(); r != nil {
+			retErr = fmt.Errorf("hard-fail: recovered from unexpected panic in RecoverAndValidateOrg for org '%s': %v", id, r)
+			log.Printf("[CRITICAL] %v\nStack: %s", retErr, string(runtimeDebug.Stack()))
+		}
+		if retErr != nil {
+			if diffSummary != "" {
+				log.Printf("[ERROR] [ORG_CORRUPTION_BLOCKED] org_id=%s org_name=%q caller=%q err=%q %s",
+					id, orgNameForLog, callerInfo, retErr.Error(), diffSummary)
+			} else {
+				log.Printf("[ERROR] [ORG_CORRUPTION_BLOCKED] org_id=%s org_name=%q caller=%q err=%q",
+					id, orgNameForLog, callerInfo, retErr.Error())
+			}
+		}
+	}()
+
+	// -----------------------------------------------------------------
+	// 1. STRICT 36-CHAR UUID CHECK (NO STRIPPING ALLOWED)
+	// -----------------------------------------------------------------
+	if len(id) != 36 {
+		return data, fmt.Errorf("hard-fail: tenant ID '%s' must be exactly 36 characters (UUID required, got %d)", id, len(id))
+	}
+	if _, err := uuid.FromString(id); err != nil {
+		return data, fmt.Errorf("hard-fail: tenant ID '%s' is not a valid UUID: %w", id, err)
 	}
 
+	// 2. Diff incoming payload data.Id vs parameter id
+	if len(data.Id) > 0 && data.Id != id {
+		return data, fmt.Errorf("hard-fail: ID mismatch! Payload data.Id ('%s') != parameter ID ('%s'). Cross-tenant update blocked", data.Id, id)
+	}
 	data.Id = id
-	if len(data.Name) == 0 {
-		data.Name = "tmp"
 
-		if len(data.Org) > 0 {
+	// -----------------------------------------------------------------
+	// 3. FETCH DB GROUND TRUTH (Bypass Cache) & DIFF DB ID
+	// -----------------------------------------------------------------
+	existingOrg, err := GetOrg(ctx, id, true)
+	if err != nil && !isOrgNotFoundErr(err) {
+		// Transient DB error: try cache fallback before proceeding so we don't mistakenly treat existing org as new
+		if cachedOrg, cacheErr := GetOrg(ctx, id, false); cacheErr == nil && cachedOrg != nil && len(cachedOrg.Id) > 0 {
+			existingOrg = cachedOrg
+			err = nil
+		}
+	}
+
+	isExisting := (err == nil && existingOrg != nil && len(existingOrg.Id) > 0)
+	if isExisting && existingOrg.Id != id {
+		return data, fmt.Errorf("hard-fail: database entity ID mismatch! Database returned '%s' for target ID '%s'", existingOrg.Id, id)
+	}
+
+	intentionalFeaturesEdit := data.SyncFeatures.Editing
+	data.SyncFeatures.Editing = false
+
+	// For brand-new tenants, enforce baseline invariants
+	if !isExisting {
+		if len(data.Name) == 0 && len(data.Org) > 0 {
 			data.Name = data.Org
+		}
+		data.Name = strings.TrimSpace(data.Name)
+		if data.Name == "" || data.Name == "tmp" {
+			return data, fmt.Errorf("hard-fail: new tenant '%s' cannot have an empty or 'tmp' name", id)
+		}
+		if len(data.Org) == 0 {
+			data.Org = data.Name
+		}
+		if len(data.ManagerOrgs) == 0 && len(data.CreatorOrg) > 0 {
+			data.ManagerOrgs = []OrgMini{{Id: data.CreatorOrg}}
+		}
+		if len(data.Users) == 0 {
+			if orgUsers, uErr := GetUsersByOrg(ctx, id); uErr == nil && len(orgUsers) > 0 {
+				data.Users = orgUsers
+			}
+		}
+		data.Users = SanitizeOrgUsers(data.Users)
+		if countValidUsers(data.Users) == 0 {
+			return data, fmt.Errorf("hard-fail: new tenant '%s' must have at least one valid user", id)
+		}
+		if data.SyncFeatures.AppExecutions.Limit <= 0 {
+			data.SyncFeatures.AppExecutions.Limit = 2000
+			data.SyncFeatures.AppExecutions.Active = true
+		}
+		if data.SyncFeatures.MultiEnv.Limit <= 0 {
+			data.SyncFeatures.MultiEnv.Limit = 1
+		}
+		if data.SyncFeatures.MultiTenant.Limit <= 0 {
+			data.SyncFeatures.MultiTenant.Limit = 3
+		}
+		now := int64(time.Now().Unix())
+		if data.Created == 0 {
+			data.Created = now
+		}
+		data.Edited = now
+		return data, nil
+	}
+
+	// -----------------------------------------------------------------
+	// 4. DETECT LOST SECTIONS ACROSS ALL SUB-SYSTEMS
+	// -----------------------------------------------------------------
+	lostSections := []string{}
+
+	// A. Name & Identity
+	cleanName := strings.TrimSpace(data.Name)
+	if (cleanName == "" || cleanName == "tmp") && (existingOrg.Name != "" && existingOrg.Name != "tmp") {
+		lostSections = append(lostSections, "Name")
+	}
+
+	// B. Users
+	incomingValidUsers := countValidUsers(data.Users)
+	existingValidUsers := countValidUsers(existingOrg.Users)
+	if existingValidUsers > 0 && incomingValidUsers == 0 {
+		lostSections = append(lostSections, "Users")
+	}
+
+	// C. SyncFeatures / Execution Limits
+	existingHasCustomFeatures := isNonDefaultSyncFeatures(existingOrg.SyncFeatures)
+	incomingHasCustomFeatures := isNonDefaultSyncFeatures(data.SyncFeatures)
+	incomingMissingLimits := !hasSyncFeatureLimits(data.SyncFeatures) && hasSyncFeatureLimits(existingOrg.SyncFeatures)
+	appLimitDropped := existingOrg.SyncFeatures.AppExecutions.Limit > 2000 && data.SyncFeatures.AppExecutions.Limit <= 2000
+	onpremLimitDropped := existingOrg.SyncFeatures.OnpremAppExecutions.Limit > 0 && data.SyncFeatures.OnpremAppExecutions.Limit <= 0
+	if !intentionalFeaturesEdit && (incomingMissingLimits || appLimitDropped || onpremLimitDropped || (existingHasCustomFeatures && !incomingHasCustomFeatures)) {
+		lostSections = append(lostSections, "SyncFeatures/Limits")
+	}
+
+	// D. Subscriptions & Licensing
+	existingHasLicense := len(existingOrg.Subscriptions) > 0 || existingOrg.Licensed
+	incomingHasLicense := len(data.Subscriptions) > 0 || data.Licensed
+	if existingHasLicense && !incomingHasLicense {
+		lostSections = append(lostSections, "Subscriptions/License")
+	}
+
+	// E. Billing
+	existingHasBilling := len(existingOrg.Billing.AlertThreshold) > 0 ||
+		len(existingOrg.Billing.OnpremAlertThreshold) > 0 ||
+		existingOrg.Billing.InternalAppRunsHardLimit > 0 ||
+		existingOrg.Billing.AppRunsHardLimit > 0 ||
+		existingOrg.Billing.Email != ""
+	incomingHasBilling := len(data.Billing.AlertThreshold) > 0 ||
+		len(data.Billing.OnpremAlertThreshold) > 0 ||
+		data.Billing.InternalAppRunsHardLimit > 0 ||
+		data.Billing.AppRunsHardLimit > 0 ||
+		data.Billing.Email != "" ||
+		data.Billing.DefaultAlertsApplied ||
+		data.Billing.DefaultOnpremAlertsApplied
+	if existingHasBilling && !incomingHasBilling {
+		lostSections = append(lostSections, "Billing")
+	}
+
+	// F. SSOConfig
+	existingHasSSO := existingOrg.SSOConfig != (SSOConfig{})
+	incomingHasSSO := data.SSOConfig != (SSOConfig{}) && data.SSOConfig.OpenIdClientId != "CLEANED"
+	if existingHasSSO && data.SSOConfig == (SSOConfig{}) {
+		lostSections = append(lostSections, "SSOConfig")
+	}
+
+	// G. SyncConfig
+	existingHasSyncConfig := existingOrg.SyncConfig != (SyncConfig{})
+	if existingHasSyncConfig && data.SyncConfig == (SyncConfig{}) {
+		lostSections = append(lostSections, "SyncConfig")
+	}
+
+	// H. Defaults
+	existingHasDefaults := existingOrg.Defaults != (Defaults{})
+	if existingHasDefaults && data.Defaults == (Defaults{}) {
+		lostSections = append(lostSections, "Defaults")
+	}
+
+	// I. ActiveApps (only count as lost section if slice is nil or dropped >1 apps at once)
+	if len(existingOrg.ActiveApps) > 0 && (data.ActiveApps == nil || (len(existingOrg.ActiveApps) > 1 && len(data.ActiveApps) == 0)) {
+		lostSections = append(lostSections, "ActiveApps")
+	}
+
+	// J. ChildOrgs (only count as lost section if slice is nil or dropped >1 child orgs at once)
+	if len(existingOrg.ChildOrgs) > 0 && (data.ChildOrgs == nil || (len(existingOrg.ChildOrgs) > 1 && len(data.ChildOrgs) == 0)) {
+		lostSections = append(lostSections, "ChildOrgs")
+	}
+
+	// -----------------------------------------------------------------
+	// 5. HARD-FAIL GATES: REFUSE TO UPDATE IF TOO MUCH DATA WAS LOST
+	// -----------------------------------------------------------------
+	if existingOrg.Name != "" {
+		orgNameForLog = existingOrg.Name
+	}
+	diffSummary = fmt.Sprintf("lost_count=%d missing_sections=%q name=%q->%q users=%d->%d app_exec_limit=%d->%d onprem_exec_limit=%d->%d subs=%d->%d licensed=%t->%t creator_org=%q region=%q",
+		len(lostSections), strings.Join(lostSections, ","),
+		existingOrg.Name, data.Name,
+		existingValidUsers, incomingValidUsers,
+		existingOrg.SyncFeatures.AppExecutions.Limit, data.SyncFeatures.AppExecutions.Limit,
+		existingOrg.SyncFeatures.OnpremAppExecutions.Limit, data.SyncFeatures.OnpremAppExecutions.Limit,
+		len(existingOrg.Subscriptions), len(data.Subscriptions),
+		existingOrg.Licensed, data.Licensed,
+		existingOrg.CreatorOrg, existingOrg.Region)
+
+	if len(lostSections) >= 3 {
+		return data, fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Corrupted update detected (lost %d critical sections: [%s])",
+			id, existingOrg.Name, len(lostSections), strings.Join(lostSections, ", "))
+	}
+
+	if ArrayContains(lostSections, "Users") && ArrayContains(lostSections, "SyncFeatures/Limits") {
+		return data, fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Both Users and Execution Limits dropped simultaneously", id, existingOrg.Name)
+	}
+	if ArrayContains(lostSections, "Users") && ArrayContains(lostSections, "Subscriptions/License") {
+		return data, fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Both Users and Subscriptions dropped simultaneously", id, existingOrg.Name)
+	}
+	if ArrayContains(lostSections, "SyncFeatures/Limits") && ArrayContains(lostSections, "Subscriptions/License") {
+		return data, fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Both Execution Limits and Subscriptions dropped simultaneously", id, existingOrg.Name)
+	}
+
+	if len(lostSections) > 0 {
+		log.Printf("[WARNING] [ORG_CORRUPTION_RECOVERED] action=SetOrg_DBRecovery org_id=%s org_name=%q caller=%q %s",
+			id, existingOrg.Name, callerInfo, diffSummary)
+	}
+
+	// -----------------------------------------------------------------
+	// 6. RECOVER ALL RELEVANT STRUCT FIELDS AND SUB-STRUCTS
+	// -----------------------------------------------------------------
+	// Top-level identity & metadata
+	if cleanName == "" || cleanName == "tmp" {
+		data.Name = existingOrg.Name
+		data.Org = existingOrg.Org
+	} else if len(data.Org) == 0 {
+		if len(existingOrg.Org) > 0 {
+			data.Org = existingOrg.Org
 		} else {
 			data.Org = data.Name
 		}
 	}
+	if data.Description == "" && existingOrg.Description != "" {
+		data.Description = existingOrg.Description
+	}
+	if data.CompanyType == "" && existingOrg.CompanyType != "" {
+		data.CompanyType = existingOrg.CompanyType
+	}
+	if data.Image == "" && existingOrg.Image != "" {
+		data.Image = existingOrg.Image
+	}
+	if data.Role == "" && existingOrg.Role != "" {
+		data.Role = existingOrg.Role
+	}
+	if len(data.Roles) == 0 && len(existingOrg.Roles) > 0 {
+		data.Roles = existingOrg.Roles
+	}
+	if !data.CloudSync && existingOrg.CloudSync {
+		data.CloudSync = existingOrg.CloudSync
+	}
 
-	if len(data.ManagerOrgs) == 0 && len(data.CreatorOrg) > 0 {
-		data.ManagerOrgs = []OrgMini{
-			OrgMini{
-				Id: data.CreatorOrg,
-			},
+	// Users Recovery
+	if incomingValidUsers == 0 {
+		if existingValidUsers > 0 {
+			log.Printf("[WARNING] SetOrg: Recovered %d users for org %s from existing DB record", len(existingOrg.Users), id)
+			data.Users = existingOrg.Users
+		} else if orgUsers, uErr := GetUsersByOrg(ctx, id); uErr == nil && len(orgUsers) > 0 {
+			log.Printf("[WARNING] SetOrg: Recovered %d users for org %s from GetUsersByOrg", len(orgUsers), id)
+			data.Users = orgUsers
+		}
+	}
+	data.Users = SanitizeOrgUsers(data.Users)
+
+	// SyncFeatures (All sub-structs recovered field-by-field)
+	data.SyncFeatures = mergeMissingSyncFeatures(data.SyncFeatures, existingOrg.SyncFeatures, intentionalFeaturesEdit)
+	if !intentionalFeaturesEdit && !isNonDefaultSyncFeatures(data.SyncFeatures) {
+		if cachedFeatures, cErr := getDedicatedOrgSyncFeatures(ctx, id); cErr == nil && hasSyncFeatureLimits(cachedFeatures) && isNonDefaultSyncFeatures(cachedFeatures) {
+			data.SyncFeatures = mergeMissingSyncFeatures(data.SyncFeatures, cachedFeatures, false)
 		}
 	}
 
-	nameKey := "Organizations"
-	timeNow := int64(time.Now().Unix())
-	if data.Created == 0 {
-		data.Created = timeNow
+	// Subscriptions & Licensing
+	if len(data.Subscriptions) == 0 && len(existingOrg.Subscriptions) > 0 {
+		data.Subscriptions = existingOrg.Subscriptions
+	}
+	if existingOrg.Licensed && !data.Licensed {
+		data.Licensed = true
+	}
+	if data.SubscriptionUserId == "" && existingOrg.SubscriptionUserId != "" {
+		data.SubscriptionUserId = existingOrg.SubscriptionUserId
+	}
+	if existingOrg.EulaSigned && !data.EulaSigned {
+		data.EulaSigned = true
+	}
+	if data.EulaSignedBy == "" && existingOrg.EulaSignedBy != "" {
+		data.EulaSignedBy = existingOrg.EulaSignedBy
 	}
 
-	data.Edited = timeNow
-	data.Users = SanitizeOrgUsers(data.Users)
+	// Billing (Field-by-field)
+	if data.Billing.InternalAppRunsHardLimit == 0 && existingOrg.Billing.InternalAppRunsHardLimit > 0 {
+		data.Billing.InternalAppRunsHardLimit = existingOrg.Billing.InternalAppRunsHardLimit
+	}
+	if data.Billing.AppRunsHardLimit == 0 && existingOrg.Billing.AppRunsHardLimit > 0 {
+		data.Billing.AppRunsHardLimit = existingOrg.Billing.AppRunsHardLimit
+	}
+	if len(data.Billing.AlertThreshold) == 0 && len(existingOrg.Billing.AlertThreshold) > 0 {
+		data.Billing.AlertThreshold = existingOrg.Billing.AlertThreshold
+	}
+	if len(data.Billing.OnpremAlertThreshold) == 0 && len(existingOrg.Billing.OnpremAlertThreshold) > 0 {
+		data.Billing.OnpremAlertThreshold = existingOrg.Billing.OnpremAlertThreshold
+	}
+	if data.Billing.Email == "" && existingOrg.Billing.Email != "" {
+		data.Billing.Email = existingOrg.Billing.Email
+	}
+	if data.Billing.Consultation == (Consultation{}) && existingOrg.Billing.Consultation != (Consultation{}) {
+		data.Billing.Consultation = existingOrg.Billing.Consultation
+	}
+	if existingOrg.Billing.DefaultAlertsApplied && !data.Billing.DefaultAlertsApplied {
+		data.Billing.DefaultAlertsApplied = true
+	}
+	if existingOrg.Billing.DefaultOnpremAlertsApplied && !data.Billing.DefaultOnpremAlertsApplied {
+		data.Billing.DefaultOnpremAlertsApplied = true
+	}
+
+	// SSOConfig (Field-by-field + "CLEANED" protection)
+	if data.SSOConfig == (SSOConfig{}) && existingHasSSO {
+		data.SSOConfig = existingOrg.SSOConfig
+	} else {
+		if (data.SSOConfig.OpenIdClientId == "" || data.SSOConfig.OpenIdClientId == "CLEANED") && existingOrg.SSOConfig.OpenIdClientId != "" && existingOrg.SSOConfig.OpenIdClientId != "CLEANED" {
+			data.SSOConfig.OpenIdClientId = existingOrg.SSOConfig.OpenIdClientId
+		}
+		if (data.SSOConfig.OpenIdClientSecret == "" || data.SSOConfig.OpenIdClientSecret == "CLEANED") && existingOrg.SSOConfig.OpenIdClientSecret != "" && existingOrg.SSOConfig.OpenIdClientSecret != "CLEANED" {
+			data.SSOConfig.OpenIdClientSecret = existingOrg.SSOConfig.OpenIdClientSecret
+		}
+		if data.SSOConfig.SSOEntrypoint == "" && existingOrg.SSOConfig.SSOEntrypoint != "" {
+			data.SSOConfig.SSOEntrypoint = existingOrg.SSOConfig.SSOEntrypoint
+		}
+		if data.SSOConfig.SSOCertificate == "" && data.SSOConfig.SSOLongCertificate == "" {
+			if existingOrg.SSOConfig.SSOCertificate != "" {
+				data.SSOConfig.SSOCertificate = existingOrg.SSOConfig.SSOCertificate
+			}
+			if existingOrg.SSOConfig.SSOLongCertificate != "" {
+				data.SSOConfig.SSOLongCertificate = existingOrg.SSOConfig.SSOLongCertificate
+				data.SSOConfig.SSOCertificateHash = existingOrg.SSOConfig.SSOCertificateHash
+			}
+		}
+		if data.SSOConfig.OpenIdAuthorization == "" && existingOrg.SSOConfig.OpenIdAuthorization != "" {
+			data.SSOConfig.OpenIdAuthorization = existingOrg.SSOConfig.OpenIdAuthorization
+		}
+		if data.SSOConfig.OpenIdToken == "" && existingOrg.SSOConfig.OpenIdToken != "" {
+			data.SSOConfig.OpenIdToken = existingOrg.SSOConfig.OpenIdToken
+		}
+	}
+	_ = incomingHasSSO
+
+	// SyncConfig (Field-by-field)
+	if data.SyncConfig == (SyncConfig{}) && existingHasSyncConfig {
+		data.SyncConfig = existingOrg.SyncConfig
+	} else {
+		if data.SyncConfig.URL == "" && existingOrg.SyncConfig.URL != "" {
+			data.SyncConfig.URL = existingOrg.SyncConfig.URL
+		}
+		if data.SyncConfig.Interval == 0 && existingOrg.SyncConfig.Interval > 0 {
+			data.SyncConfig.Interval = existingOrg.SyncConfig.Interval
+		}
+		if data.SyncConfig.Apikey == "" && existingOrg.SyncConfig.Apikey != "" {
+			data.SyncConfig.Apikey = existingOrg.SyncConfig.Apikey
+		}
+		if data.SyncConfig.Source == "" && existingOrg.SyncConfig.Source != "" {
+			data.SyncConfig.Source = existingOrg.SyncConfig.Source
+		}
+		if data.SyncConfig.WorkflowBackupUpdated == 0 && existingOrg.SyncConfig.WorkflowBackupUpdated > 0 {
+			data.SyncConfig.WorkflowBackupUpdated = existingOrg.SyncConfig.WorkflowBackupUpdated
+			data.SyncConfig.WorkflowBackup = existingOrg.SyncConfig.WorkflowBackup
+		}
+		if data.SyncConfig.AppBackupUpdated == 0 && existingOrg.SyncConfig.AppBackupUpdated > 0 {
+			data.SyncConfig.AppBackupUpdated = existingOrg.SyncConfig.AppBackupUpdated
+			data.SyncConfig.AppBackup = existingOrg.SyncConfig.AppBackup
+		}
+		if data.SyncConfig.AiCloudSyncUpdated == 0 && existingOrg.SyncConfig.AiCloudSyncUpdated > 0 {
+			data.SyncConfig.AiCloudSyncUpdated = existingOrg.SyncConfig.AiCloudSyncUpdated
+			data.SyncConfig.AiCloudSync = existingOrg.SyncConfig.AiCloudSync
+		}
+	}
+
+	// Defaults (Field-by-field)
+	if data.Defaults == (Defaults{}) && existingHasDefaults {
+		data.Defaults = existingOrg.Defaults
+	} else {
+		if data.Defaults.AppDownloadRepo == "" && existingOrg.Defaults.AppDownloadRepo != "" {
+			data.Defaults.AppDownloadRepo = existingOrg.Defaults.AppDownloadRepo
+		}
+		if data.Defaults.AppDownloadBranch == "" && existingOrg.Defaults.AppDownloadBranch != "" {
+			data.Defaults.AppDownloadBranch = existingOrg.Defaults.AppDownloadBranch
+		}
+		if data.Defaults.WorkflowDownloadRepo == "" && existingOrg.Defaults.WorkflowDownloadRepo != "" {
+			data.Defaults.WorkflowDownloadRepo = existingOrg.Defaults.WorkflowDownloadRepo
+		}
+		if data.Defaults.WorkflowDownloadBranch == "" && existingOrg.Defaults.WorkflowDownloadBranch != "" {
+			data.Defaults.WorkflowDownloadBranch = existingOrg.Defaults.WorkflowDownloadBranch
+		}
+		if data.Defaults.NotificationWorkflow == "" && existingOrg.Defaults.NotificationWorkflow != "" {
+			data.Defaults.NotificationWorkflow = existingOrg.Defaults.NotificationWorkflow
+		}
+		if data.Defaults.DocumentationReference == "" && existingOrg.Defaults.DocumentationReference != "" {
+			data.Defaults.DocumentationReference = existingOrg.Defaults.DocumentationReference
+		}
+		if data.Defaults.WorkflowUploadRepo == "" && existingOrg.Defaults.WorkflowUploadRepo != "" {
+			data.Defaults.WorkflowUploadRepo = existingOrg.Defaults.WorkflowUploadRepo
+		}
+		if data.Defaults.WorkflowUploadBranch == "" && existingOrg.Defaults.WorkflowUploadBranch != "" {
+			data.Defaults.WorkflowUploadBranch = existingOrg.Defaults.WorkflowUploadBranch
+		}
+		if data.Defaults.WorkflowUploadUsername == "" && existingOrg.Defaults.WorkflowUploadUsername != "" {
+			data.Defaults.WorkflowUploadUsername = existingOrg.Defaults.WorkflowUploadUsername
+		}
+		if data.Defaults.WorkflowUploadToken == "" && existingOrg.Defaults.WorkflowUploadToken != "" {
+			data.Defaults.WorkflowUploadToken = existingOrg.Defaults.WorkflowUploadToken
+		}
+		if data.Defaults.KmsId == "" && existingOrg.Defaults.KmsId != "" {
+			data.Defaults.KmsId = existingOrg.Defaults.KmsId
+		}
+		if existingOrg.Defaults.TokensEncrypted && !data.Defaults.TokensEncrypted {
+			data.Defaults.TokensEncrypted = true
+		}
+	}
+
+	// Branding (Field-by-field)
+	if data.Branding == (OrgBranding{}) && existingOrg.Branding != (OrgBranding{}) {
+		data.Branding = existingOrg.Branding
+	} else {
+		if data.Branding.HomeUrl == "" && existingOrg.Branding.HomeUrl != "" {
+			data.Branding.HomeUrl = existingOrg.Branding.HomeUrl
+		}
+		if data.Branding.Theme == "" && existingOrg.Branding.Theme != "" {
+			data.Branding.Theme = existingOrg.Branding.Theme
+		}
+		if data.Branding.DocumentationLink == "" && existingOrg.Branding.DocumentationLink != "" {
+			data.Branding.DocumentationLink = existingOrg.Branding.DocumentationLink
+		}
+		if data.Branding.SupportEmail == "" && existingOrg.Branding.SupportEmail != "" {
+			data.Branding.SupportEmail = existingOrg.Branding.SupportEmail
+		}
+		if data.Branding.LogoutUrl == "" && existingOrg.Branding.LogoutUrl != "" {
+			data.Branding.LogoutUrl = existingOrg.Branding.LogoutUrl
+		}
+		if data.Branding.BrandColor == "" && existingOrg.Branding.BrandColor != "" {
+			data.Branding.BrandColor = existingOrg.Branding.BrandColor
+		}
+		if data.Branding.BrandName == "" && existingOrg.Branding.BrandName != "" {
+			data.Branding.BrandName = existingOrg.Branding.BrandName
+		}
+	}
+
+	// ActiveApps & ChildOrgs & Hierarchy
+	if len(existingOrg.ActiveApps) > 0 && (data.ActiveApps == nil || (len(existingOrg.ActiveApps) > 1 && len(data.ActiveApps) == 0)) {
+		data.ActiveApps = existingOrg.ActiveApps
+	}
+	if len(existingOrg.ChildOrgs) > 0 && (data.ChildOrgs == nil || (len(existingOrg.ChildOrgs) > 1 && len(data.ChildOrgs) == 0)) {
+		data.ChildOrgs = existingOrg.ChildOrgs
+	}
+	if data.CreatorOrg == "" && existingOrg.CreatorOrg != "" {
+		data.CreatorOrg = existingOrg.CreatorOrg
+	}
+	if len(data.ManagerOrgs) == 0 {
+		if len(existingOrg.ManagerOrgs) > 0 {
+			data.ManagerOrgs = existingOrg.ManagerOrgs
+		} else if len(data.CreatorOrg) > 0 {
+			data.ManagerOrgs = []OrgMini{{Id: data.CreatorOrg}}
+		}
+	}
+	if data.CreatorId == "" && existingOrg.CreatorId != "" {
+		data.CreatorId = existingOrg.CreatorId
+	}
+	if data.Region == "" && existingOrg.Region != "" {
+		data.Region = existingOrg.Region
+	}
+	if data.RegionUrl == "" && existingOrg.RegionUrl != "" {
+		data.RegionUrl = existingOrg.RegionUrl
+	}
+	if data.PartnerInfo == (PartnerInfo{}) && existingOrg.PartnerInfo != (PartnerInfo{}) {
+		data.PartnerInfo = existingOrg.PartnerInfo
+	}
+	if data.LeadInfo == (LeadInfo{}) && existingOrg.LeadInfo != (LeadInfo{}) {
+		data.LeadInfo = existingOrg.LeadInfo
+	}
+	if data.SyncUsage == (SyncUsage{}) && existingOrg.SyncUsage != (SyncUsage{}) {
+		data.SyncUsage = existingOrg.SyncUsage
+	}
+	if data.SecurityFramework == (Categories{}) && existingOrg.SecurityFramework != (Categories{}) {
+		data.SecurityFramework = existingOrg.SecurityFramework
+	}
+	if data.OrgAuth.Token == "" && existingOrg.OrgAuth.Token != "" {
+		data.OrgAuth = existingOrg.OrgAuth
+	}
+	if len(data.Invites) == 0 && len(existingOrg.Invites) > 0 {
+		data.Invites = existingOrg.Invites
+	}
+	if len(data.Interests) == 0 && len(existingOrg.Interests) > 0 {
+		data.Interests = existingOrg.Interests
+	}
+	if len(data.Priorities) == 0 && len(existingOrg.Priorities) > 0 {
+		data.Priorities = existingOrg.Priorities
+	}
+	if data.MainPriority == "" && existingOrg.MainPriority != "" {
+		data.MainPriority = existingOrg.MainPriority
+	}
+	if len(data.Tutorials) == 0 && len(existingOrg.Tutorials) > 0 {
+		data.Tutorials = existingOrg.Tutorials
+	}
+	if existingOrg.OldOrg && !data.OldOrg {
+		data.OldOrg = true
+	}
+	if existingOrg.Created > 0 {
+		data.Created = existingOrg.Created
+	}
+
+	// -----------------------------------------------------------------
+	// 7. FINAL HARD GATE: ZERO COMPROMISE ON CORRUPT ORGS
+	// -----------------------------------------------------------------
+	if countValidUsers(data.Users) == 0 {
+		return data, fmt.Errorf("hard-fail: org '%s' has 0 valid users after recovery", id)
+	}
+	data.Name = strings.TrimSpace(data.Name)
+	if data.Name == "" || data.Name == "tmp" {
+		return data, fmt.Errorf("hard-fail: org '%s' has invalid name ('%s') after recovery", id, data.Name)
+	}
+	if len(data.Org) == 0 {
+		data.Org = data.Name
+	}
+
+	now := int64(time.Now().Unix())
+	if data.Created == 0 {
+		data.Created = now
+	}
+	data.Edited = now
+
+	return data, nil
+}
+
+func SetOrg(ctx context.Context, data Org, id string) error {
+	validatedData, err := RecoverAndValidateOrg(ctx, data, id)
+	if err != nil {
+		return err
+	}
+	data = validatedData
+
+	nameKey := "Organizations"
 	if len(data.Tutorials) == 0 {
 		data = *GetTutorials(ctx, data, false)
 	}
 
-	if len(data.Users) == 0 {
-		return errors.New("Not allowed to update an org without any users in the organization. Add at least one user to update")
+	b, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling %s - %s: %s", id, nameKey, err)
+		return err
 	}
 
 	// clear session_token and API_token for user
 	if project.DbType == "opensearch" {
-		b, err := json.Marshal(data)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling %s - %s: %s", id, nameKey, err)
-			return err
-		}
-
 		err = indexEs(ctx, nameKey, id, b)
 		if err != nil {
 			return err
@@ -4929,15 +5699,13 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		}
 	}
 
-	if project.CacheDb {
-		neworg, err := json.Marshal(data)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in setorg: %s", err)
-			return nil
-		}
+	if hasSyncFeatureLimits(data.SyncFeatures) {
+		_ = setDedicatedOrgSyncFeatures(ctx, id, data.SyncFeatures)
+	}
 
+	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-		err = SetCache(ctx, cacheKey, neworg, 1440)
+		err = SetCache(ctx, cacheKey, b, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for org '%s': %s", cacheKey, err)
 		}

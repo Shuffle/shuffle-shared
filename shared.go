@@ -144,6 +144,16 @@ func AllowedDomain(referer string) bool {
 
 var prPreviewOriginRegex = regexp.MustCompile(`^https://shuffler-pr-previews--pr-[0-9]+-[a-z0-9]+\.web\.app$`)
 
+// Allows any https://*.shuffler.io origin.
+func isShufflerSubdomainOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "https" || parsed.Port() != "" || parsed.Path != "" {
+		return false
+	}
+
+	return strings.HasSuffix(strings.ToLower(parsed.Hostname()), ".shuffler.io")
+}
+
 func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	origin := request.Header["Origin"]
 	resp.Header().Set("Vary", "Origin")
@@ -213,6 +223,10 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			}
 
 			if !allowed && prPreviewOriginRegex.MatchString(origin[0]) {
+				allowed = true
+			}
+
+			if !allowed && isShufflerSubdomainOrigin(origin[0]) {
 				allowed = true
 			}
 
@@ -14975,6 +14989,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Reset limits to defaults (2000 app runs / 1 env / 3 tenants) for org %s (no license)", org.Id)
 		}
 
+		org.SyncFeatures.Editing = true
 		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 
 		if newLeadinfo.EnterpriseLicenseCloud ||
@@ -15181,8 +15196,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		oldOnpremAppExecutionsLimit := org.SyncFeatures.OnpremAppExecutions.Limit
 
 		org.SyncFeatures = tmpData.SyncFeatures
-		org.SyncFeatures.Editing = false
-
+		org.SyncFeatures.Editing = true
 		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 	}
 
@@ -15250,8 +15264,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		oldOnpremAppExecutionsLimit := org.SyncFeatures.OnpremAppExecutions.Limit
 
 		org.SyncFeatures = tmpData.SyncFeatures
-		org.SyncFeatures.Editing = false
-
+		org.SyncFeatures.Editing = true
 		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 	}
 
