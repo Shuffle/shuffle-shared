@@ -12157,46 +12157,48 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 							}
 						}
 
-						foundId := ""
-						if category == "cases" {
-							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Cases.Name
-							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Cases.LargeImage
-							foundId = org.SecurityFramework.Cases.ID
-						} else if category == "communication" || category == "comms" {
-							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Communication.Name
-							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Communication.LargeImage
-							foundId = org.SecurityFramework.Communication.ID
-						} else if category == "iam" {
-							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.IAM.Name
-							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.IAM.LargeImage
-							foundId = org.SecurityFramework.IAM.ID
-						} else if category == "assets" {
-							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Assets.Name
-							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Assets.LargeImage
-							foundId = org.SecurityFramework.Assets.ID
-						} else if category == "edr" || category == "eradication" {
-							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.EDR.Name
-							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.EDR.LargeImage
-							foundId = org.SecurityFramework.EDR.ID
-						} else if category == "intel" {
-							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Intel.Name
-							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Intel.LargeImage
-							foundId = org.SecurityFramework.Intel.ID
-						} else if category == "network" {
-							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Network.LargeImage
-							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Network.Name
-							foundId = org.SecurityFramework.Network.ID
-						} else if category == "siem" {
-							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.SIEM.LargeImage
-							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.SIEM.Name
-							foundId = org.SecurityFramework.SIEM.ID
-						} else {
-							log.Printf("[ERROR] Invalid category '%s' for Singul action in workflow %s", category, workflow.ID)
-						}
+						if len(org.Id) == 36 {
+							foundId := ""
+							if category == "cases" {
+								workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Cases.Name
+								workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Cases.LargeImage
+								foundId = org.SecurityFramework.Cases.ID
+							} else if category == "communication" || category == "comms" {
+								workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Communication.Name
+								workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Communication.LargeImage
+								foundId = org.SecurityFramework.Communication.ID
+							} else if category == "iam" {
+								workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.IAM.Name
+								workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.IAM.LargeImage
+								foundId = org.SecurityFramework.IAM.ID
+							} else if category == "assets" {
+								workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Assets.Name
+								workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Assets.LargeImage
+								foundId = org.SecurityFramework.Assets.ID
+							} else if category == "edr" || category == "eradication" {
+								workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.EDR.Name
+								workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.EDR.LargeImage
+								foundId = org.SecurityFramework.EDR.ID
+							} else if category == "intel" {
+								workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Intel.Name
+								workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Intel.LargeImage
+								foundId = org.SecurityFramework.Intel.ID
+							} else if category == "network" {
+								workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Network.LargeImage
+								workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Network.Name
+								foundId = org.SecurityFramework.Network.ID
+							} else if category == "siem" {
+								workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.SIEM.LargeImage
+								workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.SIEM.Name
+								foundId = org.SecurityFramework.SIEM.ID
+							} else {
+								log.Printf("[ERROR] Invalid category '%s' for Singul action in workflow %s", category, workflow.ID)
+							}
 
-						if !ArrayContains(org.ActiveApps, foundId) {
-							orgChanged = true
-							org.ActiveApps = append(org.ActiveApps, foundId)
+							if len(foundId) > 0 && !ArrayContains(org.ActiveApps, foundId) {
+								orgChanged = true
+								org.ActiveApps = append(org.ActiveApps, foundId)
+							}
 						}
 					}
 				}
@@ -12227,11 +12229,8 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if orgChanged {
+	if orgChanged && org != nil && len(org.Id) == 36 {
 		go SetOrg(context.Background(), *org, org.Id)
-		if err != nil {
-			log.Printf("[ERROR] Failed updating org in GenerateSingulWorkflows: %s", err)
-		}
 	}
 
 	err = SetWorkflow(ctx, *workflow, workflow.ID)

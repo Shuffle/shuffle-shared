@@ -1264,10 +1264,18 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 		if len(org.CreatorOrg) == 0 {
 			allChildOrgs, _, err := GetAllChildOrgs(ctx, org.Id)
-			if err == nil {
-				if len(allChildOrgs) != len(org.ChildOrgs) {
-					allChildOrgsMini := []OrgMini{}
-					for _, child := range allChildOrgs {
+			if err == nil && len(allChildOrgs) > len(org.ChildOrgs) {
+				existingChildIds := map[string]bool{}
+				allChildOrgsMini := make([]OrgMini, 0, len(allChildOrgs))
+				for _, existingChild := range org.ChildOrgs {
+					if len(existingChild.Id) > 0 {
+						existingChildIds[existingChild.Id] = true
+						allChildOrgsMini = append(allChildOrgsMini, existingChild)
+					}
+				}
+				for _, child := range allChildOrgs {
+					if len(child.Id) > 0 && !existingChildIds[child.Id] {
+						existingChildIds[child.Id] = true
 						allChildOrgsMini = append(allChildOrgsMini, OrgMini{
 							Id:         child.Id,
 							Name:       child.Name,
@@ -1276,6 +1284,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 							RegionUrl:  child.RegionUrl,
 						})
 					}
+				}
+				if len(allChildOrgsMini) > len(org.ChildOrgs) {
 					org.ChildOrgs = allChildOrgsMini
 					org.SyncFeatures.MultiTenant.Usage = int64(len(allChildOrgsMini) + 1)
 					org.SyncUsage.MultiTenant.Counter = int64(len(allChildOrgsMini) + 1)
@@ -1415,65 +1425,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Make sure to add all orgs that are childs IF you have access
-	org.ChildOrgs = []OrgMini{}
-
-	wg := sync.WaitGroup{}
-	ch := make(chan OrgMini, len(user.Orgs))
-	for _, orgloop := range user.Orgs {
-		wg.Add(1)
-
-		// Goroutine this
-		go func(orgId string) {
-			suborg, err := GetOrg(ctx, orgId)
-			if err != nil {
-				ch <- OrgMini{}
-				wg.Done()
-
-				return
-			}
-
-			// Check if current user is in that org
-			found := false
-			for _, userloop := range suborg.Users {
-				if userloop.Id == user.Id {
-					found = true
-				}
-			}
-
-			if !found {
-				ch <- OrgMini{}
-				wg.Done()
-
-				return
-			}
-
-			if suborg.CreatorOrg == org.Id {
-				ch <- OrgMini{
-					Id:         suborg.Id,
-					Name:       suborg.Name,
-					CreatorOrg: suborg.CreatorOrg,
-					Image:      suborg.Image,
-					RegionUrl:  suborg.RegionUrl,
-				}
-			} else {
-				ch <- OrgMini{}
-			}
-
-			wg.Done()
-		}(orgloop)
-	}
-
-	wg.Wait()
-	close(ch)
-
-	for suborg := range ch {
-		if suborg.CreatorOrg == org.Id {
-			suborg.Image = ""
-			org.ChildOrgs = append(org.ChildOrgs, suborg)
-		}
-	}
-
 	org.SyncConfig.Apikey = ""
 	org.SyncConfig.Source = ""
 
@@ -1507,6 +1458,65 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	} else {
+		// Make sure to add all orgs that are childs IF you have access
+		org.ChildOrgs = []OrgMini{}
+
+		wg := sync.WaitGroup{}
+		ch := make(chan OrgMini, len(user.Orgs))
+		for _, orgloop := range user.Orgs {
+			wg.Add(1)
+
+			// Goroutine this
+			go func(orgId string) {
+				suborg, err := GetOrg(ctx, orgId)
+				if err != nil {
+					ch <- OrgMini{}
+					wg.Done()
+
+					return
+				}
+
+				// Check if current user is in that org
+				found := false
+				for _, userloop := range suborg.Users {
+					if userloop.Id == user.Id {
+						found = true
+					}
+				}
+
+				if !found {
+					ch <- OrgMini{}
+					wg.Done()
+
+					return
+				}
+
+				if suborg.CreatorOrg == org.Id {
+					ch <- OrgMini{
+						Id:         suborg.Id,
+						Name:       suborg.Name,
+						CreatorOrg: suborg.CreatorOrg,
+						Image:      suborg.Image,
+						RegionUrl:  suborg.RegionUrl,
+					}
+				} else {
+					ch <- OrgMini{}
+				}
+
+				wg.Done()
+			}(orgloop)
+		}
+
+		wg.Wait()
+		close(ch)
+
+		for suborg := range ch {
+			if suborg.CreatorOrg == org.Id {
+				suborg.Image = ""
+				org.ChildOrgs = append(org.ChildOrgs, suborg)
+			}
+		}
+
 		org.Users = []User{}
 	}
 
@@ -13876,6 +13886,20 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		RegionUrl:       parentOrg.RegionUrl,
 
 		Defaults: parentOrg.Defaults,
+		SyncFeatures: SyncFeatures{
+			AppExecutions: SyncData{
+				Active: true,
+				Limit:  2000,
+			},
+			MultiEnv: SyncData{
+				Active: true,
+				Limit:  1,
+			},
+			MultiTenant: SyncData{
+				Active: true,
+				Limit:  3,
+			},
+		},
 
 		// FIXME: Should this be here? Makes things slow~
 		// Should only append apps owned by the parentorg itself
