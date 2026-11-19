@@ -14975,6 +14975,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Reset limits to defaults (2000 app runs / 1 env / 3 tenants) for org %s (no license)", org.Id)
 		}
 
+		org.SyncFeatures.Editing = true
 		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 
 		if newLeadinfo.EnterpriseLicenseCloud ||
@@ -15181,8 +15182,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		oldOnpremAppExecutionsLimit := org.SyncFeatures.OnpremAppExecutions.Limit
 
 		org.SyncFeatures = tmpData.SyncFeatures
-		org.SyncFeatures.Editing = false
-
+		org.SyncFeatures.Editing = true
 		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 	}
 
@@ -15250,8 +15250,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		oldOnpremAppExecutionsLimit := org.SyncFeatures.OnpremAppExecutions.Limit
 
 		org.SyncFeatures = tmpData.SyncFeatures
-		org.SyncFeatures.Editing = false
-
+		org.SyncFeatures.Editing = true
 		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 	}
 
