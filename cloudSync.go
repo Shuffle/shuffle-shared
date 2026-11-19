@@ -879,6 +879,18 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 	return workflow.ID, nil
 }
 
+func executionQuotaBypassed(orgID string) bool {
+	if project.Environment != "cloud" || orgID == "" {
+		return false
+	}
+	for _, configuredID := range strings.Split(os.Getenv("SHUFFLE_QUOTA_BYPASS_ORGS"), ",") {
+		if strings.TrimSpace(configuredID) == orgID {
+			return true
+		}
+	}
+	return false
+}
+
 // Returns an error if the users' org is over quota
 func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	if len(orgId) == 0 {
@@ -896,7 +908,8 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		return org, nil
 	}
 
-	if org.Billing.AppRunsHardLimit > 0 && orgStats.MonthlyAppExecutions > org.Billing.AppRunsHardLimit {
+	quotaBypassed := executionQuotaBypassed(org.Id)
+	if !quotaBypassed && org.Billing.AppRunsHardLimit > 0 && orgStats.MonthlyAppExecutions > org.Billing.AppRunsHardLimit {
 		//log.Printf("[WARNING] Hard limit reached for org %s (%s) during exec start", org.Name, org.Id)
 		return org, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the app runs hard limit (%d/%d). Your Parent organization can control this.", org.Name, org.Id, orgStats.MonthlyAppExecutions, org.Billing.AppRunsHardLimit))
 	}
@@ -927,6 +940,11 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		if err = SetOrgStatistics(ctx, *validationOrgStats, validationOrgStats.OrgId); err != nil {
 			log.Printf("[ERROR] Failed setting org statistics in validate execution usage for org %s (%s): %s", validationOrg.Name, validationOrg.Id, err)
 		}
+	}
+
+	// Bypass quota rejection only, after the existing statistics maintenance.
+	if quotaBypassed {
+		return validationOrg, nil
 	}
 
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
