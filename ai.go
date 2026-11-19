@@ -58,6 +58,8 @@ var skipAgentWait = os.Getenv("SHUFFLE_SKIP_AGENT_WAIT")
 var agentRunLocation = os.Getenv("SHUFFLE_AGENT_RUN_LOCATION")
 var assistantModel = model
 
+var aiTransport *http.Transport
+
 var decisionParameterName = "shuffle_agent_decision_id"
 var aiMaxTokens = 16000 // Controllable with AI_MAX_TOKENS env
 var aiReasoningEffort = ""
@@ -110,6 +112,9 @@ func init() {
 	} else if reasoningEffort == "minimal" || reasoningEffort == "off" || reasoningEffort == "none" {
 		aiReasoningEffort = "off"
 	}
+
+	aiTransport = http.DefaultTransport.(*http.Transport).Clone()
+	aiTransport.ResponseHeaderTimeout = 90 * time.Second
 
 	// Forcing it to be local for ALL requests going forward
 	agentRunLocation = "local"
@@ -12635,8 +12640,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	// Fixes some model & url errors
 	config.EmptyMessagesLimit = 100000
 
-	aiTransport := http.DefaultTransport.(*http.Transport).Clone()
-	aiTransport.ResponseHeaderTimeout = 90 * time.Second
 	config.HTTPClient = &http.Client{
 		Transport: aiTransport,
 	}
