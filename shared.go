@@ -144,6 +144,16 @@ func AllowedDomain(referer string) bool {
 
 var prPreviewOriginRegex = regexp.MustCompile(`^https://shuffler-pr-previews--pr-[0-9]+-[a-z0-9]+\.web\.app$`)
 
+// Allows any https://*.shuffler.io origin.
+func isShufflerSubdomainOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "https" || parsed.Port() != "" || parsed.Path != "" {
+		return false
+	}
+
+	return strings.HasSuffix(strings.ToLower(parsed.Hostname()), ".shuffler.io")
+}
+
 func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	origin := request.Header["Origin"]
 	resp.Header().Set("Vary", "Origin")
@@ -213,6 +223,10 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			}
 
 			if !allowed && prPreviewOriginRegex.MatchString(origin[0]) {
+				allowed = true
+			}
+
+			if !allowed && isShufflerSubdomainOrigin(origin[0]) {
 				allowed = true
 			}
 
