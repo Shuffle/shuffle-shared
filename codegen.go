@@ -4889,6 +4889,44 @@ func PushTarStreamToRegistry(r io.Reader, refStr string) error {
 	return nil
 }
 
+// Read-only version of LoadAppConfigFromMain: nothing is saved or built in this region
+func getPublicAppFromMain(ctx context.Context, appId string) (WorkflowApp, error) {
+	cacheKey := fmt.Sprintf("main_region_app_%s", appId)
+	if cache, err := GetCache(ctx, cacheKey); err == nil {
+		app := WorkflowApp{}
+		if cacheData, ok := cache.([]byte); ok && json.Unmarshal(cacheData, &app) == nil && len(app.Actions) > 0 {
+			return app, nil
+		}
+
+		return app, errors.New("app not found in main region (cached)")
+	}
+
+	app := WorkflowApp{}
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("https://shuffler.io/api/v1/apps/%s/config", url.PathEscape(appId)))
+	if err == nil {
+		defer resp.Body.Close()
+		parsed := AppParser{}
+		body, _ := ioutil.ReadAll(resp.Body)
+		if resp.StatusCode != 200 || json.Unmarshal(body, &parsed) != nil || !parsed.Success || json.Unmarshal(parsed.App, &app) != nil {
+			err = fmt.Errorf("bad app config from main region (status %d)", resp.StatusCode)
+		}
+	}
+
+	// Only public apps, and remember misses briefly so a missing app doesn't hit main every time
+	if err != nil || len(app.Actions) == 0 || !app.Public {
+		log.Printf("[WARNING] Failed loading public app %s from main region: %v", appId, err)
+		SetCache(ctx, cacheKey, []byte("{}"), 10)
+		return WorkflowApp{}, errors.New("app not found in main region")
+	}
+
+	if data, err := json.Marshal(app); err == nil {
+		SetCache(ctx, cacheKey, data, 60)
+	}
+
+	return app, nil
+}
+
 // Primarily used for cross-region app propagation of public apps on first run
 // Also used to rebuild apps when necessary IF buildApp = true is passed.
 func LoadAppConfigFromMain(fileId string, buildApp bool) {

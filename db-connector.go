@@ -424,10 +424,18 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 
 				var err error
 				if len(memcached) > 0 {
+					expSeconds := expiration * 60
+					if useMilliseconds {
+						expSeconds = expiration / 1000
+						if expSeconds < 1 {
+							expSeconds = 1
+						}
+					}
+
 					newitem := &gomemcache.Item{
 						Key:        keyname,
 						Value:      parsedData,
-						Expiration: expiration * 60,
+						Expiration: expSeconds,
 					}
 
 					err = mc.Set(newitem)
@@ -469,10 +477,18 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 
 			var err error
 			if len(memcached) > 0 {
+				expSeconds := expiration * 60
+				if useMilliseconds {
+					expSeconds = expiration / 1000
+					if expSeconds < 1 {
+						expSeconds = 1
+					}
+				}
+
 				newitem := &gomemcache.Item{
 					Key:        name,
 					Value:      data,
-					Expiration: expiration * 60,
+					Expiration: expSeconds,
 				}
 
 				err = mc.Set(newitem)
@@ -2153,6 +2169,14 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 			} else {
 				//log.Printf("[DEBUG] Returning %s (%s) normally", workflowApp.Name, id)
 			}
+
+			// Other regions only get a public app's actions when someone activates it there
+			if len(workflowApp.Actions) == 0 && workflowApp.Public && project.Environment == "cloud" && gceProject != "shuffler" {
+				mainApp, err := getPublicAppFromMain(ctx, id)
+				if err == nil {
+					workflowApp = &mainApp
+				}
+			}
 		}
 	}
 
@@ -3170,26 +3194,12 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				}
 
 				// Somehow this can happen. Reverting to LATEST revision
-				if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 {
+				if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 && !workflow.BackgroundProcessing {
 					revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 2)
 					if err != nil {
 						log.Printf("[WARNING] Failed getting revisions during trigger load for workflow %s: %s", workflow.ID, err)
-					} else {
-						if len(revisions) > 0 {
-							for _, revision := range revisions {
-								if revision.ID != workflow.ID {
-									continue
-								}
-
-								if len(revision.Triggers) > 0 {
-									workflow.Triggers = revision.Triggers
-									break
-								}
-							}
-
-							//log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
-							workflow.Triggers = revisions[0].Triggers
-						}
+					} else if len(revisions) > 0 && revisions[0].ID == workflow.ID && len(revisions[0].Triggers) > 0 {
+						workflow.Triggers = revisions[0].Triggers
 					}
 				}
 
@@ -3299,26 +3309,12 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 	}
 
 	// Somehow this can happen. Reverting to LATEST revision
-	if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 {
+	if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 && !workflow.BackgroundProcessing {
 		revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 2)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting revisions during trigger load for workflow %s: %s", workflow.ID, err)
-		} else {
-			if len(revisions) > 0 {
-				for _, revision := range revisions {
-					if revision.ID != workflow.ID {
-						continue
-					}
-
-					if len(revision.Triggers) > 0 {
-						workflow.Triggers = revision.Triggers
-						break
-					}
-				}
-
-				//log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
-				workflow.Triggers = revisions[0].Triggers
-			}
+		} else if len(revisions) > 0 && revisions[0].ID == workflow.ID && len(revisions[0].Triggers) > 0 {
+			workflow.Triggers = revisions[0].Triggers
 		}
 	}
 
@@ -4001,18 +3997,6 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 		return curOrg, errors.New(fmt.Sprintf("Couldn't find creator org with ID %s", curOrg.Id))
 	}
 
-	newUsers := []User{}
-	for _, user := range curOrg.Users {
-		user.Password = ""
-		user.Session = ""
-		user.ResetReference = ""
-		user.PrivateApps = []WorkflowApp{}
-		user.VerificationToken = ""
-		user.ApiKey = ""
-		newUsers = append(newUsers, user)
-	}
-
-	curOrg.Users = newUsers
 	if len(curOrg.Tutorials) == 0 {
 		curOrg = GetTutorials(ctx, *curOrg, true)
 	}
@@ -4276,18 +4260,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		//return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID '%s'", curOrg.Id))
 	}
 
-	newUsers := []User{}
-	for _, user := range curOrg.Users {
-		user.Password = ""
-		user.Session = ""
-		user.ResetReference = ""
-		user.PrivateApps = []WorkflowApp{}
-		user.VerificationToken = ""
-		user.ApiKey = ""
-		newUsers = append(newUsers, user)
-	}
-
-	curOrg.Users = newUsers
 	if len(curOrg.Tutorials) == 0 {
 		curOrg = GetTutorials(ctx, *curOrg, true)
 	}
@@ -4915,25 +4887,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	data.Edited = timeNow
-	newUsers := []User{}
-	for _, user := range data.Users {
-		user.Password = ""
-		user.Session = ""
-		user.ApiKey = ""
-		user.PrivateApps = []WorkflowApp{}
-		user.MFA = MFAInfo{}
-		user.Authentication = []UserAuth{}
-
-		user.PublicProfile = PublicProfile{}
-		user.LoginInfo = []LoginInfo{}
-		user.PersonalInfo = PersonalInfo{}
-
-		//user.Orgs = []string{}
-
-		newUsers = append(newUsers, user)
-	}
-
-	data.Users = newUsers
+	data.Users = SanitizeOrgUsers(data.Users)
 	if len(data.Tutorials) == 0 {
 		data = *GetTutorials(ctx, data, false)
 	}
@@ -4976,18 +4930,6 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	if project.CacheDb {
-		newUsers := []User{}
-		for _, user := range data.Users {
-			user.Password = ""
-			user.Session = ""
-			user.ResetReference = ""
-			user.PrivateApps = []WorkflowApp{}
-			user.VerificationToken = ""
-			newUsers = append(newUsers, user)
-		}
-
-		data.Users = newUsers
-
 		neworg, err := json.Marshal(data)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in setorg: %s", err)
@@ -5025,10 +4967,20 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 		cacheData := &CacheKeyData{}
 		cache, err := GetCache(ctx, fmt.Sprintf("%s_%s", entity, value))
 		if err == nil {
-			err = json.Unmarshal([]byte(cache.([]uint8)), cacheData)
+			if cacheBytes, ok := cacheBytesFromInterface(cache); ok {
+				err = json.Unmarshal(cacheBytes, cacheData)
+			} else {
+				err = errors.New("invalid cache bytes")
+			}
 		}
-		if err == nil && len(cacheData.Category) > 0 && len(orgId) > 0 {
-			cacheKey := fmt.Sprintf("%s_%s_%s_%s", entity, "", orgId, cacheData.Category)
+		targetOrg := orgId
+		if len(targetOrg) == 0 && len(cacheData.OrgId) > 0 {
+			targetOrg = cacheData.OrgId
+		}
+		if err == nil && len(cacheData.Key) > 0 && len(targetOrg) > 0 {
+			removeOrgCacheKeysFromListCache(ctx, targetOrg, cacheData.Category, []string{cacheData.Key})
+		} else if len(targetOrg) > 0 {
+			cacheKey := fmt.Sprintf("%s_%s_%s_%s", entity, "", targetOrg, normalizeOrgCacheCategory(cacheData.Category))
 			DeleteCache(ctx, cacheKey)
 			DeleteCache(ctx, fmt.Sprintf("%s_50", cacheKey))
 			DeleteCache(ctx, fmt.Sprintf("%s_100", cacheKey))
@@ -5041,15 +4993,10 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", orgId))
 	}
 
-	if entity == "notifications" {
+	if entity == "notifications" && len(value) > 0 {
 		notification, err := GetNotification(ctx, value)
-		if err == nil {
-			if len(notification.OrgId) > 0 {
-				DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.OrgId))
-			}
-			if len(notification.UserId) > 0 {
-				DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.UserId))
-			}
+		if err == nil && notification != nil {
+			removeNotificationFromCache(ctx, *notification)
 		} else if len(orgId) > 0 {
 			DeleteCache(ctx, fmt.Sprintf("notifications_%s", orgId))
 		}
@@ -6533,6 +6480,40 @@ func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client
 	return *client, nil
 }
 
+// SanitizeOrgUser returns a strictly whitelisted copy of a User suitable for embedding
+// inside Org.Users. User-specific or nested structs (Devices, PersonalInfo, MFA,
+// Authentication, PrivateApps, LoginInfo, PublicProfile, SSOInfos, tokens, etc.) are
+// stripped so Org records never leak personal/device secrets or break Datastore loading
+// when User sub-structs evolve.
+func SanitizeOrgUser(user User) User {
+	return User{
+		Id:                user.Id,
+		Username:          user.Username,
+		GeneratedUsername: user.GeneratedUsername,
+		Role:              user.Role,
+		Roles:             user.Roles,
+		Active:            user.Active,
+		Verified:          user.Verified,
+		SupportAccess:     user.SupportAccess,
+		CreationTime:      user.CreationTime,
+		LoginType:         user.LoginType,
+		ProvisionedByOrg:  user.ProvisionedByOrg,
+		ActiveOrg: OrgMini{
+			Id:   user.ActiveOrg.Id,
+			Name: user.ActiveOrg.Name,
+			Role: user.ActiveOrg.Role,
+		},
+	}
+}
+
+func SanitizeOrgUsers(users []User) []User {
+	newUsers := make([]User, 0, len(users))
+	for _, user := range users {
+		newUsers = append(newUsers, SanitizeOrgUser(user))
+	}
+	return newUsers
+}
+
 func fixUserOrg(ctx context.Context, user *User) *User {
 	// Made it background due to potential timeouts if this is
 	// used in API calls
@@ -6550,11 +6531,7 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 		user.Orgs = append(user.Orgs, user.ActiveOrg.Id)
 	}
 
-	innerUser := *user
-	innerUser.PrivateApps = []WorkflowApp{}
-	innerUser.Authentication = []UserAuth{}
-	innerUser.Password = ""
-	innerUser.Session = ""
+	innerUser := SanitizeOrgUser(*user)
 
 	// Might be vulnerable to timing attacks.
 	for _, orgId := range user.Orgs {
@@ -6582,10 +6559,16 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 				}
 			}
 
+			sanitizedForOrg := innerUser
 			if userFound {
-				org.Users[orgIndex] = innerUser
+				// Preserve per-org role if this org is not the user's currently active org
+				if orgId != user.ActiveOrg.Id && len(org.Users[orgIndex].Role) > 0 {
+					sanitizedForOrg.Role = org.Users[orgIndex].Role
+					sanitizedForOrg.Roles = org.Users[orgIndex].Roles
+				}
+				org.Users[orgIndex] = sanitizedForOrg
 			} else if !user.SupportAccess {
-				org.Users = append(org.Users, innerUser)
+				org.Users = append(org.Users, sanitizedForOrg)
 			} else {
 				log.Printf("[DEBUG] Skipping org.Users update for support user %s (%s) in org %s — not an official member", user.Username, user.Id, orgId)
 				return
@@ -10600,8 +10583,12 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			"from": 0,
 			"size": 1000,
 			"query": map[string]interface{}{
-				"match": map[string]interface{}{
-					"apikey": apikey,
+				"bool": map[string]interface{}{
+					"should": []map[string]interface{}{
+						{"match": map[string]interface{}{"apikey": apikey}},
+						{"match": map[string]interface{}{"rollover_apikey": apikey}},
+					},
+					"minimum_should_match": 1,
 				},
 			},
 		}
@@ -10666,7 +10653,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 		users = []User{}
 		for _, hit := range wrapped.Hits.Hits {
-			if hit.Source.ApiKey != apikey {
+			if hit.Source.ApiKey != apikey && hit.Source.RolloverApiKey != apikey {
 				continue
 			}
 
@@ -10680,6 +10667,16 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			if !strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[WARNING] Error getting apikey: %s", err)
 				//return User{}, err
+			}
+		}
+
+		if len(users) == 0 {
+			rq := datastore.NewQuery(nameKey).Filter("rollover_apikey =", apikey).Limit(1)
+			_, err := project.Dbclient.GetAll(ctx, rq, &users)
+			if err != nil && len(users) == 0 {
+				if !strings.Contains(err.Error(), `cannot load field`) {
+					log.Printf("[WARNING] Error getting rollover apikey: %s", err)
+				}
 			}
 		}
 	}
@@ -10904,10 +10901,146 @@ func GetPipeline(ctx context.Context, triggerId string) (*Pipeline, error) {
 	return pipeline, nil
 }
 
+const defaultNotificationLimit = 100
+const notificationCacheTTLMinutes int32 = 30
+
+func cacheBytesFromInterface(cache interface{}) ([]byte, bool) {
+	switch v := cache.(type) {
+	case []uint8:
+		return []byte(v), true
+	case string:
+		return []byte(v), true
+	default:
+		return nil, false
+	}
+}
+
+func upsertNotificationInListCache(ctx context.Context, cacheKey string, notification Notification) {
+	if !project.CacheDb || len(cacheKey) == 0 || len(notification.Id) == 0 {
+		return
+	}
+
+	cache, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		return
+	}
+
+	cacheData, ok := cacheBytesFromInterface(cache)
+	if !ok {
+		DeleteCache(ctx, cacheKey)
+		return
+	}
+
+	var notifications []Notification
+	if err := json.Unmarshal(cacheData, &notifications); err != nil {
+		DeleteCache(ctx, cacheKey)
+		return
+	}
+
+	updated := false
+	for i := range notifications {
+		if notifications[i].Id == notification.Id {
+			notifications[i] = notification
+			updated = true
+			break
+		}
+	}
+
+	if !updated {
+		notifications = append([]Notification{notification}, notifications...)
+	}
+
+	sort.Slice(notifications, func(i, j int) bool {
+		return notifications[i].UpdatedAt > notifications[j].UpdatedAt
+	})
+
+	if len(notifications) > defaultNotificationLimit {
+		notifications = notifications[:defaultNotificationLimit]
+	}
+
+	data, err := json.Marshal(notifications)
+	if err != nil {
+		DeleteCache(ctx, cacheKey)
+		return
+	}
+
+	if err := SetCache(ctx, cacheKey, data, notificationCacheTTLMinutes); err != nil {
+		DeleteCache(ctx, cacheKey)
+	}
+}
+
+func removeNotificationFromListCache(ctx context.Context, cacheKey string, notificationId string) {
+	if !project.CacheDb || len(cacheKey) == 0 || len(notificationId) == 0 {
+		return
+	}
+
+	cache, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		return
+	}
+
+	cacheData, ok := cacheBytesFromInterface(cache)
+	if !ok {
+		DeleteCache(ctx, cacheKey)
+		return
+	}
+
+	var notifications []Notification
+	if err := json.Unmarshal(cacheData, &notifications); err != nil {
+		DeleteCache(ctx, cacheKey)
+		return
+	}
+
+	filtered := make([]Notification, 0, len(notifications))
+	for _, n := range notifications {
+		if n.Id != notificationId {
+			filtered = append(filtered, n)
+		}
+	}
+
+	data, err := json.Marshal(filtered)
+	if err != nil {
+		DeleteCache(ctx, cacheKey)
+		return
+	}
+
+	if err := SetCache(ctx, cacheKey, data, notificationCacheTTLMinutes); err != nil {
+		DeleteCache(ctx, cacheKey)
+	}
+}
+
+func removeNotificationFromCache(ctx context.Context, notification Notification) {
+	nameKey := "notifications"
+	if len(notification.Id) > 0 {
+		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, notification.Id))
+	}
+	if notification.Personal {
+		if len(strings.TrimSpace(notification.UserId)) > 0 {
+			removeNotificationFromListCache(ctx, fmt.Sprintf("%s_%s", nameKey, strings.TrimSpace(notification.UserId)), notification.Id)
+		}
+		return
+	}
+	if len(strings.TrimSpace(notification.OrgId)) > 0 {
+		removeNotificationFromListCache(ctx, fmt.Sprintf("%s_%s", nameKey, strings.TrimSpace(notification.OrgId)), notification.Id)
+	}
+}
+
 func GetNotification(ctx context.Context, id string) (*Notification, error) {
 	nameKey := "notifications"
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			if cacheData, ok := cacheBytesFromInterface(cache); ok {
+				curFile := &Notification{}
+				if err := json.Unmarshal(cacheData, curFile); err == nil && len(curFile.Id) > 0 {
+					return curFile, nil
+				}
+			}
+		}
+	}
+
 	curFile := &Notification{}
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
@@ -10944,6 +11077,12 @@ func GetNotification(ctx context.Context, id string) (*Notification, error) {
 			return &Notification{}, err
 		}
 
+	}
+
+	if project.CacheDb && len(curFile.Id) > 0 {
+		if data, err := json.Marshal(curFile); err == nil {
+			_ = SetCache(ctx, cacheKey, data, notificationCacheTTLMinutes)
+		}
 	}
 
 	return curFile, nil
@@ -11091,13 +11230,22 @@ func SetNotification(ctx context.Context, notification Notification) error {
 		}
 	}
 
-	if len(notification.OrgId) > 0 {
-		cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.OrgId)
-		DeleteCache(ctx, cacheKey)
+	if project.CacheDb && len(notification.Id) > 0 {
+		if data, err := json.Marshal(notification); err == nil {
+			_ = SetCache(ctx, fmt.Sprintf("%s_%s", nameKey, notification.Id), data, notificationCacheTTLMinutes)
+		}
 	}
-	if len(notification.UserId) > 0 {
-		cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.UserId)
-		DeleteCache(ctx, cacheKey)
+
+	if notification.Personal {
+		userId := strings.TrimSpace(notification.UserId)
+		if len(userId) > 0 {
+			cacheKey := fmt.Sprintf("%s_%s", nameKey, userId)
+			upsertNotificationInListCache(ctx, cacheKey, notification)
+		}
+	} else if len(strings.TrimSpace(notification.OrgId)) > 0 {
+		orgId := strings.TrimSpace(notification.OrgId)
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+		upsertNotificationInListCache(ctx, cacheKey, notification)
 	}
 
 	return nil
@@ -11310,10 +11458,11 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &notifications)
-			if err == nil {
-				return notifications, nil
+			if cacheData, ok := cacheBytesFromInterface(cache); ok {
+				err = json.Unmarshal(cacheData, &notifications)
+				if err == nil {
+					return notifications, nil
+				}
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
@@ -11413,24 +11562,13 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-updated_at").Limit(250)
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-updated_at").Limit(defaultNotificationLimit)
 		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 
 		if err != nil && len(notifications) == 0 {
-			data, err := json.Marshal(notifications)
-			if err != nil {
-				log.Printf("[ERROR] Failed marshalling notification cache (2): %s", err)
-				return notifications, nil
-			}
-
-			err = SetCache(ctx, cacheKey, data, 5)
-			if err != nil {
-				log.Printf("[ERROR] Failed updating notification cache (2): %s", err)
-			}
-
 			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
 				q = q.Limit(50)
-				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
+				_, err = project.Dbclient.GetAll(ctx, q, &notifications)
 				if err != nil && len(notifications) == 0 {
 					return notifications, err
 				}
@@ -11439,8 +11577,8 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			} else if strings.Contains(fmt.Sprintf("%s", err), "no matching index found") || strings.Contains(fmt.Sprintf("%s", err), "not ready to serve") {
 				log.Printf("[ERROR] Failed loading notifications based on index: %s", err)
 
-				q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(199)
-				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
+				q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(defaultNotificationLimit)
+				_, err = project.Dbclient.GetAll(ctx, q, &notifications)
 				if err != nil && len(notifications) == 0 {
 					if !strings.Contains(err.Error(), `cannot load field`) {
 						return notifications, err
@@ -11451,6 +11589,15 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 				return notifications, err
 			}
 		}
+
+		filtered := []Notification{}
+		for _, notification := range notifications {
+			if notification.Personal {
+				continue
+			}
+			filtered = append(filtered, notification)
+		}
+		notifications = filtered
 	}
 
 	if project.CacheDb {
@@ -11460,10 +11607,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			return notifications, nil
 		}
 
-		// Set it low, because Notifications are very often being set
-		// in certain cases. This means lowering this, will increase cache util
-		// while not clearing it on every SetNotification()
-		err = SetCache(ctx, cacheKey, data, 5)
+		err = SetCache(ctx, cacheKey, data, notificationCacheTTLMinutes)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating notification cache: %s", err)
 		}
@@ -11476,25 +11620,33 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 	var notifications []Notification
 
 	nameKey := "notifications"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, userId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			if cacheData, ok := cacheBytesFromInterface(cache); ok {
+				err = json.Unmarshal(cacheData, &notifications)
+				if err == nil {
+					return notifications, nil
+				}
+			}
+		}
+	}
+
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
 			"size": 1000,
+			"sort": map[string]interface{}{
+				"updated_at": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
 			"query": map[string]interface{}{
-				"bool": map[string]interface{}{
-					"must": []map[string]interface{}{
-						map[string]interface{}{
-							"match": map[string]interface{}{
-								"user_id": userId,
-							},
-						},
-						map[string]interface{}{
-							"match": map[string]interface{}{
-								"read": false,
-							},
-						},
-					},
+				"match": map[string]interface{}{
+					"user_id": userId,
 				},
 			},
 		}
@@ -11541,14 +11693,17 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 			}
 		}
 
-		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return notifications, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
-
-		}
-
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return notifications, err
+		}
+
+		if res.StatusCode == 400 {
+			return notifications, nil
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return notifications, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
 		wrapped := NotificationSearchWrapper{}
@@ -11567,12 +11722,12 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(25)
+		q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(defaultNotificationLimit)
 
 		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 		if err != nil && len(notifications) == 0 {
 			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
-				q = q.Limit(10)
+				q = q.Limit(50)
 				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 				if err != nil && len(notifications) == 0 {
 					return notifications, err
@@ -11581,6 +11736,16 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 				log.Printf("[INFO] Failed loading SOME notifications - skipping: %s", err)
 			} else {
 				return notifications, err
+			}
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(notifications)
+		if err == nil {
+			err = SetCache(ctx, cacheKey, data, notificationCacheTTLMinutes)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating user notification cache: %s", err)
 			}
 		}
 	}
@@ -12152,9 +12317,13 @@ func DeleteKeys(ctx context.Context, entity string, value []string) error {
 		// This especially prominent for custom "Datastore" keys
 		keys := []*datastore.Key{}
 		for _, item := range value {
+			DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, item))
+			DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, strings.ToLower(item)))
 			keys = append(keys, datastore.NameKey(entity, strings.ToLower(item), nil))
 			keys = append(keys, datastore.NameKey(entity, item, nil))
 			if len(item) > 127 {
+				DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, item[:127]))
+				DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, strings.ToLower(item[:127])))
 				keys = append(keys, datastore.NameKey(entity, strings.ToLower(item[:127]), nil))
 			}
 		}
@@ -13976,10 +14145,14 @@ func GetDatastoreCategoryConfig(ctx context.Context, orgId, category string) (*D
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &categoryData)
-			if err == nil {
-				return categoryData, nil
+			if cacheData, ok := cacheBytesFromInterface(cache); ok {
+				err = json.Unmarshal(cacheData, &categoryData)
+				if err == nil {
+					if categoryData.Id == "__none__" {
+						return &DatastoreCategoryUpdate{}, fmt.Errorf("No category found for org %s and category %s", orgId, category)
+					}
+					return categoryData, nil
+				}
 			}
 		}
 	}
@@ -14007,6 +14180,9 @@ func GetDatastoreCategoryConfig(ctx context.Context, orgId, category string) (*D
 		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
+			if project.CacheDb {
+				_ = SetCache(ctx, cacheKey, []byte(`{"id":"__none__"}`), 60)
+			}
 			return categoryData, errors.New("Key doesn't exist")
 		}
 
@@ -14031,12 +14207,18 @@ func GetDatastoreCategoryConfig(ctx context.Context, orgId, category string) (*D
 				log.Printf("[ERROR] Error in cache key loading. Migrating org cache to new handler (3): %s", err)
 				err = nil
 			} else {
+				if err == datastore.ErrNoSuchEntity && project.CacheDb {
+					_ = SetCache(ctx, cacheKey, []byte(`{"id":"__none__"}`), 60)
+				}
 				return categoryData, fmt.Errorf("Error getting datastore category config for org %s and category '%s': %w", orgId, category, err)
 			}
 		}
 	}
 
 	if len(categoryData.Id) == 0 {
+		if project.CacheDb {
+			_ = SetCache(ctx, cacheKey, []byte(`{"id":"__none__"}`), 60)
+		}
 		return categoryData, fmt.Errorf("No category found for org %s and category %s", orgId, category)
 	}
 
@@ -14123,6 +14305,192 @@ func SetDatastoreCategoryConfig(ctx context.Context, category DatastoreCategoryU
 	return nil
 }
 
+const orgCacheListTTLMinutes int32 = 30
+
+func normalizeOrgCacheCategory(category string) string {
+	category = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(category)), " ", "_")
+	if category == "default" {
+		return ""
+	}
+	return category
+}
+
+type orgCacheListTarget struct {
+	key   string
+	limit int
+}
+
+func getOrgCacheListCacheKeys(orgId, category string) []orgCacheListTarget {
+	category = normalizeOrgCacheCategory(category)
+	baseKey := fmt.Sprintf("org_cache__%s_%s", orgId, category)
+	return []orgCacheListTarget{
+		{key: baseKey, limit: 1000},
+		{key: fmt.Sprintf("%s_50", baseKey), limit: 50},
+		{key: fmt.Sprintf("%s_100", baseKey), limit: 100},
+		{key: fmt.Sprintf("%s_1000", baseKey), limit: 1000},
+	}
+}
+
+func upsertOrgCacheKeysInListCache(ctx context.Context, orgId string, category string, updatedKeys []CacheKeyData) {
+	if !project.CacheDb || len(orgId) == 0 || len(updatedKeys) == 0 {
+		return
+	}
+
+	category = normalizeOrgCacheCategory(category)
+	cleanKeys := make([]CacheKeyData, 0, len(updatedKeys))
+	suborgBuckets := map[string][]CacheKeyData{}
+
+	for _, k := range updatedKeys {
+		if len(k.Key) == 0 {
+			continue
+		}
+		k.Category = normalizeOrgCacheCategory(k.Category)
+		if k.Category != category {
+			continue
+		}
+		k.Encrypted = false
+		k.Existed = false
+		k.Changed = false
+		cleanKeys = append(cleanKeys, k)
+
+		for _, suborg := range k.SuborgDistribution {
+			suborg = strings.TrimSpace(suborg)
+			if len(suborg) == 0 || suborg == orgId {
+				continue
+			}
+			subCopy := k
+			subCopy.PublicAuthorization = ""
+			subCopy.SuborgDistribution = []string{suborg}
+			suborgBuckets[suborg] = append(suborgBuckets[suborg], subCopy)
+		}
+	}
+
+	if len(cleanKeys) == 0 {
+		return
+	}
+
+	for _, target := range getOrgCacheListCacheKeys(orgId, category) {
+		cache, err := GetCache(ctx, target.key)
+		if err != nil {
+			continue
+		}
+
+		cacheBytes, ok := cacheBytesFromInterface(cache)
+		if !ok {
+			DeleteCache(ctx, target.key)
+			continue
+		}
+
+		var cacheReturn CacheReturn
+		if err := json.Unmarshal(cacheBytes, &cacheReturn); err != nil {
+			DeleteCache(ctx, target.key)
+			continue
+		}
+
+		for _, item := range cleanKeys {
+			updated := false
+			for i := range cacheReturn.Keys {
+				if cacheReturn.Keys[i].Key == item.Key && normalizeOrgCacheCategory(cacheReturn.Keys[i].Category) == category {
+					cacheReturn.Keys[i] = item
+					updated = true
+					break
+				}
+			}
+			if !updated {
+				cacheReturn.Keys = append([]CacheKeyData{item}, cacheReturn.Keys...)
+			}
+		}
+
+		slice.Sort(cacheReturn.Keys[:], func(i, j int) bool {
+			return cacheReturn.Keys[i].Edited > cacheReturn.Keys[j].Edited
+		})
+
+		if target.limit > 0 && len(cacheReturn.Keys) > target.limit {
+			cacheReturn.Keys = cacheReturn.Keys[:target.limit]
+		}
+
+		data, err := json.Marshal(cacheReturn)
+		if err != nil {
+			DeleteCache(ctx, target.key)
+			continue
+		}
+
+		if err := SetCache(ctx, target.key, data, orgCacheListTTLMinutes); err != nil {
+			DeleteCache(ctx, target.key)
+		}
+	}
+
+	for suborg, subKeys := range suborgBuckets {
+		upsertOrgCacheKeysInListCache(ctx, suborg, category, subKeys)
+	}
+}
+
+func removeOrgCacheKeysFromListCache(ctx context.Context, orgId string, category string, keyNames []string) {
+	if !project.CacheDb || len(orgId) == 0 || len(keyNames) == 0 {
+		return
+	}
+
+	category = normalizeOrgCacheCategory(category)
+	removeSet := make(map[string]struct{}, len(keyNames))
+	for _, k := range keyNames {
+		if len(k) > 0 {
+			removeSet[k] = struct{}{}
+		}
+	}
+	if len(removeSet) == 0 {
+		return
+	}
+
+	for _, target := range getOrgCacheListCacheKeys(orgId, category) {
+		cache, err := GetCache(ctx, target.key)
+		if err != nil {
+			continue
+		}
+
+		cacheBytes, ok := cacheBytesFromInterface(cache)
+		if !ok {
+			DeleteCache(ctx, target.key)
+			continue
+		}
+
+		var cacheReturn CacheReturn
+		if err := json.Unmarshal(cacheBytes, &cacheReturn); err != nil {
+			DeleteCache(ctx, target.key)
+			continue
+		}
+
+		if len(cacheReturn.Cursor) > 0 {
+			DeleteCache(ctx, target.key)
+			continue
+		}
+
+		filtered := make([]CacheKeyData, 0, len(cacheReturn.Keys))
+		for _, k := range cacheReturn.Keys {
+			if _, shouldRemove := removeSet[k.Key]; !shouldRemove {
+				filtered = append(filtered, k)
+			}
+		}
+		cacheReturn.Keys = filtered
+
+		data, err := json.Marshal(cacheReturn)
+		if err != nil {
+			DeleteCache(ctx, target.key)
+			continue
+		}
+
+		if err := SetCache(ctx, target.key, data, orgCacheListTTLMinutes); err != nil {
+			DeleteCache(ctx, target.key)
+		}
+	}
+}
+
+type bulkCacheKeyResult struct {
+	dbKey     datastore.Key
+	storeData CacheKeyData
+	cacheData CacheKeyData
+	cacheId   string
+}
+
 // Used for cache for individual organizations
 // Tracks key by key, and scales pretty well :3
 func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]DatastoreKeyMini, error) {
@@ -14130,47 +14498,138 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	timeNow := int64(time.Now().Unix())
 
 	dbKeys := []*datastore.Key{}
-
 	existingInfo := []DatastoreKeyMini{}
 
 	mainCategory := ""
+	orgId := ""
 	wg := sync.WaitGroup{}
 
-	// 1. Get the key first.
-	// 2. Validate suborg distribution and other category configs
+	// 1. Normalize categories and determine batch size
 	cnt := 0
-	for index, cacheData := range allKeys {
+	for index := range allKeys {
+		allKeys[index].Category = normalizeOrgCacheCategory(allKeys[index].Category)
+		cacheData := allKeys[index]
+
 		// Disallowing setting of multiple categories at a time
-		if index > 0 && len(cacheData.Category) > 0 {
+		if index > 0 && len(cacheData.Category) > 0 && len(mainCategory) > 0 {
 			if mainCategory != cacheData.Category {
 				continue
 			}
 		}
 
-		mainCategory = cacheData.Category
+		if index == 0 || len(mainCategory) == 0 {
+			mainCategory = cacheData.Category
+		}
+		if len(cacheData.OrgId) > 0 {
+			orgId = cacheData.OrgId
+		}
 		cnt += 1
 	}
 
-	cacheKeys := make(chan CacheKeyData, cnt)
-	datastoreKeys := make(chan datastore.Key, cnt)
-	orgId := ""
+	var preloadedCategoryConfig *DatastoreCategoryUpdate
+	var preloadedCategoryErr error
+	hasCategoryConfig := false
+	if len(orgId) > 0 && len(mainCategory) > 0 {
+		preloadedCategoryConfig, preloadedCategoryErr = GetDatastoreCategoryConfig(ctx, orgId, mainCategory)
+		hasCategoryConfig = true
+	}
+
+	// Preload existing keys via cache and batched GetMulti in Datastore mode to avoid N single-key Get + RunQuery calls.
+	preloadedExisting := make(map[string]*CacheKeyData, cnt)
+	if project.DbType != "opensearch" {
+		missingIds := make([]string, 0, cnt)
+		missingKeys := make([]*datastore.Key, 0, cnt)
+		seenIds := make(map[string]struct{}, cnt)
+
+		for index, cacheData := range allKeys {
+			if index > 0 && len(cacheData.Category) > 0 && mainCategory != cacheData.Category {
+				continue
+			}
+			rawId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+			if len(cacheData.Category) > 0 {
+				rawId = fmt.Sprintf("%s_%s", rawId, cacheData.Category)
+			}
+			escapedId := url.QueryEscape(rawId)
+			if len(escapedId) > 127 {
+				escapedId = escapedId[:127]
+			}
+			if _, seen := seenIds[escapedId]; seen {
+				continue
+			}
+			seenIds[escapedId] = struct{}{}
+
+			if project.CacheDb {
+				if rawCache, cacheErr := GetCache(ctx, fmt.Sprintf("%s_%s", nameKey, escapedId)); cacheErr == nil {
+					if parsedBytes, ok := cacheBytesFromInterface(rawCache); ok && len(parsedBytes) > 0 {
+						cachedItem := &CacheKeyData{}
+						if json.Unmarshal(parsedBytes, cachedItem) == nil && len(cachedItem.Key) > 0 && normalizeOrgCacheCategory(cachedItem.Category) == cacheData.Category {
+							preloadedExisting[escapedId] = cachedItem
+							continue
+						}
+					}
+				}
+			}
+
+			missingIds = append(missingIds, escapedId)
+			missingKeys = append(missingKeys, datastore.NameKey(nameKey, escapedId, nil))
+		}
+
+		const maxLookupBatchSize = 500
+		for start := 0; start < len(missingKeys); start += maxLookupBatchSize {
+			end := start + maxLookupBatchSize
+			if end > len(missingKeys) {
+				end = len(missingKeys)
+			}
+			batchKeys := missingKeys[start:end]
+			batchIds := missingIds[start:end]
+			batchDst := make([]CacheKeyData, len(batchKeys))
+			getErr := project.Dbclient.GetMulti(ctx, batchKeys, batchDst)
+
+			var multiErr datastore.MultiError
+			isMultiErr := errors.As(getErr, &multiErr)
+			if getErr != nil && !isMultiErr {
+				continue
+			}
+
+			for i := range batchDst {
+				if isMultiErr && i < len(multiErr) && multiErr[i] != nil {
+					if !strings.Contains(multiErr[i].Error(), "cannot load field") {
+						continue
+					}
+				}
+				found := batchDst[i]
+				if len(found.Key) == 0 {
+					continue
+				}
+				found.FormattedKey = batchIds[i]
+				if found.Encrypted {
+					encryptionKey := fmt.Sprintf("%s_%d_%s_%s", found.OrgId, found.Created, found.Category, found.Key)
+					if newValue, decErr := HandleKeyDecryption([]byte(found.Value), encryptionKey); decErr == nil {
+						found.Value = string(newValue)
+					}
+				}
+				foundCopy := found
+				preloadedExisting[batchIds[i]] = &foundCopy
+			}
+		}
+	}
+
+	resultsChan := make(chan bulkCacheKeyResult, cnt)
+	sem := make(chan struct{}, 32)
 
 	for index, cacheData := range allKeys {
-		// 1. Get the key first.
-		// 2. Validate suborg distribution and other category configs
-
 		// Disallowing setting of multiple categories at a time
 		if index > 0 && len(cacheData.Category) > 0 {
 			if mainCategory != cacheData.Category {
 				continue
 			}
 		}
-
-		orgId = cacheData.OrgId
 
 		wg.Add(1)
 		go func(cacheData CacheKeyData, index int) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
 			keyUpdated := true
 
@@ -14179,36 +14638,56 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			cacheData.Created = timeNow
 			cacheData.Edited = timeNow
 
-			cacheData.Category = strings.ReplaceAll(strings.ToLower(cacheData.Category), " ", "_")
+			cacheData.Category = normalizeOrgCacheCategory(cacheData.Category)
 			datastoreId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
-			if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+			if len(cacheData.Category) > 0 {
 				// Adds category on the end
 				datastoreId = fmt.Sprintf("%s_%s", datastoreId, cacheData.Category)
 			}
 
-			// Check for if the key already existed. Ok with
-			// goroutine as we use heavy caching for this.
-			sameValue := false
-			config, getCacheError := GetDatastoreKey(ctx, datastoreId, cacheData.Category)
+			escapedLookupId := url.QueryEscape(datastoreId)
+			if len(escapedLookupId) > 127 {
+				escapedLookupId = escapedLookupId[:127]
+			}
 
-			if getCacheError == nil && config.Value == cacheData.Value {
+			// Check for if the key already existed.
+			sameValue := false
+			var config *CacheKeyData
+			var getCacheError error
+			if project.DbType == "opensearch" {
+				config, getCacheError = GetDatastoreKey(ctx, datastoreId, cacheData.Category)
+			} else if existing, ok := preloadedExisting[escapedLookupId]; ok && existing != nil {
+				existingCopy := *existing
+				config = &existingCopy
+			} else {
+				getCacheError = errors.New("Key doesn't exist")
+			}
+
+			if getCacheError == nil && config != nil && config.Value == cacheData.Value {
 				sameValue = true
 			}
 
-			if len(cacheData.Enrichments) > 0 && len(cacheData.Value) == 0 {
+			if len(cacheData.Enrichments) > 0 && len(cacheData.Value) == 0 && config != nil {
 				if debug {
 					log.Printf("[DEBUG] Having enrichments with empty value doesn't make sense, skipping enrichments for key %s in category %s", cacheData.Key, cacheData.Category)
 				}
 
 				cacheData.Value = config.Value
+				if getCacheError == nil && config.Created > 0 {
+					sameValue = true
+				}
 			}
 
 			// Works on merging enrichments
 			if len(cacheData.Enrichments) > 0 {
 				timeNow := int64(time.Now().Unix())
 
-				// Start with existing ones
-				newObservables := config.Enrichments
+				// Start with a cloned copy of existing ones to avoid mutating cached slices in-place
+				var newObservables []Observable
+				if config != nil && len(config.Enrichments) > 0 {
+					newObservables = make([]Observable, len(config.Enrichments))
+					copy(newObservables, config.Enrichments)
+				}
 				for _, observable := range cacheData.Enrichments {
 					if len(observable.Value) == 0 {
 						continue
@@ -14220,7 +14699,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 							existed = true
 							newObservables[existingObsIndex].LastSeen = timeNow
 							if existingObs.FirstSeen == 0 {
-								existingObs.FirstSeen = timeNow
+								newObservables[existingObsIndex].FirstSeen = timeNow
 							}
 
 							continue
@@ -14237,9 +14716,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				cacheData.Enrichments = newObservables
 			}
 
-			if getCacheError == nil && config.Created > 0 {
+			if getCacheError == nil && config != nil && config.Created > 0 {
 
 				// Compares old vs new, checks if allowed
+				rlsDenied := false
 
 				if cacheData.IgnoreSecurityRules == true {
 					//if debug {
@@ -14247,67 +14727,64 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 					//}
 					//os.Exit(3)
 				} else {
-					categoryConfig, err := GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
+					categoryConfig := preloadedCategoryConfig
+					err := preloadedCategoryErr
+					if !hasCategoryConfig || cacheData.OrgId != orgId || cacheData.Category != mainCategory {
+						categoryConfig, err = GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
+					}
 					if err != nil {
 						log.Printf("[WARNING] Failed getting category config for org %s and category %s: %s", orgId, mainCategory, err)
 					}
 
-					//if debug {
-					//	log.Printf("[DEBUG] RULECHECK %#v -> %#v", getCacheError, config.Created)
-					//}
-
 					ruleValid := true
-					for _, automation := range categoryConfig.Automations {
-						if !automation.Enabled {
-							continue
-						}
-
-						if automation.Name != "security_rules" && automation.Name != "Security Rules" {
-							continue
-						}
-
-						foundRule := ""
-						for _, option := range automation.Options {
-							if option.Key == "rule" {
-								foundRule = option.Value
-								break
+					if categoryConfig != nil {
+						for _, automation := range categoryConfig.Automations {
+							if !automation.Enabled {
+								continue
 							}
-						}
 
-						if debug {
-							log.Printf("[DEBUG] FOUND SECURITY RULES AUTOMATION FOR ORG %s AND CATEGORY %s: %#v", cacheData.OrgId, mainCategory, foundRule)
-						}
+							if strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_") != "security_rules" {
+								continue
+							}
 
-						if len(foundRule) > 5 {
-							oldDoc := config.Value
-							newDoc := cacheData.Value
+							foundRule := ""
+							for _, option := range automation.Options {
+								if option.Key == "rule" {
+									foundRule = option.Value
+									break
+								}
+							}
 
-							mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
 							if debug {
-								log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s). Org: '%s', Key: '%s', Category: '%s': %#v. .\n\nError: %#v\n\n", foundRule, cacheData.OrgId, cacheData.Key, cacheData.Category, allowed, errString)
+								log.Printf("[DEBUG] FOUND SECURITY RULES AUTOMATION FOR ORG %s AND CATEGORY %s: %#v", cacheData.OrgId, mainCategory, foundRule)
 							}
 
-							// Since merge happens anyway, we are trusting it either way
-							cacheData.Value = mergedJSON
-							ruleValid = true
+							if len(foundRule) > 5 {
+								oldDoc := config.Value
+								newDoc := cacheData.Value
 
-							//if allowed {
-							//	ruleValid = true
-							//	cacheData.Value = mergedJSON
-							//} else {
-							//	ruleValid = false
-							//}
+								mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
+								if debug {
+									log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s). Org: '%s', Key: '%s', Category: '%s': %#v. .\n\nError: %#v\n\n", foundRule, cacheData.OrgId, cacheData.Key, cacheData.Category, allowed, errString)
+								}
 
+								if !allowed {
+									rlsDenied = true
+								}
+
+								// Since merge happens anyway, we are trusting it either way
+								cacheData.Value = mergedJSON
+								ruleValid = true
+							}
+
+							break
 						}
-
-						break
 					}
 
 					// This NEVER triggers. RLS just returns the merged JSON
 					// and we trust it. If we don't trust it, we can set
 					// ruleValid to false above.
 					if !ruleValid {
-						// Break out
 						if debug {
 							log.Printf("[DEBUG] ERROR: Rule is NOT valid! Skipping modification.")
 						}
@@ -14316,23 +14793,40 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 						cacheData.Existed = true
 						cacheData.Changed = keyUpdated
-						datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
-						cacheKeys <- cacheData
+						resultsChan <- bulkCacheKeyResult{
+							dbKey:     *datastore.NameKey(nameKey, datastoreId, nil),
+							storeData: cacheData,
+							cacheData: cacheData,
+						}
 						return
 					}
 				}
 
 				cacheData.Created = config.Created
 				cacheData.Authorization = config.Authorization
-				cacheData.SuborgDistribution = config.SuborgDistribution
+				if len(cacheData.SuborgDistribution) == 0 && len(config.SuborgDistribution) > 0 {
+					cacheData.SuborgDistribution = append([]string(nil), config.SuborgDistribution...)
+				}
 				cacheData.PublicAuthorization = config.PublicAuthorization
 
 				if len(cacheData.Enrichments) == 0 && len(config.Enrichments) > 0 {
-					cacheData.Enrichments = config.Enrichments
+					cacheData.Enrichments = append([]Observable(nil), config.Enrichments...)
 				}
 
 				if len(cacheData.Tags) == 0 {
-					cacheData.Tags = config.Tags
+					if len(config.Tags) > 0 {
+						cacheData.Tags = append([]string(nil), config.Tags...)
+					}
+				} else {
+					for _, existingTag := range config.Tags {
+						if strings.HasPrefix(existingTag, "agent-") && !ArrayContains(cacheData.Tags, existingTag) {
+							cacheData.Tags = append(cacheData.Tags, existingTag)
+						}
+					}
+				}
+
+				if config.Value == cacheData.Value || rlsDenied {
+					sameValue = true
 				} else {
 					sameValue = false
 				}
@@ -14351,25 +14845,12 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			// Makes sure
 			cacheData.IgnoreSecurityRules = false
 
-			// Sets new keys in cache so they can be queried fast next time
-			marshalledEntry, err := json.Marshal(cacheData)
-			if err == nil {
-				newCacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
-				if len(cacheData.Category) > 0 && cacheData.Category != "default" {
-					newCacheId = fmt.Sprintf("%s_%s", newCacheId, cacheData.Category)
-				}
-
-				newCacheId = url.QueryEscape(newCacheId)
-				if len(newCacheId) > 127 {
-					newCacheId = newCacheId[0:127]
-				}
-
-				newCacheId = fmt.Sprintf("org_cache_%s", newCacheId)
-				SetCache(ctx, newCacheId, marshalledEntry, 62)
-			}
-
 			// URL encode
 			datastoreId = url.QueryEscape(datastoreId)
+			if len(datastoreId) > 127 {
+				datastoreId = datastoreId[:127]
+			}
+
 			if len(cacheData.PublicAuthorization) == 0 && cacheData.Category != "protected" {
 				cacheData.PublicAuthorization = uuid.NewV4().String()
 			}
@@ -14377,15 +14858,15 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			cacheData.Authorization = ""
 
 			allKeys[index] = cacheData
-			if len(datastoreId) > 127 {
-				datastoreId = datastoreId[:127]
-			}
+			plaintextCacheData := cacheData
+			plaintextCacheData.Encrypted = false
+
+			newCacheId := fmt.Sprintf("org_cache_%s", datastoreId)
 
 			if cacheData.Category == "protected" {
 				cacheData.Encrypted = true
 
 				encryptionKey := fmt.Sprintf("%s_%d_%s_%s", cacheData.OrgId, cacheData.Created, cacheData.Category, cacheData.Key)
-				//newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 				newValue, err := HandleKeyEncryption([]byte(cacheData.Value), encryptionKey)
 				if err != nil {
 					cacheData.Encrypted = false
@@ -14394,53 +14875,43 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				}
 			}
 
+			skipAutomationKey := fmt.Sprintf("datastore_unchanged_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
 			if sameValue {
-				// cacheData.Changed = false
-
-				// FIXME: Should NOT be returning keys?
-				// This would overwrite keys otherwise which is...
-				// unnecessary. At least it makes edited => last seen
-				// This may mean to sen nil to datastoreKeys & cacheKeys
-				// It does however still have to take into account Existed, which means we need to pass along details :)
-				//datastoreKeys <- *datastore.NameKey("", datastoreId, nil)
-				//cacheKeys <- CacheKeyData{}
-
+				SetCache(ctx, skipAutomationKey, []byte(fmt.Sprintf("%d", len(cacheData.Value))), 5000, true)
+			} else {
+				DeleteCache(ctx, skipAutomationKey)
 			}
 
 			cacheData.Changed = keyUpdated
-			datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
-			cacheKeys <- cacheData
+			resultsChan <- bulkCacheKeyResult{
+				dbKey:     *datastore.NameKey(nameKey, datastoreId, nil),
+				storeData: cacheData,
+				cacheData: plaintextCacheData,
+				cacheId:   newCacheId,
+			}
 		}(cacheData, index)
-		// Should set cache key here just in case? :thinking:
 	}
 
 	wg.Wait()
-	close(cacheKeys)
-	close(datastoreKeys)
+	close(resultsChan)
 
 	// Ensures no duplicates
 	newArray := []CacheKeyData{}
+	committedResults := []bulkCacheKeyResult{}
 	handledKeys := []string{}
 
-	skippedKeys := []string{}
-	for key := range cacheKeys {
+	for res := range resultsChan {
+		key := res.storeData
 		if key.Key == "" {
-			//if debug {
-			//	log.Printf("[DEBUG] Skipping empty key in category %s", key.Category)
-			//}
 			continue
 		}
 
 		// Assumes duplicates
 		checkKey := fmt.Sprintf("%s_%s", key.Key, key.Category)
 		if ArrayContains(handledKeys, checkKey) {
-			//if debug {
-			//	log.Printf("[DEBUG] Skipping duplicate key %s in category %s", key.Key, key.Category)
-			//}
-
-			handledKeys = append(handledKeys, checkKey)
 			continue
 		}
+		handledKeys = append(handledKeys, checkKey)
 
 		// Details to help with filtering old vs new
 		// Built for the "is_in_datastore" shuffle tools action
@@ -14452,90 +14923,17 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 		existingInfo = append(existingInfo, minKey)
 		if !key.Changed {
-			parsedKey := fmt.Sprintf("%s_%s_%s", key.OrgId, key.Key, key.Category)
-			skippedKeys = append(skippedKeys, parsedKey)
-			//log.Printf("[DEBUG] Key %s did NOT change, skipping database", parsedKey)
 			continue
 		}
 
-		key.Existed = false
-		key.Changed = false
-		newArray = append(newArray, key)
-
-	}
-
-	handledKeys = []string{}
-	for key := range datastoreKeys {
-		if key.Name == "" {
-			//if debug {
-			//	log.Printf("[DEBUG] Skipping empty datastore key")
-			//}
-
-			continue
-		}
-
-		// Duplicate handler
-		if ArrayContains(handledKeys, key.Name) {
-			//if debug {
-			//	log.Printf("[DEBUG] Skipping duplicate datastore key %s", key.Name)
-			//}
-
-			continue
-		}
-
-		if ArrayContains(skippedKeys, key.Name) {
-			//if debug {
-			//	log.Printf("[DEBUG] Skipping datastore key %s as it was marked as skipped due to no changes", key.Name)
-			//}
-
-			continue
-		}
-
-		// Look for empty keys and continue if so:
-		handledKeys = append(handledKeys, key.Name)
-		dbKeys = append(dbKeys, &key)
-	}
-
-	// Autofixer on the fly
-	if len(newArray) != len(dbKeys) {
-		dbKeys = []*datastore.Key{}
-
-		// FIXME: newArray backwards to ALWAYS have latest key? Is latest last
-		// or first in the array? :thinking:
-		handledKeys := []string{}
-		skippedIndexes := []int{}
-		for skipIndex, cacheData := range newArray {
-			datastoreId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
-			if len(cacheData.Category) > 0 && cacheData.Category != "default" {
-				// Adds category on the end
-				datastoreId = fmt.Sprintf("%s_%s", datastoreId, cacheData.Category)
-			}
-
-			if ArrayContains(handledKeys, datastoreId) {
-				skippedIndexes = append(skippedIndexes, skipIndex)
-				continue
-			}
-
-			handledKeys = append(handledKeys, datastoreId)
-
-			dbKeys = append(dbKeys, datastore.NameKey(nameKey, strings.ToLower(datastoreId), nil))
-		}
-
-		// Cleanup newArray again due to transactional handler
-		// Example where problems show up are nested items:
-		// 		Multiple emails in the same thread
-		if len(skippedIndexes) > 0 {
-			newDeduped := []CacheKeyData{}
-			for index, val := range newArray {
-				if ArrayContainsInt(skippedIndexes, index) {
-					continue
-				}
-
-				newDeduped = append(newDeduped, val)
-			}
-
-			newArray = newDeduped
-		}
+		res.storeData.Existed = false
+		res.storeData.Changed = false
+		res.cacheData.Existed = false
+		res.cacheData.Changed = false
+		dbKeyCopy := res.dbKey
+		dbKeys = append(dbKeys, &dbKeyCopy)
+		newArray = append(newArray, res.storeData)
+		committedResults = append(committedResults, res)
 	}
 
 	for _, cacheData := range newArray {
@@ -14556,136 +14954,141 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	}
 
 	// New struct, to not add body, author etc
-	if project.DbType == "opensearch" {
-		var buf bytes.Buffer
+	if len(newArray) > 0 {
+		if project.DbType == "opensearch" {
+			var buf bytes.Buffer
 
-		// Bulk encoding them
-		for _, cacheData := range newArray {
-			cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
-			if len(cacheData.Category) > 0 && cacheData.Category != "default" {
-				cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
-			}
-
-			// URL encode
-			cacheId = url.QueryEscape(cacheId)
-			if len(cacheId) > 127 {
-				cacheId = cacheId[:127]
-			}
-
-			meta := map[string]map[string]string{
-				"index": {
-					"_index": strings.ToLower(GetESIndexPrefix(nameKey)),
-					"_id":    cacheId,
-				},
-			}
-
-			metaLine, err := json.Marshal(meta)
-			if err != nil {
-				log.Printf("[ERROR] Failed marshalling meta in SetDatastoreKeyBulk: %s", err)
-				continue
-			}
-
-			buf.Write(metaLine)
-			buf.WriteByte('\n')
-
-			docLine, err := json.Marshal(cacheData)
-			if err != nil {
-				log.Printf("[ERROR] Failed marshalling doc in SetDatastoreKeyBulk: %s", err)
-				continue
-			}
-
-			if debug {
-				log.Printf("[DEBUG] Doc with key %s is being rolled", cacheId)
-			}
-
-			buf.Write(docLine)
-			buf.WriteByte('\n')
-		}
-
-		resp, err := project.Es.Bulk(ctx, opensearchapi.BulkReq{
-			Body:  bytes.NewReader(buf.Bytes()),
-			Index: strings.ToLower(GetESIndexPrefix(nameKey)),
-			// Refresh for immediate read-after-write; matches indexEs().
-			Params: opensearchapi.BulkParams{Refresh: "true"},
-		})
-
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-
-		if err == nil {
-			if debug {
-				log.Printf("[DEBUG] There was no error sending bulk request to Opensearch for cache key")
-				// print body
-				body, err := ioutil.ReadAll(res.Body)
-				if err != nil {
-					log.Printf("[ERROR] Error reading response body: %s", err)
-				} else {
-					log.Printf("[DEBUG] Response body: %s", string(body))
+			// Bulk encoding them
+			for _, cacheData := range newArray {
+				cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+				if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+					cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
 				}
+
+				// URL encode
+				cacheId = url.QueryEscape(cacheId)
+				if len(cacheId) > 127 {
+					cacheId = cacheId[:127]
+				}
+
+				meta := map[string]map[string]string{
+					"index": {
+						"_index": strings.ToLower(GetESIndexPrefix(nameKey)),
+						"_id":    cacheId,
+					},
+				}
+
+				metaLine, err := json.Marshal(meta)
+				if err != nil {
+					log.Printf("[ERROR] Failed marshalling meta in SetDatastoreKeyBulk: %s", err)
+					continue
+				}
+
+				buf.Write(metaLine)
+				buf.WriteByte('\n')
+
+				docLine, err := json.Marshal(cacheData)
+				if err != nil {
+					log.Printf("[ERROR] Failed marshalling doc in SetDatastoreKeyBulk: %s", err)
+					continue
+				}
+
+				if debug {
+					log.Printf("[DEBUG] Doc with key %s is being rolled", cacheId)
+				}
+
+				buf.Write(docLine)
+				buf.WriteByte('\n')
 			}
-		}
 
-		if err != nil {
-			log.Printf("[ERROR] Error sending bulk request to Opensearch: %s", err)
+			resp, err := project.Es.Bulk(ctx, opensearchapi.BulkReq{
+				Body:  bytes.NewReader(buf.Bytes()),
+				Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+				// Refresh for immediate read-after-write; matches indexEs().
+				Params: opensearchapi.BulkParams{Refresh: "true"},
+			})
 
-			body, err := ioutil.ReadAll(res.Body)
 			if err != nil {
+				log.Printf("[ERROR] Error sending bulk request to Opensearch: %s", err)
 				if strings.Contains(err.Error(), "index_not_found_exception") {
 					return existingInfo, nil
+				}
+
+				if resp != nil {
+					if res := resp.Inspect().Response; res != nil && res.Body != nil {
+						defer res.Body.Close()
+						body, readErr := ioutil.ReadAll(res.Body)
+						if readErr == nil {
+							log.Printf("[ERROR] Error getting response from Opensearch (set datastore key bulk): %s. Body: %s", err, body)
+							return existingInfo, err
+						}
+					}
 				}
 
 				log.Printf("[ERROR] Error getting response from Opensearch (set datastore key bulk): %s", err)
 				return existingInfo, err
 			}
 
-			log.Printf("[ERROR] Error getting response from Opensearch (set datastore key bulk): %s. Body: %s", err, body)
-			return existingInfo, err
+			if resp != nil {
+				if res := resp.Inspect().Response; res != nil {
+					if res.Body != nil {
+						defer res.Body.Close()
+						if debug {
+							log.Printf("[DEBUG] There was no error sending bulk request to Opensearch for cache key")
+							body, readErr := ioutil.ReadAll(res.Body)
+							if readErr != nil {
+								log.Printf("[ERROR] Error reading response body: %s", readErr)
+							} else {
+								log.Printf("[DEBUG] Response body: %s", string(body))
+							}
+						}
+					}
+					if debug {
+						log.Printf("[DEBUG] Response status: %d", res.StatusCode)
+					}
+				}
+			}
+
+		} else {
+			if len(newArray) != len(dbKeys) {
+				log.Printf("[ERROR] SetDatastoreKeyBulk: Length of newArray (%d) and allKeys (%d) do not match", len(newArray), len(allKeys))
+
+				return existingInfo, errors.New("SetDatastoreKeyBulk: Length of newArray and allKeys do not match")
+			}
+
+			const maxBatchSize = 500
+			for start := 0; start < len(newArray); start += maxBatchSize {
+				end := start + maxBatchSize
+				if end > len(newArray) {
+					end = len(newArray)
+				}
+				if _, err := project.Dbclient.PutMulti(ctx, dbKeys[start:end], newArray[start:end]); err != nil {
+					log.Printf("[ERROR] Error setting bulk org datastore: %s", err)
+					return existingInfo, err
+				}
+			}
 		}
 
-		if debug {
-			log.Printf("[DEBUG] Response status: %d", res.StatusCode)
-		}
-
-	} else {
-		if len(newArray) != len(dbKeys) {
-			log.Printf("[ERROR] SetDatastoreKeyBulk: Length of newArray (%d) and allKeys (%d) do not match", len(newArray), len(allKeys))
-
-			return existingInfo, errors.New("SetDatastoreKeyBulk: Length of newArray and allKeys do not match")
-		}
-
-		if _, err := project.Dbclient.PutMulti(ctx, dbKeys, newArray); err != nil {
-			log.Printf("[ERROR] Error setting bulk org datastore: %s", err)
-			return existingInfo, err
-		}
-	}
-
-	if len(newArray) > 0 {
 		if debug {
 			log.Printf("[INFO] SetDatastoreKeyBulk: Successfully set %d key(s) in category %s for org %s", len(newArray), mainCategory, orgId)
 		}
+
+		if project.CacheDb {
+			cacheListItems := make([]CacheKeyData, 0, len(committedResults))
+			for _, res := range committedResults {
+				if len(res.cacheId) > 0 {
+					if marshalledEntry, err := json.Marshal(res.cacheData); err == nil {
+						_ = SetCache(ctx, res.cacheId, marshalledEntry, 62)
+					}
+				}
+				cacheListItems = append(cacheListItems, res.cacheData)
+			}
+			upsertOrgCacheKeysInListCache(ctx, orgId, mainCategory, cacheListItems)
+		}
 	}
 
-	/*
-		if project.CacheDb {
-			cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
-			err = SetCache(ctx, cacheKey, data, 30)
-			if err != nil {
-				log.Printf("[ERROR] Failed setting cache for set cache key '%s': %s", cacheKey, err)
-			}
-
-			// Delete cache in current org + category + child orgs
-			cursor := ""
-			currentKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, cursor, cacheData.OrgId, cacheData.Category)
-			DeleteCache(ctx, currentKey)
-
-			for _, suborg := range cacheData.SuborgDistribution {
-				currentKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, cursor, suborg, cacheData.Category)
-				DeleteCache(ctx, currentKey)
-			}
-		}
-	*/
-
-	for cnt, cacheData := range newArray {
+	for cnt, committed := range committedResults {
+		cacheData := committed.cacheData
 		// Maxing out at 100 for now just in case
 		if cnt > 100 {
 			break
@@ -14730,12 +15133,16 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	}
 
 	// Look for category triggers
-	if len(mainCategory) > 0 && mainCategory != "default" && len(newArray) > 0 && len(newArray[0].OrgId) > 0 {
+	if len(mainCategory) > 0 && mainCategory != "default" && len(committedResults) > 0 && len(committedResults[0].cacheData.OrgId) > 0 {
 
-		orgId := newArray[0].OrgId
+		orgId := committedResults[0].cacheData.OrgId
 
-		categoryConfig, err := GetDatastoreCategoryConfig(ctx, orgId, mainCategory)
-		if err != nil {
+		categoryConfig := preloadedCategoryConfig
+		err := preloadedCategoryErr
+		if !hasCategoryConfig || orgId != committedResults[0].cacheData.OrgId {
+			categoryConfig, err = GetDatastoreCategoryConfig(ctx, orgId, mainCategory)
+		}
+		if err != nil || categoryConfig == nil {
 			// Set it in the DB
 			categoryUpdate := DatastoreCategoryUpdate{
 				Category: mainCategory,
@@ -14752,30 +15159,18 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			if err != nil {
 				log.Printf("[ERROR] Failed setting datastore category config for org %s and category %s: %s", orgId, mainCategory, err)
 			}
+			DeleteCache(ctx, fmt.Sprintf("datastore_category_%s", orgId))
 		} else {
-			for _, cacheData := range newArray {
+			for _, committed := range committedResults {
+				cacheData := committed.cacheData
 				for _, automation := range categoryConfig.Automations {
 					if !automation.Enabled {
 						continue
 					}
 
-					if automation.Name == "security_rules" || automation.Name == "Security Rules" {
+					if strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_") == "security_rules" {
 						continue
 					}
-
-					/*
-						if len(automation.Options) == 0 {
-							if debug {
-								log.Printf("\n\n\n[ERROR] Debug: Automation '%s' in category '%s' has no options, skipping\n\n\n", automation.Name, categoryConfig.Category)
-							}
-
-							continue
-						}
-					*/
-
-					//if debug {
-					//	log.Printf("[DEBUG] Found automation '%s' to run (2). Value: '%s'", automation.Name, automation.Options[0].Value)
-					//}
 
 					// Run the automation
 					// This should make a notification if it fails
@@ -14800,17 +15195,6 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			}
 		}
 	}
-
-	if len(mainCategory) == 0 {
-		DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", nameKey, "", orgId))
-	}
-
-	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, "", orgId, mainCategory)
-	DeleteCache(ctx, cacheKey)
-	DeleteCache(ctx, fmt.Sprintf("%s_50", cacheKey))
-	DeleteCache(ctx, fmt.Sprintf("%s_100", cacheKey))
-	DeleteCache(ctx, fmt.Sprintf("%s_1000", cacheKey))
-	DeleteCache(ctx, fmt.Sprintf("datastore_category_%s", orgId))
 
 	return existingInfo, nil
 }
@@ -15120,8 +15504,9 @@ func SetDatastoreKeyRevision(ctx context.Context, cacheData CacheKeyData) error 
 // Primarily used for updating tags and other metadata.
 func SetDatastoreKeyMeta(ctx context.Context, cacheData CacheKeyData) error {
 	nameKey := "org_cache"
+	cacheData.Category = normalizeOrgCacheCategory(cacheData.Category)
 	cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
-	if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+	if len(cacheData.Category) > 0 {
 		cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
 	}
 
@@ -15142,6 +15527,20 @@ func SetDatastoreKeyMeta(ctx context.Context, cacheData CacheKeyData) error {
 		}
 
 		cacheData.Tags = newTags
+	}
+
+	plaintextCacheData := cacheData
+	if cacheData.Category == "protected" && !cacheData.Encrypted {
+		storeCopy := cacheData
+		storeCopy.Encrypted = true
+		encryptionKey := fmt.Sprintf("%s_%d_%s_%s", storeCopy.OrgId, storeCopy.Created, storeCopy.Category, storeCopy.Key)
+		newValue, err := HandleKeyEncryption([]byte(storeCopy.Value), encryptionKey)
+		if err != nil {
+			storeCopy.Encrypted = false
+		} else {
+			storeCopy.Value = string(newValue)
+		}
+		cacheData = storeCopy
 	}
 
 	data, err := json.Marshal(cacheData)
@@ -15165,10 +15564,18 @@ func SetDatastoreKeyMeta(ctx context.Context, cacheData CacheKeyData) error {
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
-		err = SetCache(ctx, cacheKey, data, 30)
+		cacheBytes := data
+		if plaintextCacheData.Category == "protected" {
+			if plainBytes, plainErr := json.Marshal(plaintextCacheData); plainErr == nil {
+				cacheBytes = plainBytes
+			}
+		}
+		err = SetCache(ctx, cacheKey, cacheBytes, 30)
 		if err != nil {
 			log.Printf("[ERROR] Failed setting cache for set cache key '%s': %s", cacheKey, err)
 		}
+
+		upsertOrgCacheKeysInListCache(ctx, plaintextCacheData.OrgId, plaintextCacheData.Category, []CacheKeyData{plaintextCacheData})
 	}
 
 	return nil
@@ -15184,9 +15591,11 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 		cacheData.Created = timeNow
 	}
 
+	cacheData.Category = normalizeOrgCacheCategory(cacheData.Category)
+
 	//cacheId := fmt.Sprintf("%s_%s_%s", cacheData.OrgId, cacheData.WorkflowId, cacheData.Key)
 	cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
-	if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+	if len(cacheData.Category) > 0 {
 		cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
 	}
 
@@ -15201,7 +15610,9 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 		cacheData.PublicAuthorization = uuid.NewV4().String()
 	}
 
-	cacheData.Category = strings.ReplaceAll(strings.ToLower(cacheData.Category), " ", "_")
+	plaintextCacheData := cacheData
+	plaintextCacheData.Encrypted = false
+	plaintextCacheData.FormattedKey = cacheId
 
 	// Test just for protected category (for now)
 	if cacheData.Category == "protected" {
@@ -15239,26 +15650,25 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
-		err = SetCache(ctx, cacheKey, data, 30)
+		cacheBytes := data
+		if plaintextCacheData.Category == "protected" {
+			if plainBytes, plainErr := json.Marshal(plaintextCacheData); plainErr == nil {
+				cacheBytes = plainBytes
+			}
+		}
+		err = SetCache(ctx, cacheKey, cacheBytes, 62)
 		if err != nil {
 			log.Printf("[ERROR] Failed setting cache for set cache key '%s': %s", cacheKey, err)
 		}
 
-		// Delete cache in current org + category + child orgs
-		cursor := ""
-		currentKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, cursor, cacheData.OrgId, cacheData.Category)
-		DeleteCache(ctx, currentKey)
-
-		for _, suborg := range cacheData.SuborgDistribution {
-			currentKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, cursor, suborg, cacheData.Category)
-			DeleteCache(ctx, currentKey)
-		}
+		// Update cached list in-place instead of deleting on every write
+		upsertOrgCacheKeysInListCache(ctx, plaintextCacheData.OrgId, plaintextCacheData.Category, []CacheKeyData{plaintextCacheData})
 	}
 
 	// Look for category triggers
 	if len(cacheData.Category) > 0 && cacheData.Category != "default" {
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
-		if err != nil {
+		if err != nil || categoryConfig == nil {
 			// Set it in the DB
 			categoryUpdate := DatastoreCategoryUpdate{
 				Category: cacheData.Category,
@@ -15282,11 +15692,16 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 					continue
 				}
 
-				if len(automation.Options) == 0 {
+				parsedAutoName := strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_")
+				if parsedAutoName == "security_rules" {
 					continue
 				}
 
-				if debug {
+				if len(automation.Options) == 0 && parsedAutoName != "enrich" {
+					continue
+				}
+
+				if debug && len(automation.Options) > 0 {
 					log.Printf("[DEBUG] Found automation %s to run. Value: %s", automation.Name, automation.Options[0].Value)
 				}
 
@@ -15308,7 +15723,7 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 							"Datastore_Automation_Error",
 						)
 					}
-				}(cacheData, automation)
+				}(plaintextCacheData, automation)
 			}
 		}
 	}
@@ -15322,12 +15737,12 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	cacheData := &CacheKeyData{}
 	nameKey := "org_cache"
 
-	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
-	if len(category) > 0 && category != "default" {
+	normalizedCategory := normalizeOrgCacheCategory(category)
+	if len(normalizedCategory) > 0 {
 		// FIXME: If they key itself is 'test_protected' and category
 		// is 'protected' this breaks... Keeping it for now.
-		if !strings.HasSuffix(id, fmt.Sprintf("_%s", category)) {
-			id = fmt.Sprintf("%s_%s", id, category)
+		if !strings.HasSuffix(id, fmt.Sprintf("_%s", normalizedCategory)) {
+			id = fmt.Sprintf("%s_%s", id, normalizedCategory)
 		}
 	}
 
@@ -15345,10 +15760,12 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
-			parsedCache := []byte(cache.([]uint8))
-			err = json.Unmarshal(parsedCache, cacheData)
-			if err == nil {
-				return cacheData, nil
+			if parsedCache, ok := cacheBytesFromInterface(cache); ok && len(parsedCache) > 0 {
+				err = json.Unmarshal(parsedCache, cacheData)
+				if err == nil && len(cacheData.Key) > 0 && normalizeOrgCacheCategory(cacheData.Category) == normalizedCategory {
+					return cacheData, nil
+				}
+				cacheData = &CacheKeyData{}
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for cache key %s: %s", id, err)
@@ -15399,25 +15816,17 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
-			if project.CacheDb {
-				data, err := json.Marshal(cacheData)
-				if err != nil {
-					log.Printf("[ERROR] Failed marshalling in getcachekey (2): %s", err)
-				} else {
-					err = SetCache(ctx, cacheKey, data, 30)
-					if err != nil {
-						log.Printf("[ERROR] Failed setting cache for get cache key (2): %s", err)
-					}
-				}
-			}
-
 			if strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[ERROR] Error in cache key loading. Migrating org cache to new handler (3): %s", err)
 				err = nil
 			} else {
 				//log.Printf("[WARNING] Error in datastore key loading for %s: %s", id, err)
+				if !strings.Contains(err.Error(), "no such entity") {
+					return cacheData, err
+				}
 
-				if len(category) > 0 && category != "default" {
+				if len(normalizedCategory) > 0 {
+					return cacheData, err
 				} else {
 					// Search for key by removing first uuid part
 					newId := id
@@ -15448,34 +15857,25 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 					if err != nil {
 						if !strings.Contains(err.Error(), `cannot load field`) {
 							log.Printf("[WARNING] Failed getting datastoreKey (2) %s: %s", newId, err)
-
-							if project.CacheDb {
-								data, err := json.Marshal(cacheData)
-								if err != nil {
-									log.Printf("[WARNING] Failed marshalling in getcachekey (3): %s", err)
-									return cacheData, nil
-								}
-
-								err = SetCache(ctx, cacheKey, data, 30)
-								if err != nil {
-									log.Printf("[WARNING] Failed setting cache for get cache key (3): %s", err)
-								}
-							}
-
 							return cacheData, err
 						}
 					}
 
 					if len(cacheKeys) > 0 {
 						for _, cacheKey := range cacheKeys {
+							if normalizeOrgCacheCategory(cacheKey.Category) != normalizedCategory {
+								continue
+							}
 							if cacheKey.OrgId == orgId {
-								cacheData = &cacheKey
+								foundCopy := cacheKey
+								cacheData = &foundCopy
 								break
 							}
 
 							for _, subOrg := range cacheKey.SuborgDistribution {
 								if subOrg == orgId {
-									cacheData = &cacheKey
+									foundCopy := cacheKey
+									cacheData = &foundCopy
 									break
 								}
 							}
@@ -15494,6 +15894,10 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 		} else {
 			cacheData.FormattedKey = id
 		}
+	}
+
+	if cacheData == nil || len(cacheData.Key) == 0 || normalizeOrgCacheCategory(cacheData.Category) != normalizedCategory {
+		return cacheData, errors.New("Key doesn't exist")
 	}
 
 	if cacheData.Encrypted {
@@ -16411,6 +16815,44 @@ func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, 
 	return count, nil
 }
 
+func hasExpiredOrgCacheKeys(ctx context.Context, orgId string, category string, keys []CacheKeyData) bool {
+	if len(keys) == 0 || len(orgId) == 0 {
+		return false
+	}
+
+	categories := []string{}
+	if len(category) > 0 && category != "default" {
+		categories = []string{category}
+	} else {
+		for _, k := range keys {
+			if len(k.Category) > 0 && k.Category != "default" && !ArrayContains(categories, k.Category) {
+				categories = append(categories, k.Category)
+			}
+		}
+	}
+
+	if len(categories) == 0 {
+		return false
+	}
+
+	now := time.Now().Unix()
+	for _, cat := range categories {
+		categoryConfig, err := GetDatastoreCategoryConfig(ctx, orgId, cat)
+		if err != nil || categoryConfig == nil || categoryConfig.Settings.Timeout < 60 {
+			continue
+		}
+
+		editedTime := now - int64(categoryConfig.Settings.Timeout)
+		for _, k := range keys {
+			if k.Category == cat && k.Edited < editedTime {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int, inputcursor string, cleanupDepthParam ...int) ([]CacheKeyData, string, error) {
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" {
 		if debug && category != "protected" {
@@ -16434,9 +16876,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		}
 	}
 
-	if strings.ToLower(category) == "default" {
-		category = ""
-	}
+	category = normalizeOrgCacheCategory(category)
 
 	if max > 1000 {
 		max = 1000
@@ -16446,7 +16886,6 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		max = 1
 	}
 
-	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
 	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, inputcursor, orgId, category)
 	if max == 50 || max == 100 || max == 1000 {
 		cacheKey = fmt.Sprintf("%s_%d", cacheKey, max)
@@ -16458,21 +16897,57 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		Cursor: "",
 		Keys:   []CacheKeyData{},
 	}
-	//if project.CacheDb && category == "protected" {
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &cacheReturn)
-			if err == nil {
-
-				// Avoids an issue with bad caching
-				if len(cacheReturn.Keys) > 1 {
-					return cacheReturn.Keys, cacheReturn.Cursor, nil
+			if cacheData, ok := cacheBytesFromInterface(cache); ok && len(cacheData) > 0 {
+				err = json.Unmarshal(cacheData, &cacheReturn)
+				if err == nil {
+					if cacheReturn.Keys == nil {
+						cacheReturn.Keys = []CacheKeyData{}
+					}
+					if !hasExpiredOrgCacheKeys(ctx, orgId, category, cacheReturn.Keys) {
+						return cacheReturn.Keys, cacheReturn.Cursor, nil
+					}
 				}
 			}
-		} else {
-			//log.Printf("[DEBUG] Failed getting cache for appstats: %s", err)
+		}
+
+		// If querying the first page and the exact limit key missed, check if another cached first-page variant can satisfy it.
+		if inputcursor == "" {
+			for _, candidateTarget := range getOrgCacheListCacheKeys(orgId, category) {
+				if candidateTarget.key == cacheKey {
+					continue
+				}
+				candidateRaw, candidateErr := GetCache(ctx, candidateTarget.key)
+				if candidateErr != nil {
+					continue
+				}
+				candidateBytes, ok := cacheBytesFromInterface(candidateRaw)
+				if !ok || len(candidateBytes) == 0 {
+					continue
+				}
+				var candidateReturn CacheReturn
+				if err := json.Unmarshal(candidateBytes, &candidateReturn); err != nil {
+					continue
+				}
+				if candidateReturn.Keys == nil {
+					candidateReturn.Keys = []CacheKeyData{}
+				}
+				if hasExpiredOrgCacheKeys(ctx, orgId, category, candidateReturn.Keys) {
+					continue
+				}
+				// If the cached entry holds the complete category (no next cursor) and has <= max keys,
+				// or if it has at least max keys and we only need up to max:
+				if candidateReturn.Cursor == "" && len(candidateReturn.Keys) <= max {
+					return candidateReturn.Keys, "", nil
+				}
+				if len(candidateReturn.Keys) >= max {
+					sliced := make([]CacheKeyData, max)
+					copy(sliced, candidateReturn.Keys[:max])
+					return sliced, candidateReturn.Cursor, nil
+				}
+			}
 		}
 	}
 
@@ -16614,77 +17089,65 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			query = query.Start(outputcursor)
 		}
 
-		// Skip page in query
 		errcnt := 0
-		cursorStr := inputcursor
-		var err error
 		for {
 			it := project.Dbclient.Run(ctx, query)
-
+			var iterErr error
 			for {
 				innerKey := CacheKeyData{}
-				_, err := it.Next(&innerKey)
-				if err != nil {
-					//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+				_, iterErr = it.Next(&innerKey)
+				if iterErr != nil {
 					break
 				}
 
 				cacheKeys = append(cacheKeys, innerKey)
 			}
 
-			if err != iterator.Done {
-				//log.Printf("[ERROR] Failed fetching results for cache: %v", err)
-				//break
+			if iterErr != nil && iterErr != iterator.Done {
+				if errcnt == 0 && (strings.Contains(iterErr.Error(), "no matching index") || strings.Contains(iterErr.Error(), "not ready to serve")) {
+					log.Printf("[WARNING] No matching index for cache. Running without edit index: %s.", iterErr)
+					query = datastore.NewQuery(nameKey).Filter("OrgId =", orgId)
+					if len(category) > 0 {
+						query = query.Filter("category =", category)
+					} else {
+						query = query.Filter("category =", "")
+					}
+					query = query.Limit(max)
+					if inputcursor != "" {
+						if outputcursor, decErr := datastore.DecodeCursor(inputcursor); decErr == nil {
+							query = query.Start(outputcursor)
+						}
+					}
+					errcnt += 1
+					cacheKeys = []CacheKeyData{}
+					continue
+				}
 			}
 
 			if len(cacheKeys) >= max {
-				// Get next cursor and set it as the new cursor
-
 				nextCursor, err := it.Cursor()
 				if err != nil {
 					log.Printf("[ERROR] Cursorerror for cache: %s", err)
 				} else {
-					cursor = fmt.Sprintf("%s", nextCursor)
+					nextStr := fmt.Sprintf("%s", nextCursor)
+					if nextStr != inputcursor {
+						cursor = nextStr
+					}
 				}
-
-				break
 			}
-
-			// Get the cursor for the next page of results.
-			nextCursor, err := it.Cursor()
-			if err != nil {
-				if errcnt == 0 && (strings.Contains(err.Error(), "no matching index") || strings.Contains(err.Error(), "not ready to serve")) {
-					log.Printf("[WARNING] No matching index for cache. Running without edit index: %s.", err)
-					query = datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Limit(max)
-					errcnt += 1
-					continue
-				}
-
-				log.Printf("[ERROR] Problem with cursor: %s", err)
-				break
-			} else {
-				nextStr := fmt.Sprintf("%s", nextCursor)
-				if cursorStr == nextStr {
-					break
-				}
-
-				cursorStr = nextStr
-				query = query.Start(nextCursor)
-
-				cursor = cursorStr
-				//cursorStr = nextCursor
-				//break
-			}
+			break
 		}
 	}
 
 	categories := []string{}
-	if len(category) > 0 && category != "default" {
-		categories = []string{category}
-	} else if len(category) == 0 || category == "default" {
-		for _, cacheKey := range cacheKeys {
-			if len(cacheKey.Category) > 0 && cacheKey.Category != "default" && !ArrayContains(categories, cacheKey.Category) {
-				categories = append(categories, cacheKey.Category)
+	if len(cacheKeys) > 0 {
+		if len(category) > 0 && category != "default" {
+			categories = []string{category}
+		} else if len(category) == 0 || category == "default" {
+			for _, cacheKey := range cacheKeys {
+				if len(cacheKey.Category) > 0 && cacheKey.Category != "default" && !ArrayContains(categories, cacheKey.Category) {
+					categories = append(categories, cacheKey.Category)
+				}
 			}
 		}
 	}
@@ -16740,6 +17203,15 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 					cursor = ""
 					if debug {
 						log.Printf("[DEBUG] Removing %d cache keys for category '%s' in org '%s' due to timeout settings. This is an auto-fix for stale cache keys. Running recursion.", len(deleteKeys), category, orgId)
+					}
+
+					for _, target := range getOrgCacheListCacheKeys(orgId, category) {
+						DeleteCache(ctx, target.key)
+					}
+					if len(category) > 0 {
+						for _, target := range getOrgCacheListCacheKeys(orgId, "") {
+							DeleteCache(ctx, target.key)
+						}
 					}
 
 					err = DeleteKeys(backgroundCtx, nameKey, deleteKeys)
@@ -16801,51 +17273,44 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	}
 
-	foundOrg, err := GetOrg(ctx, orgId)
-	if err == nil && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
-		if parentOrgDepth >= 3 {
-			log.Printf("[ERROR] Reached maximum parent org lookup depth (%d) for org %s. Skipping parent org cache lookup to prevent infinite recursion.", parentOrgDepth, orgId)
-		} else {
-			parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
-			if err != nil {
-				if debug {
-					log.Printf("[DEBUG] Could not find parent org %s for org %s (possibly in different region): %s", foundOrg.CreatorOrg, orgId, err)
-				}
+	if category != "protected" {
+		foundOrg, err := GetOrg(ctx, orgId)
+		if err == nil && foundOrg != nil && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
+			if parentOrgDepth >= 3 {
+				log.Printf("[ERROR] Reached maximum parent org lookup depth (%d) for org %s. Skipping parent org cache lookup to prevent infinite recursion.", parentOrgDepth, orgId)
 			} else {
-				parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, "", max, inputcursor, cleanupDepth, parentOrgDepth+1)
-				if err != nil {
+				parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+				if err != nil || parentOrg == nil {
 					if debug {
-						log.Printf("[DEBUG] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
+						log.Printf("[DEBUG] Could not find parent org %s for org %s (possibly in different region): %s", foundOrg.CreatorOrg, orgId, err)
 					}
 				} else {
-					if debug {
-						//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
-					}
-
-					for _, parentCache := range parentOrgCache {
-						/*
-							if debug && len(parentCache.SuborgDistribution) > 0 {
-								log.Printf("[DEBUG] Parent org %s keys: %#v", parentOrg.Id, parentCache.SuborgDistribution)
-							}
-						*/
-
-						if !ArrayContains(parentCache.SuborgDistribution, orgId) {
-							continue
+					parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, category, max, inputcursor, cleanupDepth, parentOrgDepth+1)
+					if err != nil {
+						if debug {
+							log.Printf("[DEBUG] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
 						}
+					} else {
+						for _, parentCache := range parentOrgCache {
+							if !ArrayContains(parentCache.SuborgDistribution, orgId) {
+								continue
+							}
 
-						// Clean up just in case
-						parentCache.PublicAuthorization = ""
-						parentCache.SuborgDistribution = []string{orgId}
-						cacheKeys = append(cacheKeys, parentCache)
+							// Clean up just in case
+							parentCache.PublicAuthorization = ""
+							parentCache.SuborgDistribution = []string{orgId}
+							cacheKeys = append(cacheKeys, parentCache)
+						}
 					}
 				}
 			}
 		}
 	}
 
-	// Only cache if NO cursor at all.
-	// Otherwise we need to track and clean up all cursors(?)
 	if project.CacheDb && !skipCache {
+		if cacheKeys == nil {
+			cacheKeys = []CacheKeyData{}
+		}
 		cacheReturn = CacheReturn{
 			Cursor: cursor,
 			Keys:   cacheKeys,
@@ -16857,7 +17322,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			return cacheKeys, cursor, nil
 		}
 
-		err = SetCache(ctx, cacheKey, newcache, 5)
+		err = SetCache(ctx, cacheKey, newcache, orgCacheListTTLMinutes)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating cache keys cache: %s", err)
 		}
@@ -18953,10 +19418,21 @@ func SetDatastoreNGramItem(ctx context.Context, key string, ngramItem *NGramItem
 			return err
 		}
 	} else {
-		key := datastore.NameKey(nameKey, key, nil)
-		if _, err := project.Dbclient.Put(ctx, key, ngramItem); err != nil {
-			log.Printf("[ERROR] Failed adding ngramkey with ID %s: %s", key, err)
-			return err
+		var putErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					putErr = errors.New("datastore client not initialized or closed")
+				}
+			}()
+			key := datastore.NameKey(nameKey, key, nil)
+			if _, err := project.Dbclient.Put(ctx, key, ngramItem); err != nil {
+				log.Printf("[ERROR] Failed adding ngramkey with ID %s: %s", key, err)
+				putErr = err
+			}
+		}()
+		if putErr != nil {
+			return putErr
 		}
 	}
 
@@ -19219,14 +19695,24 @@ func GetDatastoreNGramItem(ctx context.Context, key string) (*NGramItem, error) 
 		ngramItem = &wrapped.Source
 	} else {
 		// Get the ngram item from the datastore
-		getNgramKey := datastore.NameKey(nameKey, key, nil)
-		if err := project.Dbclient.Get(ctx, getNgramKey, ngramItem); err != nil {
-			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[ERROR] Error in ngramitem loading. Migrating ngramitems to new handler (1): %s", err)
-				err = nil
-			} else {
-				return ngramItem, err
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized or closed")
+				}
+			}()
+			getNgramKey := datastore.NameKey(nameKey, key, nil)
+			if err := project.Dbclient.Get(ctx, getNgramKey, ngramItem); err != nil {
+				if strings.Contains(err.Error(), `cannot load field`) {
+					log.Printf("[ERROR] Error in ngramitem loading. Migrating ngramitems to new handler (1): %s", err)
+				} else {
+					getErr = err
+				}
 			}
+		}()
+		if getErr != nil {
+			return ngramItem, getErr
 		}
 	}
 
@@ -19975,8 +20461,141 @@ func DeleteOAuthClient(ctx context.Context, id string) error {
 	return DeleteKey(ctx, "oauth_clients", id)
 }
 
+func getOAuthTokenRotation(ctx context.Context, key string) (rotation *oauthTokenRotation, err error) {
+	defer func() {
+		if recover() != nil {
+			rotation, err = nil, errors.New("OAuth rotation storage is not initialized")
+		}
+	}()
+	rotation = &oauthTokenRotation{}
+	if project.DbType == "opensearch" {
+		response, getErr := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index: strings.ToLower(GetESIndexPrefix("oauth_token_rotations")), DocumentID: key,
+		})
+		if response != nil && response.Inspect().Response != nil {
+			if response.Inspect().Response.Body != nil {
+				defer response.Inspect().Response.Body.Close()
+			}
+			if response.Inspect().Response.StatusCode == http.StatusNotFound {
+				return nil, nil
+			}
+		}
+		if getErr != nil {
+			return nil, getErr
+		}
+		if err := json.Unmarshal(response.Source, rotation); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := project.Dbclient.Get(ctx, datastore.NameKey("oauth_token_rotations", key, nil), rotation); err != nil {
+			if err == datastore.ErrNoSuchEntity {
+				return nil, nil
+			}
+			return nil, err
+		}
+	}
+	return rotation, nil
+}
+
+// Create chooses a single replacement. Later updates only advance completion/revocation.
+func saveOAuthTokenRotation(ctx context.Context, key string, proposed oauthTokenRotation, create bool) (rotation *oauthTokenRotation, err error) {
+	defer func() {
+		if recover() != nil {
+			rotation, err = nil, errors.New("OAuth rotation storage is not initialized")
+		}
+	}()
+	if project.DbType == "opensearch" {
+		index := strings.ToLower(GetESIndexPrefix("oauth_token_rotations"))
+		if create {
+			data, marshalErr := json.Marshal(proposed)
+			if marshalErr != nil {
+				return nil, marshalErr
+			}
+			response, writeErr := project.Es.Index(ctx, opensearchapi.IndexReq{
+				Index: index, DocumentID: key, Body: bytes.NewReader(data),
+				Params: opensearchapi.IndexParams{OpType: "create", Refresh: "true"},
+			})
+			if response != nil && response.Inspect().Response != nil {
+				if response.Inspect().Response.Body != nil {
+					defer response.Inspect().Response.Body.Close()
+				}
+				if response.Inspect().Response.StatusCode == http.StatusConflict {
+					return getOAuthTokenRotation(ctx, key)
+				}
+			}
+			if writeErr != nil {
+				// A timed-out write may have committed. Read the decision before retrying.
+				if saved, readErr := getOAuthTokenRotation(ctx, key); readErr == nil && saved != nil {
+					return saved, nil
+				}
+				return nil, writeErr
+			}
+			return &proposed, nil
+		}
+		data, _ := json.Marshal(map[string]interface{}{"script": map[string]interface{}{
+			"source": "if (params.revoked) { ctx._source.revoked = true; } if (params.completed_at > 0 && ctx._source.completed_at == 0) { ctx._source.completed_at = params.completed_at; }",
+			"params": map[string]interface{}{"revoked": proposed.Revoked, "completed_at": proposed.CompletedAt},
+		}})
+		retries := 5
+		response, writeErr := project.Es.Update(ctx, opensearchapi.UpdateReq{
+			Index: index, DocumentID: key, Body: bytes.NewReader(data),
+			Params: opensearchapi.UpdateParams{Refresh: "true", RetryOnConflict: &retries},
+		})
+		if response != nil && response.Inspect().Response != nil {
+			if response.Inspect().Response.Body != nil {
+				defer response.Inspect().Response.Body.Close()
+			}
+		}
+		if writeErr != nil {
+			if saved, readErr := getOAuthTokenRotation(ctx, key); readErr == nil && saved != nil &&
+				(!proposed.Revoked || saved.Revoked) && (proposed.CompletedAt == 0 || saved.CompletedAt != 0) {
+				return saved, nil
+			}
+			return nil, writeErr
+		}
+		return getOAuthTokenRotation(ctx, key)
+	}
+	keyRef := datastore.NameKey("oauth_token_rotations", key, nil)
+	_, err = project.Dbclient.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+		current := &oauthTokenRotation{}
+		if readErr := tx.Get(keyRef, current); readErr != nil {
+			if readErr != datastore.ErrNoSuchEntity || !create {
+				return readErr
+			}
+			current = &proposed
+		} else if !create {
+			if (!proposed.Revoked || current.Revoked) && (proposed.CompletedAt == 0 || current.CompletedAt != 0) {
+				rotation = current
+				return nil
+			}
+			current.Revoked = current.Revoked || proposed.Revoked
+			if current.CompletedAt == 0 {
+				current.CompletedAt = proposed.CompletedAt
+			}
+		} else {
+			rotation = current
+			return nil
+		}
+		if _, writeErr := tx.Put(keyRef, current); writeErr != nil {
+			return writeErr
+		}
+		rotation = current
+		return nil
+	})
+	if err != nil {
+		if saved, readErr := getOAuthTokenRotation(ctx, key); readErr == nil && saved != nil {
+			if create || ((!proposed.Revoked || saved.Revoked) && (proposed.CompletedAt == 0 || saved.CompletedAt != 0)) {
+				return saved, nil
+			}
+		}
+		return nil, err
+	}
+	return rotation, nil
+}
+
 // SetOAuthToken persists an OAuthToken in OpenSearch (onprem) or Datastore (cloud).
-func SetOAuthToken(ctx context.Context, token OAuthToken) error {
+// createOnly is used by refresh recovery to preserve an already-issued replacement.
+func SetOAuthToken(ctx context.Context, token OAuthToken, createOnly ...bool) error {
 	nameKey := "oauth_tokens"
 	if len(token.AccessToken) == 0 {
 		return errors.New("access token cannot be empty")
@@ -19991,6 +20610,39 @@ func SetOAuthToken(ctx context.Context, token OAuthToken) error {
 	data, err := json.Marshal(token)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshalling OAuth token: %s", err)
+		return err
+	}
+	if len(createOnly) > 0 && createOnly[0] {
+		// Crash recovery may race a completed request. Never overwrite its token or cache.
+		if project.DbType == "opensearch" {
+			response, writeErr := project.Es.Index(ctx, opensearchapi.IndexReq{
+				Index: strings.ToLower(GetESIndexPrefix(nameKey)), DocumentID: token.AccessToken, Body: bytes.NewReader(data),
+				Params: opensearchapi.IndexParams{OpType: "create", Refresh: "true"},
+			})
+			if response != nil && response.Inspect().Response != nil {
+				if response.Inspect().Response.Body != nil {
+					defer response.Inspect().Response.Body.Close()
+				}
+				if response.Inspect().Response.StatusCode == http.StatusConflict {
+					return nil
+				}
+			}
+			return writeErr
+		}
+		key := datastore.NameKey(nameKey, token.AccessToken, nil)
+		_, err := project.Dbclient.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+			var existing OAuthToken
+			if err := tx.Get(key, &existing); err != datastore.ErrNoSuchEntity {
+				return err
+			}
+			_, err := tx.Put(key, &token)
+			return err
+		})
+		if err != nil {
+			if existing, readErr := GetOAuthToken(ctx, token.AccessToken); readErr == nil && existing != nil {
+				return nil
+			}
+		}
 		return err
 	}
 
@@ -20015,7 +20667,7 @@ func SetOAuthToken(ctx context.Context, token OAuthToken) error {
 				putErr = err
 			}
 		}()
-		if putErr != nil && !project.CacheDb {
+		if putErr != nil && (!project.CacheDb || token.RotationKey != "") {
 			return putErr
 		}
 	}
@@ -20030,6 +20682,45 @@ func SetOAuthToken(ctx context.Context, token OAuthToken) error {
 		if len(token.RefreshToken) > 0 {
 			refreshCacheKey := fmt.Sprintf("oauth_refresh_%s", token.RefreshToken)
 			_ = SetCache(ctx, refreshCacheKey, []byte(token.AccessToken), int32(token.ExpiresIn))
+		}
+
+		// Maintain cache-backed index lists for org and user lookups
+		if len(token.OrgId) > 0 {
+			orgIndexKey := fmt.Sprintf("oauth_tokens_org_%s", token.OrgId)
+			var orgTokenIds []string
+			if raw, cErr := GetCache(ctx, orgIndexKey); cErr == nil && raw != nil {
+				switch v := raw.(type) {
+				case []byte:
+					_ = json.Unmarshal(v, &orgTokenIds)
+				case string:
+					_ = json.Unmarshal([]byte(v), &orgTokenIds)
+				}
+			}
+			if !ArrayContains(orgTokenIds, token.AccessToken) {
+				orgTokenIds = append(orgTokenIds, token.AccessToken)
+				if idxBytes, mErr := json.Marshal(orgTokenIds); mErr == nil {
+					_ = SetCache(ctx, orgIndexKey, idxBytes, int32(token.ExpiresIn))
+				}
+			}
+		}
+
+		if len(token.UserId) > 0 {
+			userIndexKey := fmt.Sprintf("oauth_tokens_user_%s", token.UserId)
+			var userTokenIds []string
+			if raw, cErr := GetCache(ctx, userIndexKey); cErr == nil && raw != nil {
+				switch v := raw.(type) {
+				case []byte:
+					_ = json.Unmarshal(v, &userTokenIds)
+				case string:
+					_ = json.Unmarshal([]byte(v), &userTokenIds)
+				}
+			}
+			if !ArrayContains(userTokenIds, token.AccessToken) {
+				userTokenIds = append(userTokenIds, token.AccessToken)
+				if idxBytes, mErr := json.Marshal(userTokenIds); mErr == nil {
+					_ = SetCache(ctx, userIndexKey, idxBytes, int32(token.ExpiresIn))
+				}
+			}
 		}
 	}
 
@@ -20061,6 +20752,15 @@ func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error)
 				if err := json.Unmarshal(rawBytes, &token); err == nil && len(token.AccessToken) > 0 {
 					if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
 						return nil, errors.New("OAuth token has expired")
+					}
+					if token.RotationKey != "" {
+						rotation, rotationErr := getOAuthTokenRotation(ctx, token.RotationKey)
+						if rotationErr != nil {
+							return nil, errors.New("OAuth rotation storage unavailable")
+						}
+						if rotation == nil || rotation.Revoked || rotation.Token.AccessToken != token.AccessToken {
+							return nil, errors.New("OAuth token doesn't exist")
+						}
 					}
 					return &token, nil
 				}
@@ -20129,6 +20829,15 @@ func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error)
 
 	if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
 		return nil, errors.New("OAuth token has expired")
+	}
+	if token.RotationKey != "" {
+		rotation, rotationErr := getOAuthTokenRotation(ctx, token.RotationKey)
+		if rotationErr != nil {
+			return nil, errors.New("OAuth rotation storage unavailable")
+		}
+		if rotation == nil || rotation.Revoked || rotation.Token.AccessToken != token.AccessToken {
+			return nil, errors.New("OAuth token doesn't exist")
+		}
 	}
 
 	if project.CacheDb {
@@ -20213,7 +20922,7 @@ func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAu
 			if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
 				return nil, errors.New("OAuth token has expired")
 			}
-			return &token, nil
+			return GetOAuthToken(ctx, token.AccessToken)
 		}
 	} else {
 		var tokens []OAuthToken
@@ -20241,7 +20950,7 @@ func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAu
 			return nil, getErr
 		}
 		if len(tokens) > 0 {
-			return &tokens[0], nil
+			return GetOAuthToken(ctx, tokens[0].AccessToken)
 		}
 	}
 
@@ -20249,8 +20958,31 @@ func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAu
 }
 
 // DeleteOAuthToken removes an OAuthToken from storage and cache.
-func DeleteOAuthToken(ctx context.Context, accessToken string) error {
+// Normal rotation cleanup passes rotating=true; explicit revocation also cancels outgoing rotations.
+func DeleteOAuthToken(ctx context.Context, accessToken string, rotating ...bool) error {
 	token, err := GetOAuthToken(ctx, accessToken)
+	if err != nil && err.Error() != "OAuth token doesn't exist" && err.Error() != "OAuth token not found" &&
+		err.Error() != "OAuth token has expired" && !strings.HasPrefix(err.Error(), "status: 404,") {
+		return err
+	}
+	if token != nil && token.RefreshToken != "" && (len(rotating) == 0 || !rotating[0]) {
+		// Stop an in-flight refresh from producing another token after explicit revocation.
+		key := fmt.Sprintf("%x", sha256.Sum256([]byte(token.RefreshToken)))
+		outgoing, writeErr := saveOAuthTokenRotation(ctx, key, oauthTokenRotation{Revoked: true}, true)
+		if writeErr != nil {
+			return writeErr
+		}
+		if outgoing != nil && !outgoing.Revoked {
+			if _, err := saveOAuthTokenRotation(ctx, key, oauthTokenRotation{Revoked: true}, false); err != nil {
+				return err
+			}
+		}
+	}
+	if token != nil && token.RotationKey != "" {
+		if _, err := saveOAuthTokenRotation(ctx, token.RotationKey, oauthTokenRotation{Revoked: true}, false); err != nil {
+			return err
+		}
+	}
 	if err == nil && token != nil && len(token.RefreshToken) > 0 {
 		_ = DeleteKey(ctx, "oauth_refresh", token.RefreshToken)
 	}
@@ -20269,8 +21001,8 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 	if project.DbType == "opensearch" {
 		query := map[string]interface{}{
 			"query": map[string]interface{}{
-				"term": map[string]interface{}{
-					"org_id.keyword": orgId,
+				"match": map[string]interface{}{
+					"org_id": orgId,
 				},
 			},
 			"size": 100,
@@ -20281,10 +21013,16 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 			Body:    bytes.NewReader(queryBytes),
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return tokens, nil
+			}
 			return nil, err
 		}
 		res := resp.Inspect().Response
 		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return tokens, nil
+		}
 
 		var searchResp struct {
 			Hits struct {
@@ -20293,6 +21031,9 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 		}
 		if err := json.NewDecoder(res.Body).Decode(&searchResp); err == nil {
 			for _, hit := range searchResp.Hits.Hits {
+				if hit.Source.OrgId != orgId {
+					continue
+				}
 				if hit.Source.ExpiresAt.IsZero() || time.Now().Before(hit.Source.ExpiresAt) {
 					tokens = append(tokens, hit.Source)
 				}
@@ -20316,7 +21057,38 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 		}
 	}
 
-	return tokens, nil
+	if len(tokens) == 0 && project.CacheDb {
+		orgIndexKey := fmt.Sprintf("oauth_tokens_org_%s", orgId)
+		if raw, cErr := GetCache(ctx, orgIndexKey); cErr == nil && raw != nil {
+			var tokenIds []string
+			switch v := raw.(type) {
+			case []byte:
+				_ = json.Unmarshal(v, &tokenIds)
+			case string:
+				_ = json.Unmarshal([]byte(v), &tokenIds)
+			}
+			for _, tid := range tokenIds {
+				if tok, tErr := GetOAuthToken(ctx, tid); tErr == nil && tok != nil && len(tok.AccessToken) > 0 {
+					tokens = append(tokens, *tok)
+				}
+			}
+		}
+	}
+
+	activeTokens := tokens[:0]
+	for _, token := range tokens {
+		if token.RotationKey != "" {
+			rotation, err := getOAuthTokenRotation(ctx, token.RotationKey)
+			if err != nil {
+				return nil, err
+			}
+			if rotation == nil || rotation.Revoked || rotation.Token.AccessToken != token.AccessToken {
+				continue
+			}
+		}
+		activeTokens = append(activeTokens, token)
+	}
+	return activeTokens, nil
 }
 
 // GetOAuthTokensByUser retrieves all active OAuth tokens issued to a specific user.
@@ -20331,8 +21103,8 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 	if project.DbType == "opensearch" {
 		query := map[string]interface{}{
 			"query": map[string]interface{}{
-				"term": map[string]interface{}{
-					"user_id.keyword": userId,
+				"match": map[string]interface{}{
+					"user_id": userId,
 				},
 			},
 			"size": 100,
@@ -20343,10 +21115,16 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 			Body:    bytes.NewReader(queryBytes),
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return tokens, nil
+			}
 			return nil, err
 		}
 		res := resp.Inspect().Response
 		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return tokens, nil
+		}
 
 		var searchResp struct {
 			Hits struct {
@@ -20355,6 +21133,9 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 		}
 		if err := json.NewDecoder(res.Body).Decode(&searchResp); err == nil {
 			for _, hit := range searchResp.Hits.Hits {
+				if hit.Source.UserId != userId {
+					continue
+				}
 				if hit.Source.ExpiresAt.IsZero() || time.Now().Before(hit.Source.ExpiresAt) {
 					tokens = append(tokens, hit.Source)
 				}
@@ -20378,7 +21159,38 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 		}
 	}
 
-	return tokens, nil
+	if len(tokens) == 0 && project.CacheDb {
+		userIndexKey := fmt.Sprintf("oauth_tokens_user_%s", userId)
+		if raw, cErr := GetCache(ctx, userIndexKey); cErr == nil && raw != nil {
+			var tokenIds []string
+			switch v := raw.(type) {
+			case []byte:
+				_ = json.Unmarshal(v, &tokenIds)
+			case string:
+				_ = json.Unmarshal([]byte(v), &tokenIds)
+			}
+			for _, tid := range tokenIds {
+				if tok, tErr := GetOAuthToken(ctx, tid); tErr == nil && tok != nil && len(tok.AccessToken) > 0 {
+					tokens = append(tokens, *tok)
+				}
+			}
+		}
+	}
+
+	activeTokens := tokens[:0]
+	for _, token := range tokens {
+		if token.RotationKey != "" {
+			rotation, err := getOAuthTokenRotation(ctx, token.RotationKey)
+			if err != nil {
+				return nil, err
+			}
+			if rotation == nil || rotation.Revoked || rotation.Token.AccessToken != token.AccessToken {
+				continue
+			}
+		}
+		activeTokens = append(activeTokens, token)
+	}
+	return activeTokens, nil
 }
 
 // SetOAuthAuthCode persists a temporary authorization code in OpenSearch (onprem) or Datastore (cloud).
