@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"io/ioutil"
 	"log"
@@ -39,20 +38,7 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 
 	uuid "github.com/satori/go.uuid"
-	"golang.org/x/sync/singleflight"
-	"google.golang.org/api/secretmanager/v1"
 )
-
-const (
-	quotaBypassRefreshInterval  = 15 * time.Minute
-	quotaBypassFallbackLifetime = 30 * time.Minute
-	quotaBypassReadTimeout      = 3 * time.Second
-)
-
-// Keep this separate from organization caches: only a validated secret can populate it.
-var quotaBypassSecrets = quotaBypassSecretCache{}
-
-var quotaBypassRefreshes singleflight.Group
 
 func executeCloudAction(action CloudSyncJob, apikey string) error {
 	data, err := json.Marshal(action)
@@ -893,208 +879,16 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 	return workflow.ID, nil
 }
 
-func readQuotaBypassSecret(ctx context.Context, resource string) (snapshot quotaBypassSnapshot, err error) {
-	// This optional integration must not crash execution admission if its client panics.
-	defer func() {
-		if recover() != nil {
-			snapshot, err = quotaBypassSnapshot{}, errors.New("quota bypass secret lookup failed unexpectedly")
-		}
-	}()
-	parts := strings.Split(resource, "/")
-	if len(parts) != 4 || parts[0] != "projects" || parts[1] == "" || parts[2] != "secrets" || parts[3] == "" {
-		return quotaBypassSnapshot{}, errors.New("SHUFFLE_QUOTA_BYPASS_SECRET must be projects/PROJECT/secrets/SECRET without a version")
+func executionQuotaBypassed(orgID string) bool {
+	if project.Environment != "cloud" || orgID == "" {
+		return false
 	}
-	ctx, cancel := context.WithTimeout(ctx, quotaBypassReadTimeout)
-	defer cancel()
-	quotaBypassSecrets.Lock()
-	client := quotaBypassSecrets.client
-	quotaBypassSecrets.Unlock()
-	if client == nil {
-		client, err = secretmanager.NewService(ctx)
-		if err != nil {
-			return quotaBypassSnapshot{}, err
-		}
-		quotaBypassSecrets.Lock()
-		if quotaBypassSecrets.client == nil {
-			quotaBypassSecrets.client = client
-		}
-		client = quotaBypassSecrets.client
-		quotaBypassSecrets.Unlock()
-	}
-
-	response, err := client.Projects.Secrets.Versions.Access(resource + "/versions/latest").Context(ctx).Do()
-	if err != nil {
-		return quotaBypassSnapshot{}, err
-	}
-	if response == nil || response.Payload == nil {
-		return quotaBypassSnapshot{}, errors.New("quota bypass secret has no payload")
-	}
-	data, err := base64.StdEncoding.DecodeString(response.Payload.Data)
-	if err != nil {
-		return quotaBypassSnapshot{}, errors.New("quota bypass secret has invalid base64 data")
-	}
-	if int64(crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli))) != response.Payload.DataCrc32c {
-		return quotaBypassSnapshot{}, errors.New("quota bypass secret checksum mismatch")
-	}
-	var config quotaBypassConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return quotaBypassSnapshot{}, errors.New("quota bypass secret must contain valid JSON")
-	}
-	if config.CustomerParentOrgIDs == nil {
-		return quotaBypassSnapshot{}, errors.New("quota bypass secret must contain customer_parent_org_ids as an array")
-	}
-	ids := make(map[string]struct{}, len(config.CustomerParentOrgIDs))
-	for _, id := range config.CustomerParentOrgIDs {
-		parsed, err := uuid.FromString(id)
-		if err != nil || parsed.String() != id || parsed == uuid.Nil {
-			return quotaBypassSnapshot{}, errors.New("quota bypass secret contains an invalid organization ID")
-		}
-		ids[id] = struct{}{}
-	}
-	version, err := strconv.ParseUint(response.Name[strings.LastIndex(response.Name, "/")+1:], 10, 64)
-	if err != nil || version == 0 {
-		return quotaBypassSnapshot{}, errors.New("quota bypass secret has an invalid version")
-	}
-	return quotaBypassSnapshot{orgIDs: ids, version: version, fetchedAt: time.Now()}, nil
-}
-
-func loadQuotaBypassOrgIDs(ctx context.Context, resource string) (map[string]struct{}, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	quotaBypassSecrets.Lock()
-	cached := quotaBypassSecrets.snapshots[resource]
-	quotaBypassSecrets.Unlock()
-	if time.Now().Before(cached.nextRefresh) && !cached.refreshing {
-		return cachedQuotaBypassOrgIDs(cached)
-	}
-	if cached.refreshing {
-		if ids, err := cachedQuotaBypassOrgIDs(cached); err == nil {
-			return ids, nil
+	for _, configuredID := range strings.Split(os.Getenv("SHUFFLE_QUOTA_BYPASS_ORGS"), ",") {
+		if strings.TrimSpace(configuredID) == orgID {
+			return true
 		}
 	}
-	result := quotaBypassRefreshes.DoChan(resource, func() (interface{}, error) {
-		quotaBypassSecrets.Lock()
-		cached := quotaBypassSecrets.snapshots[resource]
-		if time.Now().Before(cached.nextRefresh) && !cached.refreshing {
-			quotaBypassSecrets.Unlock()
-			return cachedQuotaBypassOrgIDs(cached)
-		}
-		cached.refreshing = true
-		cached.nextRefresh = time.Now().Add(quotaBypassRefreshInterval)
-		if quotaBypassSecrets.snapshots == nil {
-			quotaBypassSecrets.snapshots = make(map[string]quotaBypassSnapshot)
-		}
-		quotaBypassSecrets.snapshots[resource] = cached
-		quotaBypassSecrets.Unlock()
-		// One cancelled request must not cancel a refresh shared by other executions.
-		snapshot, err := readQuotaBypassSecret(context.Background(), resource)
-		if err == nil && snapshot.version < cached.version {
-			err = errors.New("quota bypass secret returned an older version")
-		}
-		if err == nil {
-			cached = snapshot
-		} else {
-			cached.refreshErr = err
-			if cached.orgIDs == nil {
-				log.Printf("[WARNING] Quota bypass refresh failed without a valid cached list: %s", err)
-			} else {
-				log.Printf("[WARNING] Quota bypass refresh failed; last valid version %d (age %s): %s", cached.version, time.Since(cached.fetchedAt).Round(time.Second), err)
-			}
-		}
-		// Failed refreshes also back off; execution traffic must not retry the API.
-		cached.nextRefresh = time.Now().Add(quotaBypassRefreshInterval)
-		cached.refreshing = false
-		quotaBypassSecrets.Lock()
-		quotaBypassSecrets.snapshots[resource] = cached
-		quotaBypassSecrets.Unlock()
-		return cachedQuotaBypassOrgIDs(cached)
-	})
-	if ids, err := cachedQuotaBypassOrgIDs(cached); err == nil {
-		return ids, nil
-	}
-	timer := time.NewTimer(quotaBypassReadTimeout)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-timer.C:
-		return nil, errors.New("quota bypass lookup timed out")
-	case refreshed := <-result:
-		if refreshed.Err != nil {
-			return nil, refreshed.Err
-		}
-		ids, ok := refreshed.Val.(map[string]struct{})
-		if !ok {
-			return nil, errors.New("quota bypass refresh returned invalid data")
-		}
-		return ids, nil
-	}
-}
-
-func cachedQuotaBypassOrgIDs(snapshot quotaBypassSnapshot) (map[string]struct{}, error) {
-	if snapshot.orgIDs != nil && time.Since(snapshot.fetchedAt) <= quotaBypassFallbackLifetime {
-		return snapshot.orgIDs, nil
-	}
-	if snapshot.refreshErr != nil {
-		return nil, snapshot.refreshErr
-	}
-	return nil, errors.New("quota bypass cache expired")
-}
-
-func executionQuotaBypassed(ctx context.Context, org *Org) (bool, error) {
-	resource := strings.TrimSpace(os.Getenv("SHUFFLE_QUOTA_BYPASS_SECRET"))
-	if project.Environment != "cloud" || resource == "" {
-		return false, nil
-	}
-	ids, err := loadQuotaBypassOrgIDs(ctx, resource)
-	if err != nil || len(ids) == 0 {
-		return false, err
-	}
-	if org == nil || org.Id == "" {
-		return false, errors.New("quota bypass requires an existing organization")
-	}
-	ctx, cancel := context.WithTimeout(ctx, quotaBypassReadTimeout)
-	defer cancel()
-
-	// Traverse only persisted parent/manager links, never names, users or child lists.
-	pending := []string{org.Id}
-	visited := make(map[string]struct{})
-	var lookupErr error
-	for len(pending) > 0 {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		id := pending[0]
-		pending = pending[1:]
-		if _, seen := visited[id]; seen || id == "" {
-			continue
-		}
-		if len(visited) >= 64 {
-			return false, errors.New("quota bypass organization ancestry exceeds 64 organizations")
-		}
-		visited[id] = struct{}{}
-		current := org
-		if id != org.Id {
-			current, err = GetOrg(ctx, id)
-			if err != nil {
-				lookupErr = fmt.Errorf("failed reading quota bypass parent organization %s: %w", id, err)
-				continue
-			}
-		}
-		if current == nil || current.Id != id {
-			lookupErr = errors.New("quota bypass organization ID mismatch")
-			continue
-		}
-		if _, listed := ids[current.Id]; listed {
-			return true, nil
-		}
-		pending = append(pending, current.CreatorOrg)
-		for _, manager := range current.ManagerOrgs {
-			pending = append(pending, manager.Id)
-		}
-	}
-	return false, lookupErr
+	return false
 }
 
 // Returns an error if the users' org is over quota
@@ -1117,8 +911,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	quotaBypassed := false
 	checkQuotaBypass := func() bool {
 		if !quotaBypassed {
-			// Optional lookup failures retain normal quotas; refresh errors are logged once per interval.
-			quotaBypassed, _ = executionQuotaBypassed(ctx, org)
+			quotaBypassed = executionQuotaBypassed(org.Id)
 		}
 		return quotaBypassed
 	}
