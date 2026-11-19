@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/shuffle/opensearch-go/v4/opensearchapi"
+	"google.golang.org/api/secretmanager/v1"
 )
 
 type AppContext struct {
@@ -1231,6 +1232,25 @@ type OnpremLicense struct {
 	Branding           bool         `json:"branding" datastore:"branding"`
 	AppRunsGrouping    bool         `json:"app_runs_grouping" datastore:"app_runs_grouping"`
 	StartDate          string       `json:"start_date" datastore:"start_date"`
+}
+
+type quotaBypassConfig struct {
+	CustomerParentOrgIDs []string `json:"customer_parent_org_ids"`
+}
+
+type quotaBypassSnapshot struct {
+	orgIDs      map[string]struct{}
+	version     uint64
+	fetchedAt   time.Time
+	nextRefresh time.Time
+	refreshErr  error
+	refreshing  bool
+}
+
+type quotaBypassSecretCache struct {
+	sync.Mutex
+	client    *secretmanager.Service
+	snapshots map[string]quotaBypassSnapshot
 }
 
 type Org struct {
