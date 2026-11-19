@@ -101,12 +101,26 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					}
 				}
 
-				if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" { 
+				if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" {
 					//if workflowExecution.Status == "FINISHED" {
 					//	log.Printf("[DEBUG][%s] Fixexecution: Agent execution is finished, skipping agent result %s", workflowExecution.ExecutionId, innerresult.Action.ID)
 					//}
 
 					break
+				}
+
+				// An offloaded agent result is only a pointer to its file. Parsed as-is it has 0 decisions, so the
+				// "stuck" recovery below would overwrite the real result with {"status":"RUNNING"} and the next
+				// tool result could no longer find its decision.
+				if strings.Contains(innerresult.Result, "Result too large to handle") {
+					fullVal, fileErr := getExecutionFileValue(ctx, workflowExecution, innerresult)
+					if fileErr != nil || len(fullVal) == 0 {
+						log.Printf("[WARNING][%s] Fixexecution: skipping agent %s, offloaded result could not be loaded: %v", workflowExecution.ExecutionId, innerresult.Action.ID, fileErr)
+						continue
+					}
+
+					innerresult.Result = cleanAgentResultString(fullVal)
+					workflowExecution.Results[resultIndex].Result = innerresult.Result
 				}
 
 				// Starting autocorrections
