@@ -908,14 +908,8 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		return org, nil
 	}
 
-	quotaBypassed := false
-	checkQuotaBypass := func() bool {
-		if !quotaBypassed {
-			quotaBypassed = executionQuotaBypassed(org.Id)
-		}
-		return quotaBypassed
-	}
-	if org.Billing.AppRunsHardLimit > 0 && orgStats.MonthlyAppExecutions > org.Billing.AppRunsHardLimit && !checkQuotaBypass() {
+	quotaBypassed := executionQuotaBypassed(org.Id)
+	if !quotaBypassed && org.Billing.AppRunsHardLimit > 0 && orgStats.MonthlyAppExecutions > org.Billing.AppRunsHardLimit {
 		//log.Printf("[WARNING] Hard limit reached for org %s (%s) during exec start", org.Name, org.Id)
 		return org, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the app runs hard limit (%d/%d). Your Parent organization can control this.", org.Name, org.Id, orgStats.MonthlyAppExecutions, org.Billing.AppRunsHardLimit))
 	}
@@ -954,7 +948,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	}
 
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
-	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == false && validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit && !checkQuotaBypass() {
+	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == false && validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
 	}
 	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == true && validationOrg.LeadInfo.Customer {
@@ -975,7 +969,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 				annualAppRunsLimit *= 2
 			}
 
-			if annualAppRuns > annualAppRunsLimit && !checkQuotaBypass() {
+			if annualAppRuns > annualAppRunsLimit {
 				return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the annual app runs limit (%d/%d)", validationOrg.Name, validationOrg.Id, annualAppRuns, annualAppRunsLimit))
 			}
 
@@ -990,13 +984,13 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 	if validationOrg.LeadInfo.Customer && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
 		extendedLimit := validationOrg.SyncFeatures.AppExecutions.Limit * 10
-		if totalAppExecutions >= extendedLimit && !checkQuotaBypass() {
+		if totalAppExecutions >= extendedLimit {
 			return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, extendedLimit))
 		}
 		return validationOrg, nil
 	}
 
-	if totalAppExecutions >= validationOrg.SyncFeatures.AppExecutions.Limit && !checkQuotaBypass() {
+	if totalAppExecutions >= validationOrg.SyncFeatures.AppExecutions.Limit {
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit))
 	}
 
