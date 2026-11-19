@@ -58,6 +58,8 @@ var skipAgentWait = os.Getenv("SHUFFLE_SKIP_AGENT_WAIT")
 var agentRunLocation = os.Getenv("SHUFFLE_AGENT_RUN_LOCATION")
 var assistantModel = model
 
+var aiTransport *http.Transport
+
 var decisionParameterName = "shuffle_agent_decision_id"
 var aiMaxTokens = 16000 // Controllable with AI_MAX_TOKENS env
 var aiReasoningEffort = ""
@@ -110,6 +112,9 @@ func init() {
 	} else if reasoningEffort == "minimal" || reasoningEffort == "off" || reasoningEffort == "none" {
 		aiReasoningEffort = "off"
 	}
+
+	aiTransport = http.DefaultTransport.(*http.Transport).Clone()
+	aiTransport.ResponseHeaderTimeout = 90 * time.Second
 
 	// Forcing it to be local for ALL requests going forward
 	agentRunLocation = "local"
@@ -9916,7 +9921,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			// Increment for this iteration
 			newLoopCount := trustedCount + 1
 			_ = SetCache(ctx, loopCacheKey, []byte(strconv.Itoa(newLoopCount)), 60)
-			maxLoops := 60
+			maxLoops := 100
 			if envVal := os.Getenv("AI_AGENT_MAX_STEPS"); envVal != "" {
 				if parsed, err := strconv.Atoi(envVal); err == nil {
 					maxLoops = parsed
@@ -9924,7 +9929,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 
 			if maxLoops <= 0 {
-				maxLoops = 60
+				maxLoops = 100
 			}
 
 			if newLoopCount >= maxLoops {
@@ -12636,6 +12641,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	// Fixes some model & url errors
 	config.EmptyMessagesLimit = 100000
+
+	config.HTTPClient = &http.Client{
+		Transport: aiTransport,
+	}
 	openaiClient := openai.NewClientWithConfig(config)
 
 	sysMsg := ""
@@ -12696,7 +12705,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	outputTokens := 0
 	cachedTokens := 0
 	var lastError error
-	choicesMap := make(map[int]*openai.ChatCompletionChoice)
 	var fullResp openai.ChatCompletionResponse
 	var reasoningOutput string
 	for {
@@ -12773,6 +12781,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 				return "", errors.New(fmt.Sprintf("Request from org %s with model '%s' exceeds the maximum number of tokens. %s", org, currentModel, err))
 			}
+			if strings.Contains(err.Error(), "timeout awaiting response headers") {
+				aiTransport.CloseIdleConnections()
+			}
 
 			// Some AI Providers might return multi-line error bodies. Flatten them so the whole error stays in ONE log entry instead of being split per line.
 			lastError = errors.New(strings.Join(strings.Fields(err.Error()), " "))
@@ -12788,6 +12799,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		// 2. Iterate over the stream
 		iterations := 0
 		var streamErr error
+		contentOutput = ""
+		fullResp = openai.ChatCompletionResponse{}
+		choicesMap := make(map[int]*openai.ChatCompletionChoice)
 		for {
 			iterations += 1
 
