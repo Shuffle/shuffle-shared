@@ -11,6 +11,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -2144,10 +2145,10 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		go RedirectUserRequest(resp, request)
-		return
-
-		// Just to ensure org propagation across regions occurs in time
+		// Just to ensure org propagation across regions occurs in time.
+		// The background copy must not touch resp: it's released once this handler returns,
+		// and writing to it then crashed the whole backend.
+		go RedirectUserRequest(httptest.NewRecorder(), request.Clone(context.Background()))
 	}
 
 	resp.WriteHeader(200)
@@ -2660,6 +2661,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		return body, debugUrl, appName, []string{}, "", err
 	}
 
+	if builderRequest, ok := getWorkflowBuilderRequest(decision); ok {
+		return runWorkflowBuilderDecisionInProcess(execution, decision, builderRequest)
+	}
+
 	skipSingul := executionMode == "direct" || os.Getenv("AGENT_SKIP_SINGUL") != "false"
 	if skipSingul {
 		if debug { 
@@ -3009,6 +3014,14 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			log.Printf("[DEBUG][%s] Decision %s already has status '%s'. Returning as it's already started..", execution.ExecutionId, decision.RunDetails.Id, foundDecision.RunDetails.Status)
 			return
 		}
+	}
+
+	// Steps the agent planned before the user aborted the run must not run anymore
+	latestExec, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId)
+	runAborted := fetchErr == nil && latestExec != nil && latestExec.Status == "ABORTED"
+	if runAborted {
+		log.Printf("[INFO][%s] Agent run was aborted. Skipping decision %s (%s).", execution.ExecutionId, decision.RunDetails.Id, decision.Action)
+		return
 	}
 
 	// Set it to this at the start

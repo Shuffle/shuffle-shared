@@ -22,8 +22,8 @@ import (
 func IsShuffleApp(app WorkflowApp) bool {
 	parsedAppname := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
 
-	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors", "shuffle_apps", "shuffle_workflows_builder", "shuffle_incidents", "shuffle_vulnerabilities"}
-	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75", "7db43ccd25261967b095cfbd467a75cc", "de4ef2287bd41b9d5563e39989643ee6", "48793430d21468f9e371ace402efcd8e"} 
+	skipAuthAppnames := []string{"openai", "shuffle_openapi", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors", "shuffle_apps", "shuffle_workflows_builder", "shuffle_incidents", "shuffle_vulnerabilities"}
+	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "fc92c1d806df0c96f0c152a7b43b2878", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75", "7db43ccd25261967b095cfbd467a75cc", "de4ef2287bd41b9d5563e39989643ee6", "48793430d21468f9e371ace402efcd8e", "a92601b227d534edb614986f5beedf52", "39bba3e99693fc1d39620e778c477e8c"} 
 
 	isShuffleApp := false
 	if project.Environment == "cloud" && len(app.ID) > 0 {
@@ -733,100 +733,119 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				log.Printf("[INFO] Configured Singul 'Assign & Escalate' workflow %s for org %s in %s", workflow.ID, user.ActiveOrg.Id, categoryCheck)
 			}
 		}
-	} else if actionType == "incident_routing" || actionType == "incident_routing_rules" || strings.HasSuffix(actionType, "_routing") || strings.HasSuffix(actionType, "_routing_rules") {
+	} else if actionType == "incident_routing" || actionType == "incident_routing_rules" || actionType == "automated_routing" || actionType == "automated_routing_rules" || strings.HasSuffix(actionType, "_routing") || strings.HasSuffix(actionType, "_routing_rules") {
 		// Dynamic Routing Rules evaluate declarative boolean condition trees on incoming entities
-		// and execute polymorphic actions (suggest_move, set_severity, add_label, run_agent, etc.).
-		categoryCheck := "shuffle-security_incidents"
-		if strings.HasPrefix(categoryAction.Category, "shuffle-security_") {
-			categoryCheck = categoryAction.Category
-		} else if strings.Contains(strings.ToLower(categoryAction.Label), "vulnerabilit") || strings.Contains(strings.ToLower(categoryAction.Category), "vuln") {
-			categoryCheck = "shuffle-security_vulns"
+		// across all datastore categories using $exec.shuffle_datastore.category and execute
+		// polymorphic actions (suggest_move, set_severity, add_label, run_agent, etc.).
+		resolvedCategory := resolveRoutingDatastoreCategory(actionType, categoryAction)
+		routingCategories := []string{
+			"shuffle-security_incidents",
+			"shuffle-security_vulns",
+			"shuffle-security_assets",
+			"shuffle-security_infrastructure",
+			"shuffle-security_packages",
+			"shuffle-security_software",
+			"shuffle-security_users",
 		}
-
-		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
-		if err != nil {
-			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
-				categoryConfig = &DatastoreCategoryUpdate{
-					OrgId:       user.ActiveOrg.Id,
-					Category:    categoryCheck,
-					Automations: []DatastoreAutomation{},
-					Settings:    DatastoreCategorySettings{},
+		if resolvedCategory != "" {
+			alreadyIncluded := false
+			for _, existingCat := range routingCategories {
+				if existingCat == resolvedCategory {
+					alreadyIncluded = true
+					break
 				}
-			} else {
-				return err
+			}
+			if !alreadyIncluded {
+				routingCategories = append(routingCategories, resolvedCategory)
 			}
 		}
 
-		datastoreCategoryConfigEdited := false
-
-		foundRunWorkflow := DatastoreAutomation{
-			Name:        "Run workflow",
-			Description: "Runs one or more workflows with the updated value as runtime argument",
-			Options: []DatastoreAutomationOption{
-				DatastoreAutomationOption{
-					Key:   "workflow_id",
-					Value: workflow.ID,
-				},
-			},
-			Icon:    "",
-			Enabled: true,
-		}
-
-		automationFound := false
-		if len(categoryConfig.Automations) > 0 {
-			for automationIndex, automation := range categoryConfig.Automations {
-				if strings.ToLower(automation.Name) != "run workflow" {
-					continue
+		for _, categoryCheck := range routingCategories {
+			categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
+			if err != nil {
+				if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
+					categoryConfig = &DatastoreCategoryUpdate{
+						OrgId:       user.ActiveOrg.Id,
+						Category:    categoryCheck,
+						Automations: []DatastoreAutomation{},
+						Settings:    DatastoreCategorySettings{},
+					}
+				} else {
+					return err
 				}
+			}
 
-				automationFound = true
+			datastoreCategoryConfigEdited := false
 
-				workflowIdFound := false
-				for optionIndex, option := range automation.Options {
-					if option.Key != "workflow_id" {
+			foundRunWorkflow := DatastoreAutomation{
+				Name:        "Run workflow",
+				Description: "Runs one or more workflows with the updated value as runtime argument",
+				Options: []DatastoreAutomationOption{
+					DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					},
+				},
+				Icon:    "",
+				Enabled: true,
+			}
+
+			automationFound := false
+			if len(categoryConfig.Automations) > 0 {
+				for automationIndex, automation := range categoryConfig.Automations {
+					if strings.ToLower(automation.Name) != "run workflow" {
 						continue
 					}
 
-					if debug {
-						log.Printf("[DEBUG] VALUE: %#v", option.Value)
+					automationFound = true
+
+					workflowIdFound := false
+					for optionIndex, option := range automation.Options {
+						if option.Key != "workflow_id" {
+							continue
+						}
+
+						if debug {
+							log.Printf("[DEBUG] VALUE: %#v", option.Value)
+						}
+
+						workflowIdFound = true
+
+						if !strings.Contains(option.Value, workflow.ID) {
+							categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+						}
+
+						break
 					}
 
-					workflowIdFound = true
+					if !workflowIdFound {
+						log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+						automationOption := DatastoreAutomationOption{
+							Key:   "workflow_id",
+							Value: workflow.ID,
+						}
 
-					if !strings.Contains(option.Value, workflow.ID) {
-						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+						categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 					}
 
+					datastoreCategoryConfigEdited = true
+					categoryConfig.Automations[automationIndex].Enabled = true
 					break
 				}
-
-				if !workflowIdFound {
-					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
-					automationOption := DatastoreAutomationOption{
-						Key:   "workflow_id",
-						Value: workflow.ID,
-					}
-
-					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
-				}
-
-				datastoreCategoryConfigEdited = true
-				categoryConfig.Automations[automationIndex].Enabled = true
-				break
 			}
-		}
 
-		if !automationFound {
-			categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
-			datastoreCategoryConfigEdited = true
-		}
+			if !automationFound {
+				categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
+				datastoreCategoryConfigEdited = true
+			}
 
-		if datastoreCategoryConfigEdited {
-			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
-			if err != nil {
-				log.Printf("[ERROR] Failed to update category config for dynamic routing rules enablement: %s", err)
-			} else {
-				log.Printf("[INFO] Configured Singul dynamic routing rules workflow %s for org %s in %s", workflow.ID, user.ActiveOrg.Id, categoryCheck)
+			if datastoreCategoryConfigEdited {
+				err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+				if err != nil {
+					log.Printf("[ERROR] Failed to update category config for dynamic routing rules enablement: %s", err)
+				} else {
+					log.Printf("[INFO] Configured Singul dynamic routing rules workflow %s for org %s in %s", workflow.ID, user.ActiveOrg.Id, categoryCheck)
+				}
 			}
 		}
 	} else if actionType == "notification" || actionType == "notifications" || actionType == "forward_notification" || actionType == "forward_notifications" {
@@ -851,6 +870,51 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 }
 
+func resolveRoutingDatastoreCategory(actionType string, categoryAction CategoryAction) string {
+	baselineCategories := map[string]string{
+		"incidents":      "shuffle-security_incidents",
+		"incident":       "shuffle-security_incidents",
+		"vulns":          "shuffle-security_vulns",
+		"vuln":           "shuffle-security_vulns",
+		"vulnerabilities": "shuffle-security_vulns",
+		"vulnerability":  "shuffle-security_vulns",
+		"infrastructure": "shuffle-security_infrastructure",
+		"assets":         "shuffle-security_assets",
+		"asset":          "shuffle-security_assets",
+		"packages":       "shuffle-security_packages",
+		"package":        "shuffle-security_packages",
+		"software":       "shuffle-security_software",
+		"users":          "shuffle-security_users",
+		"user":           "shuffle-security_users",
+	}
+
+	rawCat := strings.TrimSpace(categoryAction.Category)
+	if strings.HasPrefix(rawCat, "shuffle-security_") {
+		return rawCat
+	}
+	lowerCat := strings.ToLower(rawCat)
+	if mapped, ok := baselineCategories[lowerCat]; ok {
+		return mapped
+	}
+
+	lowerLabel := strings.ToLower(categoryAction.Label)
+	lowerAction := strings.ToLower(actionType)
+	for key, mapped := range baselineCategories {
+		if key == "incident" || key == "incidents" {
+			continue
+		}
+		if strings.Contains(lowerCat, key) || strings.Contains(lowerLabel, key) || strings.Contains(lowerAction, key) {
+			return mapped
+		}
+	}
+
+	if rawCat != "" && !strings.Contains(rawCat, " ") {
+		return rawCat
+	}
+
+	return "shuffle-security_incidents"
+}
+
 func HandleSingulWorkflowDisablement(ctx context.Context, workflowId string, orgId string, categoryAction CategoryAction) error {
 	if len(orgId) == 0 || len(workflowId) == 0 {
 		return nil
@@ -858,10 +922,26 @@ func HandleSingulWorkflowDisablement(ctx context.Context, workflowId string, org
 
 	categoriesToCheck := []string{
 		"shuffle-security_incidents",
+		"shuffle-security_vulns",
+		"shuffle-security_infrastructure",
+		"shuffle-security_assets",
 		"shuffle-security_packages",
 		"shuffle-security_software",
-		"shuffle-security_vulns",
+		"shuffle-security_users",
 		"shuffle-security_routing",
+	}
+	if strings.TrimSpace(categoryAction.Category) != "" {
+		resolved := resolveRoutingDatastoreCategory("", categoryAction)
+		found := false
+		for _, c := range categoriesToCheck {
+			if c == resolved {
+				found = true
+				break
+			}
+		}
+		if !found {
+			categoriesToCheck = append(categoriesToCheck, resolved)
+		}
 	}
 
 	for _, categoryCheck := range categoriesToCheck {
@@ -2641,47 +2721,101 @@ $exec`,
 
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
-	} else if parsedActiontype == "incident_routing" || parsedActiontype == "incident_routing_rules" || strings.HasSuffix(parsedActiontype, "_routing") || strings.HasSuffix(parsedActiontype, "_routing_rules") {
+	} else if parsedActiontype == "incident_routing" || parsedActiontype == "incident_routing_rules" || parsedActiontype == "automated_routing" || parsedActiontype == "automated_routing_rules" || strings.HasSuffix(parsedActiontype, "_routing") || strings.HasSuffix(parsedActiontype, "_routing_rules") {
 		getRoutingRulesId := startActionId
-		evaluateAndApplyId := uuid.NewV4().String()
+		validateRulesId := uuid.NewV4().String()
+		executeRulesId := uuid.NewV4().String()
+		updateStatsId := uuid.NewV4().String()
+		setCrossTenantCacheId := uuid.NewV4().String()
 
-		isVuln := strings.Contains(parsedActiontype, "vuln") || strings.Contains(strings.ToLower(categoryAction.Category), "vuln") || strings.Contains(strings.ToLower(categoryAction.Label), "vuln")
-		targetCategory := "shuffle-security_incidents"
-		workflowDescription := "Evaluates incidents against routing rules to suggest moves, assignees, severities, or automate containment."
-		workflowTags := []string{"routing", "incident", "automatic", "incident routing", "incident routing rules", "incident_routing_rules", "incident_routing"}
-		triggerLabel := "Incident Routing Rules"
+		targetCategory := resolveRoutingDatastoreCategory(parsedActiontype, categoryAction)
+		workflowDescription := "Evaluates items against routing rules based on $exec.shuffle_datastore.category to suggest moves, assignees, severities, or automate containment."
+		workflowTags := []string{"routing", "incident", "vulnerability", "asset", "automatic", "automated routing", "automated routing rules", "automated_routing_rules", "incident routing", "incident routing rules", "incident_routing_rules", "incident_routing"}
 
-		if isVuln {
-			targetCategory = "shuffle-security_vulns"
+		if targetCategory == "shuffle-security_vulns" {
 			workflowDescription = "Evaluates vulnerabilities against routing rules to suggest priorities, severities, or automate remediation."
-			workflowTags = []string{"routing", "vulnerability", "automatic", "vulnerabilities routing", "vulnerabilities routing rules", "vulnerability_routing_rules", "vulnerability_routing"}
-			triggerLabel = "Vulnerabilities Routing Rules"
-		} else if strings.HasPrefix(categoryAction.Category, "shuffle-security_") {
-			targetCategory = categoryAction.Category
+			workflowTags = []string{"routing", "vulnerability", "automatic", "automated routing", "automated routing rules", "automated_routing_rules", "vulnerabilities routing", "vulnerabilities routing rules", "vulnerability_routing_rules", "vulnerability_routing"}
+		}
+
+		openapiAuthId := ""
+		allAuths, authErr := GetAllWorkflowAppAuth(ctx, orgId)
+		if authErr == nil {
+			for _, auth := range allAuths {
+				if !auth.Defined {
+					continue
+				}
+				normalizedAppName := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(auth.App.Name), " ", "_"))
+				if auth.App.ID == "fc92c1d806df0c96f0c152a7b43b2878" || normalizedAppName == "shuffle_openapi" {
+					openapiAuthId = auth.Id
+					if auth.Active {
+						break
+					}
+				}
+			}
+			if openapiAuthId == "" {
+				for _, auth := range allAuths {
+					normalizedAppName := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(auth.App.Name), " ", "_"))
+					if auth.App.ID == "fc92c1d806df0c96f0c152a7b43b2878" || normalizedAppName == "shuffle_openapi" {
+						openapiAuthId = auth.Id
+						break
+					}
+				}
+			}
+		}
+
+		crossTenantParams := []WorkflowAppActionParameter{
+			WorkflowAppActionParameter{
+				Name:      "headers",
+				Multiline: true,
+				Required:  false,
+				Value:     "Org-Id: $execute_rule_automation_for_found_rules.message.target_org_id",
+			},
+			WorkflowAppActionParameter{
+				Name:      "body",
+				Multiline: true,
+				Required:  true,
+				Value:     `{"key": "$execute_rule_automation_for_found_rules.message.key", "category": "$execute_rule_automation_for_found_rules.message.category", "value": $execute_rule_automation_for_found_rules.message.updated_value}`,
+			},
+			WorkflowAppActionParameter{
+				Name:     "queries",
+				Value:    "",
+				Required: false,
+			},
+			WorkflowAppActionParameter{
+				Name:     "org_id",
+				Value:    "",
+				Required: false,
+			},
+			WorkflowAppActionParameter{
+				Name:     "ssl_verify",
+				Value:    "",
+				Required: false,
+			},
+			WorkflowAppActionParameter{
+				Name:     "to_file",
+				Value:    "",
+				Required: false,
+			},
+		}
+		if project.Environment == "cloud" {
+			crossTenantParams = append([]WorkflowAppActionParameter{
+				WorkflowAppActionParameter{
+					Name:          "url",
+					Value:         "$execute_rule_automation_for_found_rules.message.target_region_url",
+					Required:      true,
+					Configuration: true,
+				},
+			}, crossTenantParams...)
 		}
 
 		defaultWorkflow := Workflow{
-			Name:        actionType,
+			Name:        "Automated Routing Rules",
 			Description: workflowDescription,
 			OrgId:       orgId,
 			Start:       getRoutingRulesId,
 			UsecaseIds:  []string{},
 			Tags:        workflowTags,
-			Triggers: []Trigger{
-				Trigger{
-					ID:          startTriggerId,
-					Name:        "Realtime Trigger",
-					TriggerType: "WEBHOOK",
-					Label:       triggerLabel,
-					Environment: triggerEnv,
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "execution_argument",
-							Value: "Automatically configured by Shuffle Security",
-						},
-					},
-				},
-			},
+			Triggers:    []Trigger{},
 			Actions: []Action{
 				Action{
 					Name:        "list_datastore_category",
@@ -2690,7 +2824,11 @@ $exec`,
 					ID:          getRoutingRulesId,
 					AppVersion:  "1.2.0",
 					Environment: actionEnv,
-					Label:       "Get_routing_rules",
+					Label:       "Get_all_rules_from_the_system",
+					Position: Position{
+						X: 100,
+						Y: 200,
+					},
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:     "category",
@@ -2707,30 +2845,186 @@ $exec`,
 					Name:        "execute_python",
 					AppID:       "Shuffle Tools",
 					AppName:     "Shuffle Tools",
-					ID:          evaluateAndApplyId,
+					ID:          validateRulesId,
 					AppVersion:  "1.2.0",
 					Environment: actionEnv,
-					Label:       "Evaluate_and_apply_rules",
+					Label:       "Find_relevant_rules_for_category",
+					Position: Position{
+						X: 400,
+						Y: 200,
+					},
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:      "code",
 							Multiline: true,
 							Required:  true,
-							Value:     getIncidentRoutingScript(targetCategory),
+							Value:     getRoutingValidationScript(targetCategory),
 						},
 					},
+				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          executeRulesId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Execute_rule_automation_for_found_rules",
+					Position: Position{
+						X: 700,
+						Y: 200,
+					},
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "code",
+							Multiline: true,
+							Required:  true,
+							Value:     getRoutingExecutionScript(targetCategory),
+						},
+					},
+				},
+				Action{
+					Name:             "post_count_custom_stats",
+					AppID:            "fc92c1d806df0c96f0c152a7b43b2878",
+					AppName:          "shuffle_openapi",
+					ID:               updateStatsId,
+					AppVersion:       "1.0.0",
+					Environment:      actionEnv,
+					AuthenticationId: openapiAuthId,
+					Label:            "Update_rule_statistics",
+					Position: Position{
+						X: 1050,
+						Y: 80,
+					},
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "body",
+							Multiline: true,
+							Required:  true,
+							Value:     `{"key": "$execute_rule_automation_for_found_rules.message.stats_key", "value": $execute_rule_automation_for_found_rules.message.stats_value}`,
+						},
+						WorkflowAppActionParameter{
+							Name:     "queries",
+							Value:    "",
+							Required: false,
+						},
+						WorkflowAppActionParameter{
+							Name:     "org_id",
+							Value:    "",
+							Required: false,
+						},
+						WorkflowAppActionParameter{
+							Name:     "ssl_verify",
+							Value:    "",
+							Required: false,
+						},
+						WorkflowAppActionParameter{
+							Name:     "to_file",
+							Value:    "",
+							Required: false,
+						},
+					},
+				},
+				Action{
+					Name:             "post_add_a_key",
+					AppID:            "fc92c1d806df0c96f0c152a7b43b2878",
+					AppName:          "shuffle_openapi",
+					ID:               setCrossTenantCacheId,
+					AppVersion:       "1.0.0",
+					Environment:      actionEnv,
+					AuthenticationId: openapiAuthId,
+					Label:            "Set_key_in_target_tenant",
+					Position: Position{
+						X: 1050,
+						Y: 320,
+					},
+					Parameters: crossTenantParams,
 				},
 			},
 			Branches: []Branch{
 				Branch{
-					SourceID:      startTriggerId,
-					DestinationID: getRoutingRulesId,
+					SourceID:      getRoutingRulesId,
+					DestinationID: validateRulesId,
 					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "{{ $$get_all_rules_from_the_system | size }}",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "larger than",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "0",
+							},
+						},
+					},
 				},
 				Branch{
-					SourceID:      getRoutingRulesId,
-					DestinationID: evaluateAndApplyId,
+					SourceID:      validateRulesId,
+					DestinationID: executeRulesId,
 					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$find_relevant_rules_for_category.message.matched",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "equals",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "true",
+							},
+						},
+					},
+				},
+				Branch{
+					SourceID:      executeRulesId,
+					DestinationID: updateStatsId,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$execute_rule_automation_for_found_rules.message.matched",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "equals",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "true",
+							},
+						},
+					},
+				},
+				Branch{
+					SourceID:      executeRulesId,
+					DestinationID: setCrossTenantCacheId,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$execute_rule_automation_for_found_rules.message.move_to_org",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "equals",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "true",
+							},
+						},
+					},
 				},
 			},
 		}
@@ -3370,6 +3664,91 @@ func GetWorkflowRunAmount(key string) int {
 		"2721fee4ca3361ce809f6728d3709cb8bb232d661b0baac8c6eba332d040a5e6": 8000000,
 		"549d5a3ac457706409f3e29cc5fb4cb5fd35c5b83adfb0f0d2407dd98b5f215d": 9000000,
 		"d88c4d2e73b0dfdd45fecf06dda99b1f16d31bc36605daea0879c53844a18de4": 10000000,
+		"ffb8871be9d266fe5f30aa2db874c0b9b1504b777d9d3de58034fff8d45ccee8": 150000,
+		"d9d855017acab8b37f370e53890141f5a44daa7e372f7bcb5566286c62f1b907": 250000,
+		"c7032bde9d6acd433a4fb352e231b2b57b2a9cf7f437140f453aea9c7025545d": 350000,
+		"0469ad598acff9e49fa23fee7d2db072a50f03417eb004c69a4d78008432aa29": 450000,
+		"69e12df982835c62c5d5c6ac8a56014fc55bdcb1f42e24fb5e0244fa86a7af3a": 550000,
+		"7681ff8cac658a475e0e3ddbf464779a1bb865b342dd8b0a32c1744d41f8c97d": 650000,
+		"1fffcb50755d696d9df8fb761b56df6ac2d1fa4a005d3a31c0fc0d3b55aa77d8": 750000,
+		"b63cef9fa2b6861e45a15df454c51b776334524743330709f584630c138d1c26": 850000,
+		"35ffa25f8cc5dc949d8d1bb7341f89087d81aed81a96aa62fc46b30ba3994068": 950000,
+		"0959eaec406300af0c2b4c0fd7b78588fab6f48f84b000b9bee693a2a9d220d0": 1050000,
+		"dcfb4f5fdadb94f97f76731ddff9a06d15fc966d594191b395cf7440cc29e48d": 1100000,
+		"a48f7210ed9e98ea968e0a500f4033ba54e62c04aae11d868d0a9f24423dc51d": 1150000,
+		"5d849e659e08fe134334edc3a42e4161565c65eac52280cf236c4703e0d2680b": 1200000,
+		"25b05eed2039db334bd9095efc40b7295fbffab0b6d1a2afbd0147df05075054": 1250000,
+		"c8910308b4e6febaa3e535efc31e298c2c4aa614ed6343bf053c12d30ae54dbc": 1300000,
+		"f4eb914d19fc974b5c65c04f52427cfd7b527d112e89d40ef2fd234ad2958c5c": 1350000,
+		"98e3939514d46c49b962b832cb30182a0577daaa6b563cc85505a95fcb0289ca": 1400000,
+		"069785e4124549ca980001b89e55fa48dbdc075d555e1ad176d1c3462be34c6e": 1450000,
+		"d9e6da79c229b1aead52588131a5392afc6daba85941064cf421bf48ecfd1ae6": 1500000,
+		"c65a9d9243669627f5d3ff82917fecb3b954b8c958dcf68492378b7d35f6ebe8": 1550000,
+		"70c05a571be549843dcff9fc088c36ce6a55a79c8dd449a1c67c1ec91a1ad2b0": 1600000,
+		"aa928d25cb76000660427c567ea36b21d873a2585eedd650f0e7eed9cacd00b8": 1650000,
+		"1334eb7de1d4cebfefd675fea5e438c9c29dcf06220142a95a92b224426031a3": 1700000,
+		"04751c0730257749051e3dc0a569b22a0f45466bb4dab383e8ea77bb63bd75ac": 1750000,
+		"814a691fdd0461911dc5ed3475ad568817f7ebb5a6fcbc3ada4c7c9c43dacf5a": 1800000,
+		"26fed530459175e47752a569fbc1631a5794a5bb82481d11838a11797e8b6d1a": 1850000,
+		"aeb065a27c2701380da11f31c83ae428722531e76ff5e31784f46ac497e7ecf7": 1900000,
+		"bb3c49ce839d5e5ba3e03046a4dada639eb8cef2b5ec6887d8048f41d01745a0": 1950000,
+		"a7c8f7a9c8502cd2143b7c5b08e64eb917890a888f89de7b2d64e178390a31d3": 2050000,
+		"e2ad238dca34d1655727ccb99469e73c9c0b687b02a6c7b9a3b7e3ee08576975": 2100000,
+		"d67bd6efc1ad1d81657c7496670ec52d9f134ee1aa0e8ffc10a7675c9cc6b576": 2150000,
+		"e4ebc35a987b0a286ebab5ddba71d638d5af3b1d1de3b31fe9204e23a1b77672": 2200000,
+		"7685408d3315881927067e40c7cb723577e73fe3809f1b8e0a50db59e41a22e9": 2250000,
+		"72bc10400f80649735d598b08600c6f6e2221c19d7c0bf68b94c19d024b980fa": 2300000,
+		"1d8064b61cbf76601997f2fc1457c9238da7df814b6a09353ff0c49c31f5ec4f": 2350000,
+		"1a77c707e71525ba2795812fe95a1a409274713651707cab7af2bd6fe9a74a66": 2400000,
+		"afc295d50fbeb84f132678cf40bbb4812dbf4575922dc79a91c220ec7ef6b415": 2450000,
+		"d1603fd0c617fd0be64890541b4c29a94ba57b18e47c11898b2e3b75322f78f0": 2500000,
+		"bcfdc00a11981372502bcce121b1e018d920490df419ec0b339a4a0a71d928a0": 2550000,
+		"92ff0e98e77c474fb1bbea34b7ff88acd4cbba657e5adc43a041948a31866dfe": 2600000,
+		"48009c76fb4cad4218fb8ec78a52bf90c136e9491bd06d08ac34ac7ea1539523": 2650000,
+		"a1fb382148042aefb7c9c110f2fa14ac676c4e958c5f326c043326b16b8e838b": 2700000,
+		"7aa8748efa051934d1689236d9d2f4b533ff03f9ff4bff38206bfeca89ce0791": 2750000,
+		"3fc52e1a8f7d0248565191bb763723ece6bf33dd67858741a715b29570161524": 2800000,
+		"1adeb8bc7ff109e83b8711327e73c5d65580735a1c393c8997cdeea6e70c431d": 2850000,
+		"002af684847c558ad9540a0e0af5dff11b860a7c6e170a3f33667083b5de04b9": 2900000,
+		"75c92e5f33a05f5cfadb5151d0fc6424bbbca0abad85aee4f6cf167c6e3a3f91": 2950000,
+		"8986145f7fa53b94a13f2533669311ebf47ee92377c2e83f2df19721cc70971e": 3050000,
+		"a131d2c4f35c3495d9144987e2b9e02c7966807dd6ace5824c9610c0b7d2232a": 3100000,
+		"a3751b650c2727d2f6e9e7fb101dec390349f51831dbfc62ac67d343597f8b40": 3150000,
+		"00c61b508c1822470433f08ef3a2dc781d7194e8a956ba46e00e17b3c13354e7": 3200000,
+		"3f133de864ad4f778a670e39a30884e11876c7dd9ed51dbc18d161d677f9b0bf": 3250000,
+		"f3c24510e4162f03bdbfff175cae6332d7ab14c1d0097c669685a657cdb75314": 3300000,
+		"e3eabccf56445cdde73194b8d3554e1d89b315f195c558b25319772d5a896d12": 3350000,
+		"8c0f44e54445a77a48e16deafc23a53cfcd5c21ff83d8ec9c93d1e5d7885270e": 3400000,
+		"c45ed99b6bf85deaee26726b448e5a3c4e3e90e29697b8f9df9fb8c74f054947": 3450000,
+		"2de087ae016ce0677a959604cd4c2cf94462a4cd9ba6b60bbc8e18ee214ee8d1": 3500000,
+		"0e70bc68312ffb76dfd2aa3ab0837f066dbcc7fbdb162fed5aecf6292e9f4264": 3550000,
+		"ee99da5e7efb12e473eeb05dc379fa0bc2f19c0c56297cbc03e5de924166ff89": 3600000,
+		"3d0cdf0daed1a08fd8fc54687ac6f2f0e654b6c3950e4cf62b2695b5080da45c": 3650000,
+		"48a7616cf76287f2a3fdbca0323ccdec1f4e6228701716a01c9429b833eb0b48": 3700000,
+		"fd8fd539c9e23486d6a5ed3c41dff25467d2eb2b729b8f329610adf4489d85cb": 3750000,
+		"64ba205b411ecff957cfa25e427e6467951671251baae908b8aae06aaf4c4ccc": 3800000,
+		"37a39c4879e32fbfdc12c60bf5a4cc84192dc72c6bbc8235b2d0620ed8a69054": 3850000,
+		"af6fdea4a4d91cc495465cc8720e84e78ce6629148cb146dc2f37f994f020b2a": 3900000,
+		"cdbd5411a79054c9cfb3d79d4ef375b8f247aef337b2182ee7896c112dc40499": 3950000,
+		"c1d74ecc3a34ea5305da6a1010ea06dfbed2beffe4128e2fe6dc658d89e521f5": 4050000,
+		"c205b0243fa9be49ea66facbb7444a2f9f4d4ee1c3c2fa754d1258c7e2d154cc": 4100000,
+		"ced51ef249a5bced2863f202677dba13aed63fe6c0e31039f6e80eb55c438fd5": 4150000,
+		"30cabe5cb1fa5a379ea80bb1d8e0a3d68ef3697d2196a8d30fee4764ad81cef3": 4200000,
+		"742d06bf1f169ee83896a63115ace64d8e9c20d209ec7791cb20c5b1df0d2bed": 4250000,
+		"7924d6888a0b99693a1ac230382c6f28778ceea6a4559e34dbbd638f314f8895": 4300000,
+		"735fa6045f4a92c57113f3e21d9ff5353aa628ce1d16cad4791fc9ec1b6320b0": 4350000,
+		"11ebaff5d7033bcf2621437644f23fe873038aec6ecf6046654ad1a304d766c9": 4400000,
+		"ff1d068bc0ca3d8e7109e04e31d87e085cc9f43ef83b6db03c1db26a822f22eb": 4450000,
+		"043b8c284000bf32e349f35d926eefe74ffd369b56cb8025bc86db76363b3203": 4500000,
+		"221f34a3beafd9008512544928592c3ac1ab4681cda731b8362048914c242a4f": 4550000,
+		"7feafbb633e45d9ea45ac6d6be18916bd43d0eef923cb405b001a21ecc7fe19d": 4600000,
+		"5ae4714133f4564b2a32e88428f5cba1f9b97e105915baae96656665ddb76978": 4650000,
+		"b0d895c56f7064f8d14eda03faf19ac665c85e406a8e0e886add9a34cfb6fa05": 4700000,
+		"5f1df07ff233b4173cf4042e994281f3dc5a6edf0739483605d3109ee085a8b5": 4750000,
+		"3c5ad974d83eacd34a765eb4cf8ea37a4b35988018e108428b94d619ffacb528": 4800000,
+		"0e72e3a219f3642169877597ef95fca20d9416d867894ed0704d566da2d8d11f": 4850000,
+		"6c17a4222990959ead2b538e78750a06b81f68752a92d6e39721c753d36bc40e": 4900000,
+		"23ac4ba07e31d6b8d40ae91ed99a268265c18a4e3eede40475170e83b51a5df2": 4950000,
 	}
 
 	if val, ok := amounts[key]; ok {
@@ -4107,6 +4486,15 @@ if target_cat.startswith("$"):
     target_cat = ""
 if target_org.startswith("$"):
     target_org = ""
+
+if not found_items or not target_key or not target_cat:
+    print(json.dumps({
+        "success": True,
+        "reason": "No new indicators to upload or missing target key/category",
+        "types": found_types,
+        "count": 0,
+    }))
+    exit()
 
 full_body = [{
     "key": target_key,
@@ -5623,6 +6011,10 @@ for activityIndex in range(len(activities)):
     if not isinstance(activity, dict):
         continue
 
+    content = str(activity.get("content") or "")
+    if "@aiagent" not in content.lower():
+        continue
+
     if not activity.get("ai_handled"):
         activity["ai_handled"] = True
         if exec_id:
@@ -5630,10 +6022,6 @@ for activityIndex in range(len(activities)):
         activities_changed = True
         activities[activityIndex] = activity
     else:
-        continue
-
-    content = str(activity.get("content") or "")
-    if "@aiagent" not in content.lower():
         continue
 
     agent_name = "default"
@@ -5648,11 +6036,13 @@ if isinstance(assignee_outer, dict):
     elif "assign" in assignee_outer:
         assignee = str(assignee_outer.get("assign") or "")
 
+assignee_changed = len(assignee) > 0 and "@" in assignee and not cur_exec.get("assignee")
+
 db_updated = False
-if activities_changed or (len(assignee) > 0 and "@" in assignee):
+if activities_changed or assignee_changed:
     if activities_changed:
         cur_exec["activity"] = activities
-    if len(assignee) > 0 and "@" in assignee:
+    if assignee_changed:
         cur_exec["assignee"] = assignee
 
     if item_key and item_cat:
@@ -5809,10 +6199,8 @@ for item in activities:
         continue
     if not item.get("replyToId"):
         continue
-    if str(item.get("user", "")).lower() == currentuser:
-        continue
-    if item.get("replyToId") == agent_act.get("id"):
-        if item.get("content") == agent_response:
+    if str(item.get("user", "")).lower() == currentuser and item.get("replyToId") == agent_act.get("id"):
+        if item.get("content") == agent_response or len(str(item.get("content", ""))) > 0:
             print(json.dumps({
                 "success": True,
                 "reason": "Already answered with this message"
@@ -5960,7 +6348,7 @@ print(json.dumps({
 }))`
 }
 
-func getIncidentRoutingScript(targetCategory string) string {
+func getRoutingValidationScript(targetCategory string) string {
 	if targetCategory == "" {
 		targetCategory = "shuffle-security_incidents"
 	}
@@ -5969,50 +6357,363 @@ func getIncidentRoutingScript(targetCategory string) string {
 import re
 import base64
 import binascii
-import time
+import html
+import urllib.parse
 
 # ── Evaluator helpers ────────────────────────────────────────────────────────
 
-MAX_STRINGS = 200
-MAX_DEPTH = 8
-MIN_BASE64_LEN = 16
+MAX_STRINGS = 400
+MAX_DEPTH = 12
+MIN_BASE64_LEN = 8
 MAX_BASE64_LEN = 65536
 
 _BASE64_RE = re.compile(r"^[A-Za-z0-9+/_-]+={0,2}$")
+_EMBEDDED_B64_RE = re.compile(r"(?:data:[^;\s]+;base64,)?([A-Za-z0-9+/_-]{12,}={0,2}|[A-Za-z0-9+/_-]{6,}={1,2})")
+_HEX_CONTINUOUS_RE = re.compile(r"^(?:0x)?([0-9a-fA-F]{8,})$")
+_HEX_ESCAPED_RE = re.compile(r"(?:\\x[0-9a-fA-F]{2}){2,}")
+_UNICODE_ESCAPE_RE = re.compile(r"\\u[0-9a-fA-F]{4}")
+_PCT_ENCODED_RE = re.compile(r"%[0-9a-fA-F]{2}")
+
+BASELINE_CATEGORIES = {
+    "incidents": "shuffle-security_incidents",
+    "incident": "shuffle-security_incidents",
+    "vulns": "shuffle-security_vulns",
+    "vuln": "shuffle-security_vulns",
+    "vulnerabilities": "shuffle-security_vulns",
+    "vulnerability": "shuffle-security_vulns",
+    "infrastructure": "shuffle-security_infrastructure",
+    "assets": "shuffle-security_assets",
+    "asset": "shuffle-security_assets",
+    "packages": "shuffle-security_packages",
+    "package": "shuffle-security_packages",
+    "software": "shuffle-security_software",
+    "users": "shuffle-security_users",
+    "user": "shuffle-security_users",
+}
+
+OBSERVABLE_TYPE_ALIASES = {
+    "ip": {"ip", "ip_address", "ipv4", "ipv6", "src_ip", "dst_ip", "ip_addr", "client_ip", "remote_ip"},
+    "domain": {"domain", "domain_name", "hostname", "fqdn", "host", "dns"},
+    "hostname": {"hostname", "host", "domain", "domain_name", "fqdn", "device_name"},
+    "url": {"url", "uri", "link", "http_url"},
+    "hash": {"hash", "file_hash", "md5", "sha1", "sha256", "sha512", "imp_hash", "ssdeep"},
+    "md5": {"md5", "hash", "file_hash"},
+    "sha1": {"sha1", "hash", "file_hash"},
+    "sha256": {"sha256", "hash", "file_hash"},
+    "email": {"email", "email_address", "email_addr", "sender", "recipient", "mail"},
+    "user": {"user", "username", "user_name", "account", "actor_user", "uid"},
+    "file": {"file", "file_name", "filename", "filepath", "file_path", "path"},
+    "process": {"process", "process_name", "cmd_line", "command_line", "executable"},
+}
+
+
+def normalize_category(cat) -> str:
+    if not cat or not isinstance(cat, str):
+        return ""
+    s = cat.strip()
+    if not s or s.startswith("$"):
+        return ""
+    low = s.lower()
+    if low in ("*", "all", "any"):
+        return "*"
+    if low.startswith("shuffle-security_"):
+        suffix = low[len("shuffle-security_"):]
+        if suffix in BASELINE_CATEGORIES:
+            return BASELINE_CATEGORIES[suffix]
+        return s
+    if low in BASELINE_CATEGORIES:
+        return BASELINE_CATEGORIES[low]
+    return s
+
+
+def _resolve_rule_category(rule: dict) -> str:
+    if not isinstance(rule, dict):
+        return "shuffle-security_incidents"
+    raw_cat = rule.get("entityCategory") or rule.get("category") or ""
+    norm = normalize_category(raw_cat)
+    return norm or "shuffle-security_incidents"
+
+
+def _categories_match(rule_cat, target_cat: str) -> bool:
+    norm_target = normalize_category(target_cat) or "shuffle-security_incidents"
+    norm_rule = normalize_category(rule_cat) or "shuffle-security_incidents"
+    if norm_rule == "*":
+        return True
+    return norm_rule == norm_target or norm_rule.lower() == norm_target.lower()
+
+
+def _is_mostly_printable(s: str, threshold: float = 0.85) -> bool:
+    if not s:
+        return False
+    printable = sum(1 for ch in s if ch.isprintable() or ch in "\r\n\t")
+    return (printable / len(s)) >= threshold
+
+
+def _decode_bytes_to_Printable(raw: bytes):
+    if not raw:
+        return None
+    # Check for UTF-16LE (common in PowerShell -EncodedCommand payloads)
+    if len(raw) >= 4 and len(raw) % 2 == 0:
+        null_odds = sum(1 for i in range(1, len(raw), 2) if raw[i] == 0)
+        if null_odds >= (len(raw) // 2) * 0.75:
+            try:
+                u16 = raw.decode("utf-16-le").rstrip("\x00")
+                if u16 and _is_mostly_printable(u16):
+                    return u16
+            except Exception:
+                pass
+    try:
+        decoded = raw.decode("utf-8")
+        if _is_mostly_printable(decoded):
+            return decoded
+    except UnicodeDecodeError:
+        pass
+    try:
+        decoded = raw.decode("latin-1")
+        if _is_mostly_printable(decoded, 0.92):
+            return decoded
+    except UnicodeDecodeError:
+        pass
+    return None
 
 
 def _looks_base64ish(s: str) -> bool:
-    if len(s) < MIN_BASE64_LEN or len(s) > MAX_BASE64_LEN:
+    if not s or len(s) > MAX_BASE64_LEN:
         return False
-    if " " in s or "\n" in s or "\t" in s:
-        return False
+    # Allow padded short base64 (e.g. "dGVzdA==" len 8) or longer unpadded tokens
+    has_padding = s.endswith("=")
+    if has_padding:
+        if len(s) < 4 or len(s) % 4 != 0:
+            return False
+    else:
+        if len(s) < MIN_BASE64_LEN:
+            return False
+        # Avoid treating plain lowercase/uppercase dictionary words as unpadded base64
+        has_digit_or_sym = any(c.isdigit() or c in "+/_-" for c in s)
+        has_mixed_case = any(c.islower() for c in s) and any(c.isupper() for c in s)
+        if not has_digit_or_sym and not has_mixed_case and len(s) < 20:
+            return False
     return bool(_BASE64_RE.match(s))
 
 
 def _try_decode_base64(s: str):
-    if not _looks_base64ish(s):
+    if not s or not isinstance(s, str):
         return None
-    normalized = s.replace("-", "+").replace("_", "/")
+    candidate = s.strip()
+    if candidate.lower().startswith("data:") and ";base64," in candidate.lower():
+        candidate = candidate.split(",", 1)[1].strip()
+    # Handle multiline MIME base64
+    if "\n" in candidate or "\r" in candidate:
+        compact = re.sub(r"[\r\n\s]+", "", candidate)
+    else:
+        compact = candidate
+    if not _looks_base64ish(compact):
+        return None
+    normalized = compact.replace("-", "+").replace("_", "/")
     pad = (4 - (len(normalized) % 4)) % 4
     if pad:
+        if pad == 3:
+            return None
         normalized += "=" * pad
     try:
         raw = base64.b64decode(normalized, validate=True)
     except (binascii.Error, ValueError):
         return None
-    try:
-        decoded = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        try:
-            decoded = raw.decode("latin-1")
-        except UnicodeDecodeError:
-            return None
-    if decoded == s:
-        return None
-    printable = sum(1 for ch in decoded if ch.isprintable() or ch in "\r\n\t")
-    if not decoded or (printable / len(decoded)) < 0.85:
+    decoded = _decode_bytes_to_Printable(raw)
+    if not decoded or decoded == s or decoded == compact:
         return None
     return decoded
+
+
+def _try_decode_url(s: str):
+    if not s or not isinstance(s, str):
+        return None
+    if _PCT_ENCODED_RE.search(s):
+        try:
+            unq = urllib.parse.unquote(s)
+            if unq and unq != s and _is_mostly_printable(unq):
+                return unq
+        except Exception:
+            pass
+    if "+" in s and (_PCT_ENCODED_RE.search(s) or "=" in s or "&" in s):
+        try:
+            unq_plus = urllib.parse.unquote_plus(s)
+            if unq_plus and unq_plus != s and _is_mostly_printable(unq_plus):
+                return unq_plus
+        except Exception:
+            pass
+    return None
+
+
+def _try_decode_hex(s: str):
+    if not s or not isinstance(s, str):
+        return None
+    stripped = s.strip()
+    # Check \xNN\xNN escaped hex sequences
+    if "\\x" in stripped and _HEX_ESCAPED_RE.search(stripped):
+        try:
+            def _replace_hex_seq(m):
+                hex_bytes = bytes.fromhex(m.group(0).replace("\\x", ""))
+                dec = _decode_bytes_to_Printable(hex_bytes)
+                return dec if dec is not None else m.group(0)
+            converted = _HEX_ESCAPED_RE.sub(_replace_hex_seq, stripped)
+            if converted != stripped:
+                return converted
+        except Exception:
+            pass
+    # Check continuous hex string (e.g. 0x61646d696e or 48656c6c6f)
+    m = _HEX_CONTINUOUS_RE.match(stripped)
+    if m:
+        hex_part = m.group(1)
+        if len(hex_part) % 2 == 0 and len(hex_part) <= MAX_BASE64_LEN:
+            try:
+                raw = bytes.fromhex(hex_part)
+                dec = _decode_bytes_to_Printable(raw)
+                if dec and dec != stripped and _is_mostly_printable(dec, 0.9):
+                    return dec
+            except Exception:
+                pass
+    return None
+
+
+def _try_decode_escapes_and_html(s: str):
+    if not s or not isinstance(s, str):
+        return None
+    out = s
+    if "&" in out and ";" in out:
+        try:
+            unesc = html.unescape(out)
+            if unesc != out:
+                out = unesc
+        except Exception:
+            pass
+    if "\\u" in out and _UNICODE_ESCAPE_RE.search(out):
+        try:
+            unesc = _UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(0)[2:], 16)), out)
+            if unesc != out and _is_mostly_printable(unesc):
+                out = unesc
+        except Exception:
+            pass
+    return out if out != s else None
+
+
+def _decode_single_pass(s: str) -> list:
+    if not s or not isinstance(s, str):
+        return []
+    variants = []
+    # 1. Whole-string decodes
+    for fn in (_try_decode_base64, _try_decode_url, _try_decode_hex, _try_decode_escapes_and_html):
+        dec = fn(s)
+        if dec and dec != s and dec not in variants:
+            variants.append(dec)
+
+    # 2. JWT token segments (header.payload.signature)
+    if s.count(".") == 2 and " " not in s and len(s) >= 24:
+        for seg in s.split(".")[:2]:
+            dec = _try_decode_base64(seg)
+            if dec and dec not in variants:
+                variants.append(dec)
+
+    # 3. Embedded base64 tokens inside command lines / log strings
+    if (" " in s or "=" in s or ":" in s or "/" in s) and len(s) <= MAX_BASE64_LEN:
+        for m in _EMBEDDED_B64_RE.finditer(s):
+            tok = m.group(1)
+            if tok and tok != s:
+                dec = _try_decode_base64(tok)
+                if dec and len(dec) >= 3 and dec not in variants:
+                    variants.append(dec)
+                    # Also provide the full string with the token decoded in-place
+                    replaced = s.replace(m.group(0), dec)
+                    if replaced != s and replaced not in variants:
+                        variants.append(replaced)
+
+    # 4. If s (or any decoded variant) is JSON, extract inner strings as well
+    json_Check_list = [s] + list(variants)
+    for candidate in json_Check_list:
+        st = candidate.strip()
+        if (st.startswith("{") and st.endswith("}")) or (st.startswith("[") and st.endswith("]")):
+            try:
+                parsed = json.loads(st)
+                extracted = []
+                _collect_all_strings(parsed, extracted)
+                for ex in extracted:
+                    if isinstance(ex, str) and ex and ex not in variants and ex != s:
+                        variants.append(ex)
+            except Exception:
+                pass
+
+    return variants
+
+
+def _with_all_decodes(haystacks) -> list:
+    seen = set()
+    out = []
+
+    def _add(val):
+        if not isinstance(val, str):
+            val = str(val)
+        if val not in seen and len(out) < MAX_STRINGS:
+            seen.add(val)
+            out.append(val)
+            return True
+        return False
+
+    queue = []
+    for s in haystacks:
+        if s is None:
+            continue
+        s_str = s if isinstance(s, str) else str(s)
+        if _add(s_str):
+            queue.append((s_str, 0))
+
+    # Multi-pass decoding (up to 3 levels deep, e.g. URL -> Base64 -> JSON -> inner Base64)
+    idx = 0
+    while idx < len(queue) and len(out) < MAX_STRINGS:
+        cur_str, depth = queue[idx]
+        idx += 1
+        if depth >= 3:
+            continue
+        for dec in _decode_single_pass(cur_str):
+            if _add(dec):
+                queue.append((dec, depth + 1))
+
+    return out
+
+
+def _try_coerce_structured(val):
+    """If val is a string that is JSON or encoded (Base64/URL/Hex) JSON, parse and return the dict/list."""
+    if isinstance(val, (dict, list)):
+        return val
+    if not isinstance(val, str):
+        return None
+    s = val.strip()
+    if not s:
+        return None
+    candidates = [s]
+    for fn in (_try_decode_base64, _try_decode_url, _try_decode_hex, _try_decode_escapes_and_html):
+        dec = fn(s)
+        if dec and dec not in candidates:
+            candidates.append(dec)
+            # Second pass (e.g. URL-encoded Base64 JSON)
+            dec2 = _try_decode_base64(dec) or _try_decode_url(dec)
+            if dec2 and dec2 not in candidates:
+                candidates.append(dec2)
+
+    for c in candidates:
+        st = c.strip()
+        if (st.startswith("{") and st.endswith("}")) or (st.startswith("[") and st.endswith("]")):
+            try:
+                parsed = json.loads(st)
+                if isinstance(parsed, str):
+                    try:
+                        parsed = json.loads(parsed)
+                    except Exception:
+                        pass
+                if isinstance(parsed, (dict, list)):
+                    return parsed
+            except Exception:
+                pass
+    return None
 
 
 def _collect_all_strings(val, out, depth=0):
@@ -6021,8 +6722,14 @@ def _collect_all_strings(val, out, depth=0):
     if isinstance(val, str):
         out.append(val)
         return
-    if isinstance(val, (int, float, bool)):
-        out.append(str(val))
+    if isinstance(val, bool):
+        out.append("true" if val else "false")
+        return
+    if isinstance(val, (int, float)):
+        if isinstance(val, float) and val.is_integer():
+            out.append(str(int(val)))
+        else:
+            out.append(str(val))
         return
     if isinstance(val, list):
         for item in val:
@@ -6037,54 +6744,357 @@ def _collect_all_strings(val, out, depth=0):
                 break
 
 
-def _get_deep(obj, path: str):
-    if not path or not isinstance(obj, dict):
+def _norm_key(k: str) -> str:
+    return re.sub(r"[\s_\-]+", "", str(k or "").lower())
+
+
+def _dict_lookup(d: dict, key: str):
+    if not isinstance(d, dict) or not key:
+        return False, None
+    if key in d:
+        return True, d[key]
+    key_low = key.lower()
+    for k, v in d.items():
+        if str(k).lower() == key_low:
+            return True, v
+    key_norm = _norm_key(key)
+    if key_norm:
+        for k, v in d.items():
+            if _norm_key(k) == key_norm:
+                return True, v
+    return False, None
+
+
+def _split_field_path(path: str) -> list:
+    if not path or not isinstance(path, str):
+        return []
+    s = path.strip()
+    # Strip common root prefixes if user typed $exec.foo or $.foo or incident.foo
+    s = re.sub(r"^\$\.?exec\.?", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"^\$\.?", "", s)
+    # Convert bracket notation like a['b.c'][0].d or a[0].b into segments
+    tokens = []
+    pos = 0
+    n = len(s)
+    buf = []
+    while pos < n:
+        ch = s[pos]
+        if ch == ".":
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+            pos += 1
+        elif ch == "[":
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+            end_bracket = s.find("]", pos + 1)
+            if end_bracket == -1:
+                buf.append(ch)
+                pos += 1
+            else:
+                inner = s[pos + 1 : end_bracket].strip()
+                if (inner.startswith("'") and inner.endswith("'")) or (inner.startswith('"') and inner.endswith('"')):
+                    inner = inner[1:-1]
+                if inner and inner != "*":
+                    tokens.append(inner)
+                pos = end_bracket + 1
+        else:
+            buf.append(ch)
+            pos += 1
+    if buf:
+        tokens.append("".join(buf))
+    return [t for t in tokens if t and t != "*"]
+
+
+def _get_deep_parts(obj, parts: list, depth: int = 0):
+    if obj is None or depth > MAX_DEPTH:
         return None
-    parts = [p for p in path.split(".") if p]
-    cur = obj
-    for p in parts:
-        if isinstance(cur, dict) and p in cur:
-            cur = cur[p]
+    if not parts:
+        return obj
+
+    if isinstance(obj, str):
+        coerced = _try_coerce_structured(obj)
+        if coerced is not None:
+            obj = coerced
         else:
             return None
-    return cur
+
+    head = parts[0]
+    tail = parts[1:]
+
+    if isinstance(obj, dict):
+        # Also support composite dotted keys stored flat in dicts (e.g. customFields["a.b"])
+        if len(parts) > 1:
+            joined = ".".join(parts)
+            found_flat, flat_val = _dict_lookup(obj, joined)
+            if found_flat and flat_val is not None:
+                return flat_val
+        found, val = _dict_lookup(obj, head)
+        if found:
+            return _get_deep_parts(val, tail, depth + 1)
+        return None
+
+    if isinstance(obj, list):
+        # Support explicit list index (e.g. evidences[0].actor or evidences.0.actor)
+        if re.match(r"^-?\d+$", head):
+            idx = int(head)
+            if -len(obj) <= idx < len(obj):
+                return _get_deep_parts(obj[idx], tail, depth + 1)
+        vals = []
+        for item in obj:
+            v = _get_deep_parts(item, parts, depth + 1)
+            if v is not None:
+                if isinstance(v, list):
+                    vals.extend(v)
+                else:
+                    vals.append(v)
+        return vals if vals else None
+
+    return None
+
+
+def _get_deep(obj, path: str):
+    if not path or obj is None:
+        return None
+    parts = _split_field_path(path)
+    if not parts:
+        return None
+    return _get_deep_parts(obj, parts)
+
+
+def _search_deep_by_suffix(obj, target_parts: list, depth: int = 0, out: list = None) -> list:
+    """Fallback recursive search for deeply nested fields when a user specifies a partial path or leaf key."""
+    if out is None:
+        out = []
+    if obj is None or depth > MAX_DEPTH or not target_parts or len(out) >= MAX_STRINGS:
+        return out
+
+    if isinstance(obj, str):
+        coerced = _try_coerce_structured(obj)
+        if coerced is not None:
+            obj = coerced
+        else:
+            return out
+
+    if isinstance(obj, dict):
+        # Check if target_parts resolves directly from this dict node
+        direct = _get_deep_parts(obj, target_parts, depth)
+        if not _is_empty_val(direct):
+            if isinstance(direct, list):
+                out.extend(direct)
+            else:
+                out.append(direct)
+        for k, v in obj.items():
+            if len(out) >= MAX_STRINGS:
+                break
+            if isinstance(v, (dict, list, str)):
+                _search_deep_by_suffix(v, target_parts, depth + 1, out)
+    elif isinstance(obj, list):
+        for item in obj:
+            if len(out) >= MAX_STRINGS:
+                break
+            if isinstance(item, (dict, list, str)):
+                _search_deep_by_suffix(item, target_parts, depth + 1, out)
+
+    return out
+
+
+def _is_empty_val(v) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, str) and v == "":
+        return True
+    if isinstance(v, (list, dict)) and len(v) == 0:
+        return True
+    return False
+
+
+def _merge_resolved_values(results: list):
+    non_empty = [r for r in results if not _is_empty_val(r)]
+    if not non_empty:
+        return None
+    if len(non_empty) == 1:
+        return non_empty[0]
+    merged = []
+    for r in non_empty:
+        if isinstance(r, list):
+            merged.extend(r)
+        else:
+            merged.append(r)
+    return merged
+
+
+def _gather_observables(ctx: dict) -> list:
+    obs = []
+    for src in (ctx.get("observables"), _get_deep(ctx.get("rawOCSF") or {}, "observables")):
+        if isinstance(src, str):
+            src = _try_coerce_structured(src)
+        if isinstance(src, list):
+            for item in src:
+                if isinstance(item, dict):
+                    obs.append(item)
+    return obs
 
 
 def _resolve_field(ctx: dict, field: str):
-    if not field or field in ("*", "$whole"):
+    whole_tok = "$" + "whole"
+    clean_field = (field or "").strip()
+    if not clean_field or clean_field.lower() in ("*", whole_tok, "all", "any", "_raw"):
         all_strs = []
         _collect_all_strings(ctx, all_strs)
         return all_strs
-    if field.startswith("observables."):
-        obs_type = field.split(".", 1)[1].lower()
-        observables = ctx.get("observables") or []
+
+    parts = _split_field_path(clean_field)
+    if not parts:
+        all_strs = []
+        _collect_all_strings(ctx, all_strs)
+        return all_strs
+
+    # Strip leading entity wrapper prefix if present (e.g. "incident.title" -> "title")
+    wrapper_prefixes = ("incident", "vulnerability", "vuln", "asset", "infrastructure", "package", "software", "user", "entity", "item")
+    if len(parts) > 1 and parts[0].lower() in wrapper_prefixes and parts[0] not in ctx:
+        parts = parts[1:]
+        clean_field = ".".join(parts)
+
+    candidates = []
+
+    # 1. Special handling for observables.*
+    if parts[0].lower() == "observables" and len(parts) >= 2:
+        obs_list = _gather_observables(ctx)
+        sub_key = parts[1].lower()
+        rest_parts = parts[2:]
+        type_matches = OBSERVABLE_TYPE_ALIASES.get(sub_key, {sub_key})
         vals = []
-        for o in observables:
-            if isinstance(o, dict) and str(o.get("type", "")).lower() == obs_type:
-                v = o.get("value")
-                if v:
-                    vals.append(str(v))
-        return vals
-    if field == "stakeholders.email":
-        stakeholders = ctx.get("stakeholders") or []
-        vals = []
-        for s in stakeholders:
-            if isinstance(s, dict) and s.get("email"):
-                vals.append(str(s["email"]))
-        return vals
-    if field.startswith("rawOCSF."):
-        return _get_deep(ctx.get("rawOCSF") or {}, field[len("rawOCSF.") :])
-    direct = ctx.get(field)
-    if direct is not None:
-        return direct
-    if field in ("message", "description", "desc"):
-        return ctx.get("description") or ctx.get("message")
+        for o in obs_list:
+            o_type = str(o.get("type") or o.get("type_id") or "").lower().strip()
+            if o_type in type_matches or _norm_key(o_type) in {_norm_key(t) for t in type_matches}:
+                if rest_parts:
+                    v = _get_deep_parts(o, rest_parts)
+                else:
+                    v = o.get("value") if o.get("value") is not None else (o.get("name") or o.get("data"))
+                if not _is_empty_val(v):
+                    vals.append(v)
+        if vals:
+            candidates.append(vals)
+        # Also allow normal property traversal on observables (e.g. observables.value, observables[0].value)
+        prop_val = _get_deep_parts(obs_list, parts[1:])
+        if not _is_empty_val(prop_val):
+            candidates.append(prop_val)
+
+    # 2. Special handling for stakeholders.*
+    if parts[0].lower() == "stakeholders" and len(parts) >= 2:
+        stk_list = ctx.get("stakeholders") or _get_deep(ctx.get("rawOCSF") or {}, "stakeholders") or []
+        if isinstance(stk_list, list):
+            prop_val = _get_deep_parts(stk_list, parts[1:])
+            if not _is_empty_val(prop_val):
+                candidates.append(prop_val)
+
+    # 3. Explicit rawOCSF.* prefix
     raw_ocsf = ctx.get("rawOCSF")
-    if isinstance(raw_ocsf, dict):
-        ocsf_direct = raw_ocsf.get(field)
-        if ocsf_direct is not None:
-            return ocsf_direct
-    return None
+    if isinstance(raw_ocsf, str):
+        raw_ocsf = _try_coerce_structured(raw_ocsf)
+    if not isinstance(raw_ocsf, dict):
+        raw_ocsf = {}
+
+    if parts[0].lower() in ("rawocsf", "raw_ocsf") and len(parts) > 1:
+        v = _get_deep_parts(raw_ocsf, parts[1:])
+        if not _is_empty_val(v):
+            candidates.append(v)
+
+    # 4. Direct & deep lookup on ctx
+    direct_ctx = _get_deep_parts(ctx, parts)
+    if not _is_empty_val(direct_ctx):
+        candidates.append(direct_ctx)
+
+    # 5. Lookup inside rawOCSF, customFields, custom_attributes, and unmapped
+    if parts[0].lower() not in ("rawocsf", "raw_ocsf"):
+        ocsf_val = _get_deep_parts(raw_ocsf, parts)
+        if not _is_empty_val(ocsf_val):
+            candidates.append(ocsf_val)
+
+    for cf_key in ("customFields", "custom_fields"):
+        cf = ctx.get(cf_key)
+        if isinstance(cf, str):
+            cf = _try_coerce_structured(cf)
+        if isinstance(cf, dict):
+            sub_parts = parts[1:] if parts[0].lower() in ("customfields", "custom_fields") and len(parts) > 1 else parts
+            cf_val = _get_deep_parts(cf, sub_parts)
+            if not _is_empty_val(cf_val):
+                candidates.append(cf_val)
+
+    custom_attrs = _get_deep_parts(raw_ocsf, ["metadata", "extensions", "custom_attributes"])
+    if isinstance(custom_attrs, dict):
+        sub_parts = parts[1:] if parts[0].lower() in ("custom_attributes", "customattributes") and len(parts) > 1 else parts
+        ca_val = _get_deep_parts(custom_attrs, sub_parts)
+        if not _is_empty_val(ca_val):
+            candidates.append(ca_val)
+
+    unmapped = raw_ocsf.get("unmapped")
+    if isinstance(unmapped, dict):
+        sub_parts = parts[1:] if parts[0].lower() == "unmapped" and len(parts) > 1 else parts
+        um_val = _get_deep_parts(unmapped, sub_parts)
+        if not _is_empty_val(um_val):
+            candidates.append(um_val)
+
+    # 6. Well-known semantic field aliases across entity types
+    leaf_low = clean_field.lower()
+    if leaf_low in ("message", "description", "desc", "details", "summary"):
+        for k in ("description", "message", "summary", "details"):
+            v = ctx.get(k) or raw_ocsf.get(k) or _get_deep_parts(raw_ocsf, ["finding_info", "desc"])
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low in ("title", "name"):
+        for v in (
+            ctx.get("title"),
+            ctx.get("name"),
+            _get_deep_parts(raw_ocsf, ["finding_info", "title"]),
+            ctx.get("hostname"),
+            ctx.get("username"),
+            ctx.get("email"),
+            ctx.get("cve"),
+            ctx.get("purl"),
+            ctx.get("id"),
+        ):
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low == "severity":
+        for v in (
+            ctx.get("severity"),
+            _get_deep_parts(ctx, ["database_specific", "severity"]),
+            raw_ocsf.get("severity"),
+        ):
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low in ("assignee", "assigned_to", "owner"):
+        for k in ("assignee", "assigned_to", "owner"):
+            v = ctx.get(k) or raw_ocsf.get(k)
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low in ("labels", "tags", "types", "type"):
+        for k in ("labels", "tags", "types", "type"):
+            v = ctx.get(k) or raw_ocsf.get(k)
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low in ("source", "source_tool", "product", "vendor"):
+        for v in (
+            ctx.get("source"),
+            ctx.get("source_tool"),
+            ctx.get("product"),
+            ctx.get("vendor"),
+            _get_deep_parts(raw_ocsf, ["metadata", "product", "name"]),
+            _get_deep_parts(raw_ocsf, ["metadata", "product", "vendor_name"]),
+        ):
+            if not _is_empty_val(v):
+                candidates.append(v)
+
+    merged = _merge_resolved_values(candidates)
+    if merged is not None:
+        return merged
+
+    # 7. Deep recursive suffix fallback (finds very nested fields anywhere in ctx or decoded JSON blobs)
+    deep_matches = _search_deep_by_suffix(ctx, parts)
+    return _merge_resolved_values(deep_matches)
 
 
 def _as_string_array(v):
@@ -6108,160 +7118,675 @@ def _as_string_array(v):
     return [str(v)]
 
 
-def _with_base64_decodes(haystacks):
-    seen = set()
-    out = []
-    for s in haystacks:
-        if s not in seen:
-            seen.add(s)
-            out.append(s)
-        if len(out) >= MAX_STRINGS:
-            break
-        decoded = _try_decode_base64(s.strip())
-        if decoded is not None and decoded not in seen:
-            seen.add(decoded)
-            out.append(decoded)
-    return out
+def _normalize_operator(op: str) -> str:
+    s = str(op or "").strip().lower()
+    if s in ("==", "=", "is", "equal", "equals", "exact"):
+        return "equals"
+    if s in ("!=", "!==", "is_not", "is not", "not_equal", "not_equals", "notequals", "notequal", "does_not_equal", "does not equal"):
+        return "not_equals"
+    if s in ("contains", "contain", "includes", "include", "has"):
+        return "contains"
+    if s in ("not_contains", "not contains", "notcontains", "does_not_contain", "does not contain", "excludes", "exclude"):
+        return "not_contains"
+    if s in ("startswith", "starts_with", "starts with", "start_with", "start with", "prefix"):
+        return "startsWith"
+    if s in ("endswith", "ends_with", "ends with", "end_with", "end with", "suffix"):
+        return "endsWith"
+    if s in ("regex", "matches_regex", "matches regex", "match_regex", "match regex", "matchesregex", "match", "matches", "re", "pattern"):
+        return "regex"
+    if s in ("exists", "is_set", "is set", "not_empty", "not empty", "is_not_empty", "is not empty", "present"):
+        return "exists"
+    if s in ("not_exists", "not exists", "notexists", "does_not_exist", "does not exist", "is_empty", "is empty", "empty", "missing"):
+        return "not_exists"
+    if s in ("in", "one_of", "one of", "oneof"):
+        return "in"
+    if s in (">", "gt", "greater_than", "greater than", "larger_than", "larger than"):
+        return "gt"
+    if s in (">=", "gte", "greater_or_equal", "at_least"):
+        return "gte"
+    if s in ("<", "lt", "less_than", "less than", "smaller_than", "smaller than"):
+        return "lt"
+    if s in ("<=", "lte", "less_or_equal", "at_most"):
+        return "lte"
+    return s
 
 
-def evaluate_condition(ctx: dict, condition: dict) -> bool:
-    field = condition.get("field", "")
-    op = condition.get("op", "")
+def _compare_numeric_or_str(haystacks: list, needle: str, op_norm: str) -> bool:
+    if not needle:
+        return False
+    try:
+        n_val = float(needle)
+        for h in haystacks:
+            try:
+                h_val = float(h.strip())
+                if op_norm == "gt" and h_val > n_val:
+                    return True
+                if op_norm == "gte" and h_val >= n_val:
+                    return True
+                if op_norm == "lt" and h_val < n_val:
+                    return True
+                if op_norm == "lte" and h_val <= n_val:
+                    return True
+            except ValueError:
+                continue
+        return False
+    except ValueError:
+        for h in haystacks:
+            if op_norm == "gt" and h > needle:
+                return True
+            if op_norm == "gte" and h >= needle:
+                return True
+            if op_norm == "lt" and h < needle:
+                return True
+            if op_norm == "lte" and h <= needle:
+                return True
+        return False
+
+
+def evaluate_condition_detailed(ctx: dict, condition: dict) -> dict:
+    field = condition.get("field") or condition.get("key") or ""
+    raw_op = condition.get("op") or condition.get("operator") or "contains"
+    op = _normalize_operator(raw_op)
     value = condition.get("value")
 
     raw = _resolve_field(ctx, field)
     raw_strings = _as_string_array(raw)
-    haystacks = [s.lower() for s in _with_base64_decodes(raw_strings)]
-    needle = (value or "").lower()
+    expanded_strings = _with_all_decodes(raw_strings)
+    haystacks = [s.lower() for s in expanded_strings]
 
+    needle_str = "" if value is None else str(value)
+    needle_variants = [s.lower() for s in _with_all_decodes([needle_str])] if needle_str else [""]
+    needle = needle_str.lower()
+
+    is_matched = False
     if op == "exists":
-        return len(haystacks) > 0 and any(len(s) > 0 for s in haystacks)
-    if op == "equals":
-        return any(s == needle for s in haystacks)
-    if op == "contains":
-        return len(needle) > 0 and any(needle in s for s in haystacks)
-    if op == "startsWith":
-        return len(needle) > 0 and any(s.startswith(needle) for s in haystacks)
-    if op == "endsWith":
-        return len(needle) > 0 and any(s.endswith(needle) for s in haystacks)
-    if op == "regex":
-        if not value:
-            return False
-        try:
-            re_c = re.compile(value, re.IGNORECASE)
-        except re.error:
-            return False
-        return any(re_c.search(s) is not None for s in haystacks)
-    return False
+        is_matched = len(haystacks) > 0 and any(len(s.strip()) > 0 for s in haystacks)
+    elif op == "not_exists":
+        is_matched = len(haystacks) == 0 or all(len(s.strip()) == 0 for s in haystacks)
+    elif op == "equals":
+        is_matched = any(s == n or s.strip() == n.strip() for s in haystacks for n in needle_variants)
+    elif op == "not_equals":
+        is_matched = len(haystacks) == 0 or not any(s == n or s.strip() == n.strip() for s in haystacks for n in needle_variants)
+    elif op == "contains":
+        is_matched = len(needle) > 0 and any(n in s for s in haystacks for n in needle_variants if n)
+    elif op == "not_contains":
+        is_matched = len(needle) > 0 and not any(n in s for s in haystacks for n in needle_variants if n)
+    elif op == "startsWith":
+        is_matched = len(needle) > 0 and any(s.startswith(n) or s.strip().startswith(n.strip()) for s in haystacks for n in needle_variants if n)
+    elif op == "endsWith":
+        is_matched = len(needle) > 0 and any(s.endswith(n) or s.strip().endswith(n.strip()) for s in haystacks for n in needle_variants if n)
+    elif op == "in":
+        items = [p.strip().lower() for p in re.split(r"[,;|]", needle_str) if p.strip()]
+        expanded_items = [s.lower() for s in _with_all_decodes(items)]
+        is_matched = len(expanded_items) > 0 and any(s == it or s.strip() == it for s in haystacks for it in expanded_items)
+    elif op in ("gt", "gte", "lt", "lte"):
+        is_matched = _compare_numeric_or_str(haystacks, needle.strip(), op)
+    elif op == "regex":
+        if needle_str:
+            for pat in _with_all_decodes([needle_str]):
+                try:
+                    re_c = re.compile(pat, re.IGNORECASE)
+                    if any(re_c.search(s) is not None for s in expanded_strings):
+                        is_matched = True
+                        break
+                except re.error:
+                    continue
+
+    # Include both raw and decoded values in preview_actuals so it is clear when decoding occurred
+    preview_actuals = [s[:200] for s in expanded_strings[:10]]
+    return {
+        "field": field,
+        "op": raw_op,
+        "expected": value,
+        "expected_value": value,
+        "actual_values": preview_actuals,
+        "matched": is_matched,
+    }
 
 
-def _is_group(n):
-    return isinstance(n, dict) and n.get("kind") == "group"
+def evaluate_condition(ctx: dict, condition: dict) -> bool:
+    return evaluate_condition_detailed(ctx, condition)["matched"]
 
 
-def _is_leaf(n):
-    return isinstance(n, dict) and n.get("kind") == "condition"
+def _get_group_children(n: dict) -> list:
+    if not isinstance(n, dict):
+        return []
+    for k in ("children", "conditions", "rules", "groups"):
+        ch = n.get(k)
+        if isinstance(ch, list):
+            return ch
+    return []
 
 
-def evaluate_tree(node: dict, ctx: dict) -> bool:
+def _is_group(n) -> bool:
+    if not isinstance(n, dict):
+        return False
+    kind = str(n.get("kind") or n.get("type") or "").lower()
+    if kind == "group":
+        return True
+    if kind == "condition":
+        return False
+    return any(isinstance(n.get(k), list) for k in ("children", "conditions", "rules", "groups"))
+
+
+def _is_leaf(n) -> bool:
+    if not isinstance(n, dict) or _is_group(n):
+        return False
+    kind = str(n.get("kind") or n.get("type") or "").lower()
+    if kind == "condition":
+        return True
+    return bool(n.get("field") or n.get("key") or n.get("op") or n.get("operator"))
+
+
+def _is_and_group(node: dict) -> bool:
+    raw = str(
+        node.get("op")
+        or node.get("operator")
+        or node.get("matchMode")
+        or node.get("logicalOp")
+        or node.get("logic")
+        or "and"
+    ).strip().lower()
+    if raw in ("or", "any", "match_any", "match any", "||"):
+        return False
+    return True
+
+
+def evaluate_tree(node: dict, ctx: dict, depth: int = 0) -> bool:
+    if depth > 16 or not isinstance(node, dict):
+        return False
     if _is_leaf(node):
         return evaluate_condition(
             ctx,
             {
-                "field": node.get("field", ""),
-                "op": node.get("op", ""),
+                "field": node.get("field") or node.get("key") or "",
+                "op": node.get("op") or node.get("operator") or "contains",
                 "value": node.get("value"),
             },
         )
     if not _is_group(node):
         return False
-    children = node.get("children") or []
+    children = [c for c in _get_group_children(node) if _is_leaf(c) or (_is_group(c) and len(_collect_leaves(c)) > 0)]
     if not children:
         return False
-    if node.get("op") == "and":
-        return all(evaluate_tree(c, ctx) for c in children)
-    return any(evaluate_tree(c, ctx) for c in children)
+    if _is_and_group(node):
+        return all(evaluate_tree(c, ctx, depth + 1) for c in children)
+    return any(evaluate_tree(c, ctx, depth + 1) for c in children)
 
 
-def _collect_leaves(node):
+def _collect_leaves(node, depth: int = 0) -> list:
+    if depth > 16 or not isinstance(node, dict):
+        return []
     if _is_leaf(node):
         return [node]
     if not _is_group(node):
         return []
     out = []
-    for c in node.get("children") or []:
-        out.extend(_collect_leaves(c))
+    for c in _get_group_children(node):
+        out.extend(_collect_leaves(c, depth + 1))
     return out
 
 
 def _build_groups(rule):
     conditions = rule.get("conditions") or []
-    has_or_flag = any(c.get("or") for c in conditions)
+    has_or_flag = any(isinstance(c, dict) and c.get("or") for c in conditions)
     if not has_or_flag:
-        if rule.get("matchMode") == "any":
+        match_mode = str(rule.get("matchMode") or rule.get("op") or "all").strip().lower()
+        if match_mode in ("any", "or", "match_any", "match any"):
             return [list(conditions)]
         return [[c] for c in conditions]
     groups = []
     for c in conditions:
-        if c.get("or") and groups:
+        if isinstance(c, dict) and c.get("or") and groups:
             groups[-1].append(c)
         else:
             groups.append([c])
     return groups
 
 
-def evaluate_routing_rules(ctx: dict, rules, target_category: str = "__TARGET_CATEGORY__") -> list:
+def filter_relevant_rules_for_category(rules, target_category: str = "__TARGET_CATEGORY__") -> list:
     active = [
         r for r in rules
         if isinstance(r, dict)
         and r.get("enabled", True) is not False
-        and (
-            r.get("entityCategory") == target_category
-            or (target_category == "shuffle-security_incidents" and not r.get("entityCategory"))
-        )
+        and _categories_match(_resolve_rule_category(r), target_category)
     ]
     active.sort(key=lambda r: r.get("priority", 100))
+    return active
 
+
+def inspect_and_evaluate_rules(ctx: dict, rules, target_category: str = "__TARGET_CATEGORY__", incident_ref: dict = None) -> tuple:
+    incident_info = incident_ref or {}
+    rules_checked = []
+    rules_skipped = []
     matches = []
-    for rule in active:
+
+    sorted_rules = [r for r in rules if isinstance(r, dict)]
+    sorted_rules.sort(key=lambda r: r.get("priority", 100))
+
+    for rule in sorted_rules:
+        rule_id = str(rule.get("id") or "")
+        rule_name = str(rule.get("name") or "Unnamed rule")
+        rule_priority = rule.get("priority", 100)
+        rule_enabled = rule.get("enabled", True) is not False
+        rule_cat = _resolve_rule_category(rule)
+        if not rule.get("entityCategory"):
+            rule["entityCategory"] = rule_cat
+        cat_matches = _categories_match(rule_cat, target_category)
+
+        if not rule_enabled:
+            rules_skipped.append({
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "priority": rule_priority,
+                "enabled": False,
+                "entity_category": rule_cat,
+                "checked": False,
+                "matched": False,
+                "should_trigger": False,
+                "status": "skipped_disabled",
+                "reason": "Rule is disabled",
+            })
+            continue
+
+        if not cat_matches:
+            rules_skipped.append({
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "priority": rule_priority,
+                "enabled": True,
+                "entity_category": rule_cat,
+                "checked": False,
+                "matched": False,
+                "should_trigger": False,
+                "status": "skipped_category_mismatch",
+                "reason": f"Rule targets category '{rule_cat}', incoming entity is '{target_category}'",
+            })
+            continue
+
+        evaluated_conditions = []
+        matched_conditions = []
+        failed_conditions = []
+        rule_matched = False
+        reason = ""
+
         tree = rule.get("conditionTree")
         if _is_group(tree):
-            if evaluate_tree(tree, ctx):
-                leaves = _collect_leaves(tree)
-                matched_leaves = [
-                    leaf
-                    for leaf in leaves
-                    if evaluate_condition(
-                        ctx,
-                        {
-                            "field": leaf.get("field", ""),
-                            "op": leaf.get("op", ""),
-                            "value": leaf.get("value"),
-                        },
-                    )
-                ]
-                matches.append({"rule": rule, "matched": matched_leaves})
-            continue
+            leaves = _collect_leaves(tree)
+            for leaf in leaves:
+                detail = evaluate_condition_detailed(
+                    ctx,
+                    {
+                        "field": leaf.get("field", ""),
+                        "op": leaf.get("op", ""),
+                        "value": leaf.get("value"),
+                    },
+                )
+                evaluated_conditions.append(detail)
+                if detail["matched"]:
+                    matched_conditions.append(detail)
+                else:
+                    failed_conditions.append(detail)
 
-        conds = rule.get("conditions") or []
-        if not conds:
-            continue
-        groups = _build_groups(rule)
-        matched_leaves = []
-        all_passed = True
-        for g in groups:
-            group_matched = [c for c in g if evaluate_condition(ctx, c)]
-            if not group_matched:
-                all_passed = False
-                break
-            matched_leaves.extend(group_matched)
-        if all_passed:
-            matches.append({"rule": rule, "matched": matched_leaves})
+            if not leaves:
+                rule_matched = False
+                reason = "Rule condition tree has no conditions configured"
+            else:
+                rule_matched = evaluate_tree(tree, ctx)
+                if rule_matched:
+                    reason = f"Matched {len(matched_conditions)} of {len(evaluated_conditions)} condition(s) in condition tree"
+                else:
+                    reason = f"Did not match condition tree ({len(failed_conditions)} of {len(evaluated_conditions)} condition(s) failed)"
+        else:
+            conds = rule.get("conditions") or []
+            if not conds:
+                rule_matched = False
+                reason = "Rule has no conditions configured"
+            else:
+                groups = _build_groups(rule)
+                all_passed = True
+                for g in groups:
+                    group_matched_any = False
+                    for c in g:
+                        if _is_group(c):
+                            for leaf in _collect_leaves(c):
+                                detail = evaluate_condition_detailed(ctx, leaf)
+                                evaluated_conditions.append(detail)
+                                if detail["matched"]:
+                                    matched_conditions.append(detail)
+                                else:
+                                    failed_conditions.append(detail)
+                            if evaluate_tree(c, ctx):
+                                group_matched_any = True
+                        else:
+                            detail = evaluate_condition_detailed(ctx, c)
+                            evaluated_conditions.append(detail)
+                            if detail["matched"]:
+                                matched_conditions.append(detail)
+                                group_matched_any = True
+                            else:
+                                failed_conditions.append(detail)
+                    if not group_matched_any:
+                        all_passed = False
+                rule_matched = all_passed
+                if rule_matched:
+                    reason = f"Matched {len(matched_conditions)} condition(s)"
+                else:
+                    reason = f"Did not match ({len(failed_conditions)} of {len(evaluated_conditions)} condition(s) failed)"
 
-    return matches
+        checked_entry = {
+            "rule_id": rule_id,
+            "rule_name": rule_name,
+            "priority": rule_priority,
+            "enabled": True,
+            "entity_category": rule_cat,
+            "checked": True,
+            "matched": rule_matched,
+            "should_trigger": rule_matched,
+            "status": "matched" if rule_matched else "not_matched",
+            "reason": reason,
+            "incident": incident_info,
+            "evaluated_conditions": evaluated_conditions,
+            "matched_conditions": matched_conditions,
+            "failed_conditions": failed_conditions,
+            "configured_actions": rule.get("actions") or [],
+        }
+        rules_checked.append(checked_entry)
 
+        if rule_matched:
+            matches.append({
+                "rule": rule,
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "should_trigger": True,
+                "incident": incident_info,
+                "matched": matched_conditions,
+                "evaluated_conditions": evaluated_conditions,
+            })
+
+    return rules_checked, rules_skipped, matches
+
+
+def _parse_input_safely(raw, default=None):
+    if raw is None:
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s or s.startswith("$"):
+            return default
+        try:
+            val = json.loads(s)
+            if isinstance(val, str):
+                try:
+                    val = json.loads(val)
+                except Exception:
+                    pass
+            return val
+        except Exception:
+            return default
+    return default
+
+
+def _extract_rules(raw_rules_input):
+    parsed = _parse_input_safely(raw_rules_input, default=[])
+    if isinstance(parsed, dict):
+        if "values" in parsed and isinstance(parsed["values"], list):
+            parsed = parsed["values"]
+        elif "message" in parsed:
+            msg = _parse_input_safely(parsed["message"], default=[])
+            if isinstance(msg, list):
+                parsed = msg
+            elif isinstance(msg, dict) and isinstance(msg.get("values"), list):
+                parsed = msg["values"]
+            elif isinstance(msg, dict):
+                parsed = [msg]
+        elif "value" in parsed:
+            val = parsed["value"]
+            if isinstance(val, str):
+                val = _parse_input_safely(val, default=[])
+            if isinstance(val, list):
+                parsed = val
+            elif isinstance(val, dict):
+                parsed = [val]
+        elif "data" in parsed and isinstance(parsed["data"], list):
+            parsed = parsed["data"]
+        else:
+            parsed = [parsed]
+
+    rules = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, str):
+                item = _parse_input_safely(item)
+            if not isinstance(item, dict):
+                continue
+            if "value" in item and len(item) <= 4 and ("key" in item or "id" in item):
+                inner = item["value"]
+                if isinstance(inner, str):
+                    inner = _parse_input_safely(inner)
+                if isinstance(inner, dict):
+                    item = inner
+            resolved_cat = _resolve_rule_category(item)
+            item["entityCategory"] = resolved_cat
+            rules.append(item)
+    return rules
+
+
+def _infer_category_from_entity(entity: dict, fallback: str) -> str:
+    if not isinstance(entity, dict):
+        return normalize_category(fallback) or "shuffle-security_incidents"
+    explicit = entity.get("entityCategory") or entity.get("category_name")
+    if isinstance(explicit, str) and explicit.strip():
+        return normalize_category(explicit)
+    if entity.get("cve") or entity.get("vuln_id") or entity.get("osv_id") or isinstance(entity.get("affected"), list):
+        return "shuffle-security_vulns"
+    if entity.get("purl") or entity.get("ecosystem") or entity.get("package_manager"):
+        return "shuffle-security_packages"
+    if entity.get("vendor") and entity.get("version") and not entity.get("finding_uid"):
+        return "shuffle-security_software"
+    if entity.get("username") or (entity.get("email") and entity.get("role") and not entity.get("finding_uid")):
+        return "shuffle-security_users"
+    if entity.get("hostname") and entity.get("ip") and not entity.get("finding_uid"):
+        return "shuffle-security_assets"
+    return normalize_category(fallback) or "shuffle-security_incidents"
+
+
+# ── Validation Entrypoint ──────────────────────────────────────────────────
+
+raw_exec = r"""$exec"""
+raw_datastore_key = r"""$exec.shuffle_datastore.key"""
+raw_datastore_cat = r"""$exec.shuffle_datastore.category"""
+
+cur_exec = _parse_input_safely(raw_exec, default={})
+datastore_meta = {}
+if isinstance(cur_exec, dict):
+    if isinstance(cur_exec.get("shuffle_datastore"), dict):
+        datastore_meta = cur_exec.pop("shuffle_datastore", {})
+    for wrapper_key in ("incident", "vulnerability", "vuln", "asset", "infrastructure", "package", "software", "user", "entity", "item"):
+        if wrapper_key in cur_exec and isinstance(cur_exec[wrapper_key], dict) and len(cur_exec) == 1:
+            cur_exec = cur_exec[wrapper_key]
+            break
+
+if not isinstance(cur_exec, dict) or not cur_exec:
+    print(json.dumps({
+        "success": False,
+        "matched": False,
+        "matched_count": 0,
+        "reason": "No valid entity data found in execution argument",
+        "matches": [],
+    }))
+    exit()
+
+default_target_category = "__TARGET_CATEGORY__"
+item_key = raw_datastore_key.strip() if isinstance(raw_datastore_key, str) else ""
+if not item_key or item_key.startswith("$"):
+    item_key = str(datastore_meta.get("key") or "").strip()
+if not item_key or item_key.startswith("$"):
+    item_key = (
+        cur_exec.get("finding_uid")
+        or cur_exec.get("id")
+        or cur_exec.get("key")
+        or cur_exec.get("cve")
+        or cur_exec.get("purl")
+        or cur_exec.get("hostname")
+        or cur_exec.get("username")
+        or cur_exec.get("email")
+        or cur_exec.get("name")
+        or ""
+    )
+
+item_cat = normalize_category(raw_datastore_cat)
+if not item_cat:
+    item_cat = normalize_category(datastore_meta.get("category"))
+if not item_cat:
+    item_cat = _infer_category_from_entity(cur_exec, default_target_category)
+
+item_title = (
+    cur_exec.get("title")
+    or cur_exec.get("name")
+    or cur_exec.get("cve")
+    or cur_exec.get("hostname")
+    or cur_exec.get("username")
+    or cur_exec.get("email")
+    or cur_exec.get("purl")
+    or cur_exec.get("id")
+    or ""
+)
+incident_ref = {
+    "key": item_key,
+    "id": cur_exec.get("finding_uid") or cur_exec.get("id") or item_key,
+    "finding_uid": cur_exec.get("finding_uid") or "",
+    "title": item_title,
+    "category": item_cat,
+    "severity": cur_exec.get("severity") or "",
+    "status": cur_exec.get("status") or "",
+}
+
+raw_rules_input = r"""$get_all_rules_from_the_system"""
+rules = _extract_rules(raw_rules_input)
+
+if not rules:
+    print(json.dumps({
+        "matched": False,
+        "category": item_cat,
+        "key": item_key,
+        "matched_rules": [],
+        "unmatched_rules": [],
+        "reason": "No routing rules found in shuffle-security_routing",
+        "matches": [],
+    }))
+    exit()
+
+ctx = dict(cur_exec)
+ctx["category"] = item_cat
+if not ctx.get("title"):
+    ctx["title"] = item_title
+if not ctx.get("description"):
+    ctx["description"] = (
+        cur_exec.get("message")
+        or cur_exec.get("summary")
+        or cur_exec.get("details")
+        or ""
+    )
+if not ctx.get("rawOCSF") and isinstance(cur_exec.get("rawOCSF"), dict):
+    ctx["rawOCSF"] = cur_exec["rawOCSF"]
+
+rules_checked, rules_skipped, matches = inspect_and_evaluate_rules(ctx, rules, item_cat, incident_ref)
+
+def _summarize_cond(c):
+    if not isinstance(c, dict):
+        return str(c)
+    f = c.get("field") or ""
+    op = c.get("op") or ""
+    exp = c.get("expected")
+    act = c.get("actual_values")
+    act_str = act[0] if isinstance(act, list) and len(act) == 1 else act
+    return f"{f} {op} {json.dumps(exp)} (actual: {json.dumps(act_str)})"
+
+matched_summary = []
+unmatched_summary = []
+for rc in rules_checked:
+    entry = {
+        "rule_id": rc.get("rule_id") or "",
+        "rule_name": rc.get("rule_name") or "",
+        "priority": rc.get("priority", 100),
+    }
+    if rc.get("matched"):
+        entry["matched_on"] = [_summarize_cond(c) for c in (rc.get("matched_conditions") or [])]
+        matched_summary.append(entry)
+    else:
+        failed = [_summarize_cond(c) for c in (rc.get("failed_conditions") or [])]
+        entry["reason"] = "; ".join(failed) if failed else (rc.get("reason") or "Did not match")
+        unmatched_summary.append(entry)
+
+for rs in rules_skipped:
+    unmatched_summary.append({
+        "rule_id": rs.get("rule_id") or "",
+        "rule_name": rs.get("rule_name") or "",
+        "priority": rs.get("priority", 100),
+        "reason": rs.get("reason") or "Skipped",
+    })
+
+print(json.dumps({
+    "matched": len(matches) > 0,
+    "category": item_cat,
+    "key": item_key,
+    "matched_rules": matched_summary,
+    "unmatched_rules": unmatched_summary,
+    "matches": matches,
+}))`
+
+	return strings.ReplaceAll(script, "__TARGET_CATEGORY__", targetCategory)
+}
+
+func getRoutingExecutionScript(targetCategory string) string {
+	if targetCategory == "" {
+		targetCategory = "shuffle-security_incidents"
+	}
+
+	script := `import json
+import os
+import re
+import time
 
 # ── Action application helpers ─────────────────────────────────────────────
+
+BASELINE_CATEGORIES = {
+    "incidents": "shuffle-security_incidents",
+    "incident": "shuffle-security_incidents",
+    "vulns": "shuffle-security_vulns",
+    "vuln": "shuffle-security_vulns",
+    "vulnerabilities": "shuffle-security_vulns",
+    "vulnerability": "shuffle-security_vulns",
+    "infrastructure": "shuffle-security_infrastructure",
+    "assets": "shuffle-security_assets",
+    "asset": "shuffle-security_assets",
+    "packages": "shuffle-security_packages",
+    "package": "shuffle-security_packages",
+    "software": "shuffle-security_software",
+    "users": "shuffle-security_users",
+    "user": "shuffle-security_users",
+}
+
+
+def normalize_category(cat) -> str:
+    if not cat or not isinstance(cat, str):
+        return ""
+    s = cat.strip()
+    if not s or s.startswith("$"):
+        return ""
+    low = s.lower()
+    if low.startswith("shuffle-security_"):
+        suffix = low[len("shuffle-security_"):]
+        if suffix in BASELINE_CATEGORIES:
+            return BASELINE_CATEGORIES[suffix]
+        return s
+    if low in BASELINE_CATEGORIES:
+        return BASELINE_CATEGORIES[low]
+    return s
+
 
 def normalize_severity(v):
     if not v:
@@ -6305,15 +7830,65 @@ def parse_action_value(val):
     return s
 
 
-def set_deep(d, path, value):
-    parts = [p for p in path.split(".") if p]
+def _split_path(path: str) -> list:
+    if not path or not isinstance(path, str):
+        return []
+    s = path.strip()
+    if s.startswith("$."):
+        s = s[2:]
+    elif s.startswith("$"):
+        s = s[1:]
+    normalized = re.sub(r"\[['\"]?([^'\"\]]+)['\"]?\]", r".\1", s)
+    return [p for p in normalized.split(".") if p != ""]
+
+
+def get_deep(d, path):
+    parts = _split_path(path) if isinstance(path, str) else list(path or [])
     cur = d
-    for p in parts[:-1]:
-        if p not in cur or not isinstance(cur[p], dict):
-            cur[p] = {}
-        cur = cur[p]
-    if parts:
-        cur[parts[-1]] = value
+    for p in parts:
+        if isinstance(cur, dict):
+            if p not in cur:
+                return None
+            cur = cur[p]
+        elif isinstance(cur, list) and p.isdigit():
+            idx = int(p)
+            if 0 <= idx < len(cur):
+                cur = cur[idx]
+            else:
+                return None
+        else:
+            return None
+    return cur
+
+
+def set_deep(d, path, value):
+    parts = _split_path(path) if isinstance(path, str) else list(path or [])
+    if not parts or not isinstance(d, dict):
+        return
+    cur = d
+    for i, p in enumerate(parts[:-1]):
+        next_p = parts[i + 1]
+        if isinstance(cur, dict):
+            if p not in cur or not isinstance(cur[p], (dict, list)):
+                cur[p] = [] if next_p.isdigit() else {}
+            cur = cur[p]
+        elif isinstance(cur, list) and p.isdigit():
+            idx = int(p)
+            while len(cur) <= idx:
+                cur.append({} if not next_p.isdigit() else [])
+            if not isinstance(cur[idx], (dict, list)):
+                cur[idx] = {} if not next_p.isdigit() else []
+            cur = cur[idx]
+        else:
+            return
+    last = parts[-1]
+    if isinstance(cur, dict):
+        cur[last] = value
+    elif isinstance(cur, list) and last.isdigit():
+        idx = int(last)
+        while len(cur) <= idx:
+            cur.append(None)
+        cur[idx] = value
 
 
 def _parse_input_safely(raw, default=None):
@@ -6338,140 +7913,279 @@ def _parse_input_safely(raw, default=None):
     return default
 
 
-def _extract_rules(raw_rules_input):
-    parsed = _parse_input_safely(raw_rules_input, default=[])
-    if isinstance(parsed, dict):
-        if "values" in parsed and isinstance(parsed["values"], list):
-            parsed = parsed["values"]
-        elif "value" in parsed:
-            val = parsed["value"]
-            if isinstance(val, str):
-                val = _parse_input_safely(val, default=[])
-            if isinstance(val, list):
-                parsed = val
-            elif isinstance(val, dict):
-                parsed = [val]
-        elif "data" in parsed and isinstance(parsed["data"], list):
-            parsed = parsed["data"]
-        else:
-            parsed = [parsed]
+def _infer_category_from_entity(entity: dict, fallback: str) -> str:
+    if not isinstance(entity, dict):
+        return normalize_category(fallback) or "shuffle-security_incidents"
+    explicit = entity.get("entityCategory") or entity.get("category_name")
+    if isinstance(explicit, str) and explicit.strip():
+        return normalize_category(explicit)
+    if entity.get("cve") or entity.get("vuln_id") or entity.get("osv_id") or isinstance(entity.get("affected"), list):
+        return "shuffle-security_vulns"
+    if entity.get("purl") or entity.get("ecosystem") or entity.get("package_manager"):
+        return "shuffle-security_packages"
+    if entity.get("vendor") and entity.get("version") and not entity.get("finding_uid"):
+        return "shuffle-security_software"
+    if entity.get("username") or (entity.get("email") and entity.get("role") and not entity.get("finding_uid")):
+        return "shuffle-security_users"
+    if entity.get("hostname") and entity.get("ip") and not entity.get("finding_uid"):
+        return "shuffle-security_assets"
+    return normalize_category(fallback) or "shuffle-security_incidents"
 
-    rules = []
-    if isinstance(parsed, list):
-        for item in parsed:
-            if isinstance(item, str):
-                item = _parse_input_safely(item)
-            if not isinstance(item, dict):
-                continue
-            if "value" in item and len(item) <= 4 and ("key" in item or "id" in item):
-                inner = item["value"]
-                if isinstance(inner, str):
-                    inner = _parse_input_safely(inner)
-                if isinstance(inner, dict):
-                    rules.append(inner)
-                else:
-                    rules.append(item)
-            else:
-                rules.append(item)
-    return rules
+
+def _summarize_cond(c):
+    if isinstance(c, str):
+        return c
+    if not isinstance(c, dict):
+        return str(c)
+    f = c.get("field") or ""
+    op = c.get("op") or ""
+    exp = c.get("expected")
+    act = c.get("actual_values")
+    act_str = act[0] if isinstance(act, list) and len(act) == 1 else act
+    return f"{f} {op} {json.dumps(exp)} (actual: {json.dumps(act_str)})"
+
+
+def _rule_priority(match_item):
+    if not isinstance(match_item, dict):
+        return 100
+    rule = match_item.get("rule")
+    raw_p = rule.get("priority", 100) if isinstance(rule, dict) else match_item.get("priority", 100)
+    try:
+        return int(raw_p)
+    except Exception:
+        return 100
 
 
 # ── Execution Entrypoint ───────────────────────────────────────────────────
 
 raw_exec = r"""$exec"""
+raw_datastore_key = r"""$exec.shuffle_datastore.key"""
+raw_datastore_cat = r"""$exec.shuffle_datastore.category"""
+raw_datastore_org = r"""$exec.shuffle_datastore.org_id"""
+raw_validation = r"""$find_relevant_rules_for_category"""
+
 cur_exec = _parse_input_safely(raw_exec, default={})
-if isinstance(cur_exec, dict) and "incident" in cur_exec and isinstance(cur_exec["incident"], dict):
-    cur_exec = cur_exec["incident"]
+datastore_meta = {}
+if isinstance(cur_exec, dict):
+    if isinstance(cur_exec.get("shuffle_datastore"), dict):
+        datastore_meta = cur_exec.pop("shuffle_datastore", {})
+    for wrapper_key in ("incident", "vulnerability", "vuln", "asset", "infrastructure", "package", "software", "user", "entity", "item"):
+        if wrapper_key in cur_exec and isinstance(cur_exec[wrapper_key], dict) and len(cur_exec) == 1:
+            cur_exec = cur_exec[wrapper_key]
+            break
+
+source_org_id = str(datastore_meta.get("org_id") or "").strip()
+if not source_org_id or source_org_id.startswith("$"):
+    if isinstance(raw_datastore_org, str) and not raw_datastore_org.strip().startswith("$"):
+        source_org_id = raw_datastore_org.strip()
+if not source_org_id and isinstance(cur_exec, dict):
+    source_org_id = str(cur_exec.get("org_id") or "").strip()
 
 if not isinstance(cur_exec, dict) or not cur_exec:
     print(json.dumps({
-        "success": False,
-        "reason": "No valid incident data found in $exec",
+        "matched": False,
+        "matched_rules": [],
+        "unmatched_rules": [],
+        "modified_fields": {},
+        "what_happened": ["No valid entity data found in execution argument"],
+        "db_updated": False,
+        "move_to_org": False,
+        "target_org_id": "",
+        "stats_key": "routing_rules_matched",
+        "stats_value": 0,
     }))
     exit()
 
-raw_rules_input = r"""$get_routing_rules"""
-rules = _extract_rules(raw_rules_input)
+validation_res = _parse_input_safely(raw_validation, default={})
+if isinstance(validation_res, dict) and "message" in validation_res:
+    inner_msg = _parse_input_safely(validation_res.get("message"), default=None)
+    if isinstance(inner_msg, dict):
+        validation_res = inner_msg
+if not isinstance(validation_res, dict):
+    validation_res = {}
 
-if not rules:
+matches = validation_res.get("matches") or []
+if not isinstance(matches, list):
+    matches = []
+
+unmatched_rules = validation_res.get("unmatched_rules") or []
+if not isinstance(unmatched_rules, list):
+    unmatched_rules = []
+
+default_target_category = "__TARGET_CATEGORY__"
+item_key = str(validation_res.get("key") or "").strip()
+if not item_key or item_key.startswith("$"):
+    item_key = raw_datastore_key.strip() if isinstance(raw_datastore_key, str) else ""
+if not item_key or item_key.startswith("$"):
+    item_key = str(datastore_meta.get("key") or "").strip()
+if not item_key or item_key.startswith("$"):
+    item_key = (
+        cur_exec.get("finding_uid")
+        or cur_exec.get("id")
+        or cur_exec.get("key")
+        or cur_exec.get("cve")
+        or cur_exec.get("purl")
+        or cur_exec.get("hostname")
+        or cur_exec.get("username")
+        or cur_exec.get("email")
+        or cur_exec.get("name")
+        or ""
+    )
+
+item_cat = normalize_category(validation_res.get("category"))
+if not item_cat:
+    item_cat = normalize_category(raw_datastore_cat)
+if not item_cat:
+    item_cat = normalize_category(datastore_meta.get("category"))
+if not item_cat:
+    item_cat = _infer_category_from_entity(cur_exec, default_target_category)
+
+if not matches:
     print(json.dumps({
-        "success": True,
-        "changed": False,
-        "reason": "No routing rules found in shuffle-security_routing",
-        "incident": cur_exec,
+        "matched": False,
+        "matched_rules": [],
+        "unmatched_rules": unmatched_rules,
+        "modified_fields": {},
+        "what_happened": ["No rules matched"],
+        "db_updated": False,
+        "move_to_org": False,
+        "target_org_id": "",
+        "stats_key": "routing_rules_matched",
+        "stats_value": 0,
     }))
     exit()
 
-ctx = dict(cur_exec)
-if not ctx.get("title"):
-    ctx["title"] = cur_exec.get("cve") or cur_exec.get("id") or ""
-if not ctx.get("description"):
-    ctx["description"] = cur_exec.get("message") or cur_exec.get("summary") or ""
-if not ctx.get("rawOCSF") and isinstance(cur_exec.get("rawOCSF"), dict):
-    ctx["rawOCSF"] = cur_exec["rawOCSF"]
-
-target_entity_category = "__TARGET_CATEGORY__"
-matches = evaluate_routing_rules(ctx, rules, target_entity_category)
+# Sort all matched rules strictly by priority ascending before running any actions
+matches_sorted = sorted(matches, key=_rule_priority)
 
 now_ms = int(time.time() * 1000)
 changed = False
-agent_prompts = []
 prev_status = str(cur_exec.get("status") or "").lower()
 
-for m in matches:
-    rule = m.get("rule") or {}
-    rule_name = rule.get("name", "Routing rule")
+modified_fields = {}
+what_happened = []
+rule_reports = {}
+rule_order = []
+
+def record_field_change(field_name, old_val, new_val, rule_name):
+    if field_name not in modified_fields:
+        modified_fields[field_name] = {
+            "from": old_val,
+            "to": new_val,
+            "by_rule": rule_name,
+        }
+    else:
+        modified_fields[field_name]["to"] = new_val
+        prev_by = modified_fields[field_name]["by_rule"]
+        if rule_name not in str(prev_by):
+            modified_fields[field_name]["by_rule"] = f"{prev_by} -> {rule_name}"
+
+# Prepare per-rule report entries in priority order
+for idx, m in enumerate(matches_sorted):
+    rule = m.get("rule") if isinstance(m, dict) else None
+    if not isinstance(rule, dict):
+        continue
+    rule_id = str(rule.get("id") or m.get("rule_id") or f"rule_{idx}")
+    rule_name = str(rule.get("name") or m.get("rule_name") or "Routing rule")
+    rule_priority = _rule_priority(m)
+    rk = f"{idx}:{rule_id}:{rule_name}"
+    rule_order.append((rk, m, rule, rule_id, rule_name, rule_priority))
+    rule_reports[rk] = {
+        "rule_id": rule_id,
+        "rule_name": rule_name,
+        "priority": rule_priority,
+        "matched_on": [_summarize_cond(c) for c in (m.get("matched") or [])],
+        "did": [],
+    }
+
+# ── PHASE 1: Apply all field & metadata modifications in priority order ────
+FIELD_ACTION_TYPES = {
+    "set_severity",
+    "set_status",
+    "set_priority",
+    "add_label",
+    "assign_to",
+    "set_field",
+    "add_comment",
+}
+
+for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
     actions = rule.get("actions") or []
     for action in actions:
+        if not isinstance(action, dict):
+            continue
         atype = action.get("type")
-        if atype == "suggest_move":
-            target_org = action.get("targetOrgId")
-            if target_org:
-                raw_ocsf = cur_exec.setdefault("rawOCSF", {})
-                meta = raw_ocsf.setdefault("metadata", {})
-                ext = meta.setdefault("extensions", {})
-                custom_attrs = ext.setdefault("custom_attributes", {})
-                suggs = custom_attrs.setdefault("routing_suggestions", [])
-                already = any(s.get("ruleId") == rule.get("id") and s.get("status") == "pending" for s in suggs if isinstance(s, dict))
-                if not already:
-                    suggs.append({
-                        "ruleId": rule.get("id", ""),
-                        "ruleName": rule_name,
-                        "targetOrgId": target_org,
-                        "targetOrgName": action.get("targetOrgName", ""),
-                        "reason": action.get("reason", ""),
-                        "suggestedTs": now_ms,
-                        "status": "pending",
-                    })
-                    changed = True
-        elif atype == "set_severity":
+        if atype not in FIELD_ACTION_TYPES:
+            continue
+
+        if atype == "set_severity":
             sev = normalize_severity(action.get("value"))
-            if sev and cur_exec.get("severity") != sev:
+            prev_val = cur_exec.get("severity")
+            if sev and prev_val != sev:
                 cur_exec["severity"] = sev
                 changed = True
+                record_field_change("severity", prev_val, sev, rule_name)
+                msg = f"severity: '{prev_val}' -> '{sev}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"severity already '{prev_val}' (no change)")
+
         elif atype == "set_status":
             st = normalize_status(action.get("value"))
-            if st and cur_exec.get("status") != st:
+            prev_val = cur_exec.get("status")
+            if st and prev_val != st:
                 cur_exec["status"] = st
                 changed = True
+                record_field_change("status", prev_val, st, rule_name)
+                msg = f"status: '{prev_val}' -> '{st}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"status already '{prev_val}' (no change)")
+
         elif atype == "set_priority":
             pri = str(action.get("value") or "").strip()
-            if pri and cur_exec.get("priority") != pri:
+            prev_val = cur_exec.get("priority")
+            if pri and prev_val != pri:
                 cur_exec["priority"] = pri
-                raw_ocsf = cur_exec.setdefault("rawOCSF", {})
-                raw_ocsf["priority"] = pri
+                cur_exec.setdefault("rawOCSF", {})["priority"] = pri
                 changed = True
+                record_field_change("priority", prev_val, pri, rule_name)
+                msg = f"priority: '{prev_val}' -> '{pri}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"priority already '{prev_val}' (no change)")
+
         elif atype == "add_label":
             lbl = str(action.get("value") or "").strip()
-            cur_labels = cur_exec.setdefault("labels", [])
+            cur_labels = list(cur_exec.get("labels") or [])
             if lbl and lbl not in cur_labels:
+                prev_labels = list(cur_labels)
                 cur_labels.append(lbl)
+                cur_exec["labels"] = cur_labels
                 changed = True
+                record_field_change("labels", prev_labels, list(cur_labels), rule_name)
+                msg = f"added label '{lbl}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"label '{lbl}' already present (no change)")
+
         elif atype == "assign_to":
             ass = str(action.get("value") or "").strip()
-            if ass and cur_exec.get("assignee") != ass:
+            prev_val = cur_exec.get("assignee")
+            if ass and prev_val != ass:
                 cur_exec["assignee"] = ass
                 changed = True
+                record_field_change("assignee", prev_val, ass, rule_name)
+                msg = f"assignee: '{prev_val}' -> '{ass}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"assignee already '{prev_val}' (no change)")
+
         elif atype == "add_comment":
             txt = str(action.get("value") or "").strip()
             if txt:
@@ -6481,7 +8195,7 @@ for m in matches:
                     cur_act.append({
                         "id": f"routing-comment-{now_ms}-{len(cur_act)}",
                         "type": "comment",
-                        "user": "Incident Routing Rules",
+                        "user": "Automated Routing Rules",
                         "timestamp": now_ms,
                         "content": txt,
                         "details": {"source": "incident_routing_rule", "rule": rule_name},
@@ -6489,6 +8203,295 @@ for m in matches:
                         "ai_handled": True,
                     })
                     changed = True
+                    record_field_change("activity", "existing activity", f"added comment: {txt}", rule_name)
+                    msg = f"added comment: '{txt}'"
+                    rule_reports[rk]["did"].append(msg)
+                    what_happened.append(f"[{rule_name}] {msg}")
+                else:
+                    rule_reports[rk]["did"].append("comment already present (no change)")
+
+        elif atype == "set_field":
+            field = str(action.get("field") or "").strip()
+            if field:
+                val = parse_action_value(action.get("value"))
+                canonical = field[len("rawOCSF."):] if field.startswith("rawOCSF.") else field
+                if canonical == "title":
+                    prev_val = cur_exec.get("title")
+                    new_val = str(val)
+                    cur_exec["title"] = new_val
+                    target_field = "title"
+                elif canonical in ("description", "desc", "message"):
+                    prev_val = cur_exec.get("description") or cur_exec.get("message")
+                    new_val = str(val)
+                    cur_exec["message"] = new_val
+                    cur_exec["description"] = new_val
+                    target_field = "description"
+                elif canonical == "severity":
+                    prev_val = cur_exec.get("severity")
+                    new_val = normalize_severity(val) or prev_val
+                    if new_val:
+                        cur_exec["severity"] = new_val
+                    target_field = "severity"
+                elif canonical == "status":
+                    prev_val = cur_exec.get("status")
+                    new_val = normalize_status(val) or prev_val
+                    if new_val:
+                        cur_exec["status"] = new_val
+                    target_field = "status"
+                elif canonical == "assignee":
+                    prev_val = cur_exec.get("assignee")
+                    new_val = str(val)
+                    cur_exec["assignee"] = new_val
+                    target_field = "assignee"
+                elif canonical == "priority":
+                    prev_val = cur_exec.get("priority")
+                    new_val = str(val)
+                    cur_exec["priority"] = new_val
+                    cur_exec.setdefault("rawOCSF", {})["priority"] = new_val
+                    target_field = "priority"
+                elif canonical in ("labels", "types"):
+                    lbl = str(val).strip()
+                    cur_labels = list(cur_exec.get("labels") or [])
+                    prev_val = list(cur_labels)
+                    if lbl and lbl not in cur_labels:
+                        cur_labels.append(lbl)
+                        cur_exec["labels"] = cur_labels
+                    new_val = list(cur_labels)
+                    target_field = "labels"
+                elif field.startswith("rawOCSF."):
+                    subpath = field[len("rawOCSF."):]
+                    prev_val = get_deep(cur_exec.get("rawOCSF") or {}, subpath)
+                    new_val = val
+                    set_deep(cur_exec.setdefault("rawOCSF", {}), subpath, val)
+                    target_field = field
+                elif field.startswith("customFields.") or field.startswith("custom_fields."):
+                    cf = cur_exec.setdefault("customFields", {})
+                    clean_k = re.sub(r"^(customFields\.|custom_fields\.)", "", field)
+                    prev_val = cf.get(clean_k) if clean_k in cf else get_deep(cf, clean_k)
+                    new_val = val
+                    cf[clean_k] = val
+                    if "." in clean_k or "[" in clean_k:
+                        set_deep(cf, clean_k, val)
+                    target_field = f"customFields.{clean_k}"
+                elif "." in field or "[" in field:
+                    top_key = _split_path(field)[0] if _split_path(field) else ""
+                    raw_ocsf = cur_exec.get("rawOCSF")
+                    if top_key and top_key in cur_exec:
+                        prev_val = get_deep(cur_exec, field)
+                        set_deep(cur_exec, field, val)
+                        if isinstance(raw_ocsf, dict) and top_key in raw_ocsf:
+                            set_deep(raw_ocsf, field, val)
+                        target_field = field
+                    elif isinstance(raw_ocsf, dict) and top_key and top_key in raw_ocsf:
+                        prev_val = get_deep(raw_ocsf, field)
+                        set_deep(raw_ocsf, field, val)
+                        target_field = f"rawOCSF.{field}"
+                    else:
+                        prev_val = get_deep(cur_exec, field)
+                        set_deep(cur_exec, field, val)
+                        cf = cur_exec.setdefault("customFields", {})
+                        cf[field] = val
+                        target_field = field
+                    new_val = val
+                else:
+                    cf = cur_exec.setdefault("customFields", {})
+                    clean_k = re.sub(r"^(customFields\.|custom_fields\.)", "", field)
+                    prev_val = cf.get(clean_k) if clean_k in cf else cur_exec.get(clean_k)
+                    new_val = val
+                    cf[clean_k] = val
+                    if clean_k in cur_exec:
+                        cur_exec[clean_k] = val
+                    target_field = f"customFields.{clean_k}"
+
+                if prev_val != new_val:
+                    changed = True
+                    record_field_change(target_field, prev_val, new_val, rule_name)
+                    msg = f"{target_field}: '{prev_val}' -> '{new_val}'"
+                    rule_reports[rk]["did"].append(msg)
+                    what_happened.append(f"[{rule_name}] {msg}")
+                else:
+                    rule_reports[rk]["did"].append(f"{target_field} already '{prev_val}' (no change)")
+
+# Auto-resolve audit comment after all status changes have been evaluated
+resolving = {"resolved", "closed"}
+now_status = str(cur_exec.get("status") or "").lower()
+if prev_status not in resolving and now_status in resolving:
+    status_lbl = "Resolved" if now_status == "resolved" else "Closed"
+    note = f"{status_lbl} automatically by routing rule."
+    cur_act = cur_exec.setdefault("activity", [])
+    cur_act.append({
+        "id": f"routing-autoresolve-{now_ms}-{len(cur_act)}",
+        "type": "comment",
+        "user": "Automated Routing Rules",
+        "timestamp": now_ms,
+        "content": note,
+        "details": {"source": "incident_routing_rule", "auto_resolved": True},
+        "attachments": [],
+        "ai_handled": True,
+    })
+    changed = True
+    what_happened.append(f"Added auto-{now_status} activity note")
+
+# ── PHASE 2: Apply forwarding / move / agent actions in priority order ─────
+move_to_org = False
+target_org_id = ""
+target_region = ""
+target_region_url = ""
+
+SHUFFLE_CANONICAL_REGIONS = {
+    "uk": "uk",
+    "gb": "uk",
+    "eu": "uk",
+    "default": "uk",
+    "europe-west2": "uk",
+    "frankfurt": "frankfurt",
+    "eu-2": "frankfurt",
+    "eu2": "frankfurt",
+    "europe-west3": "frankfurt",
+    "california": "california",
+    "us": "california",
+    "us-west2": "california",
+    "ca": "ca",
+    "northamerica-northeast1": "ca",
+    "au": "au",
+    "aus": "au",
+    "australia": "au",
+    "australia-southeast1": "au",
+    "shuffle-australia-southeast1": "au",
+}
+
+def _detect_cloud_domain_family(candidate_url):
+    u = str(candidate_url or "").strip().lower()
+    if not u:
+        return ""
+    host = u.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+    if host == "shuffle.security" or host.endswith(".shuffle.security") or host == "security.shuffler.io":
+        return "shuffle.security"
+    if host == "shuffler.io" or host.endswith(".shuffler.io"):
+        return "shuffler.io"
+    return ""
+
+def normalize_cloud_region(raw_url, raw_reg, current_url=None):
+    reg_raw = str(raw_reg or "").strip().lower()
+    reg = SHUFFLE_CANONICAL_REGIONS.get(reg_raw, reg_raw)
+    url = str(raw_url or "").strip().rstrip("/")
+
+    explicit_uk_sub = False
+    url_domain_family = ""
+    if url:
+        low = url.lower()
+        host = low.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+        if host.endswith(".shuffle.security"):
+            url_domain_family = "shuffle.security"
+            sub = host[:-len(".shuffle.security")]
+            if sub in ("", "www"):
+                sub = "uk"
+            reg = reg or SHUFFLE_CANONICAL_REGIONS.get(sub, sub)
+        elif host in ("shuffle.security", "security.shuffler.io"):
+            url_domain_family = "shuffle.security"
+            reg = reg or "uk"
+        elif host.endswith(".shuffler.io"):
+            url_domain_family = "shuffler.io"
+            sub = host[:-len(".shuffler.io")]
+            if sub == "uk":
+                explicit_uk_sub = True
+            if sub in ("", "www"):
+                sub = "uk"
+            reg = reg or SHUFFLE_CANONICAL_REGIONS.get(sub, sub)
+        elif host == "shuffler.io":
+            url_domain_family = "shuffler.io"
+            reg = reg or "uk"
+
+    active_domain_family = _detect_cloud_domain_family(current_url)
+    if not active_domain_family and ("self" in locals() or "self" in globals()):
+        active_domain_family = _detect_cloud_domain_family(getattr(self, "url", ""))
+    if not active_domain_family:
+        active_domain_family = _detect_cloud_domain_family(os.environ.get("SHUFFLE_CLOUD_DOMAIN") or os.environ.get("BASE_URL") or "")
+    if not active_domain_family:
+        active_domain_family = url_domain_family
+
+    if reg and (active_domain_family or not url):
+        canonical_reg = SHUFFLE_CANONICAL_REGIONS.get(reg, reg)
+        reg = canonical_reg
+        domain_family = active_domain_family or "shuffler.io"
+        if domain_family == "shuffle.security":
+            sub = canonical_reg if canonical_reg else "uk"
+            url = f"https://{sub}.shuffle.security"
+        else:
+            if canonical_reg in ("", "uk"):
+                url = "https://uk.shuffler.io" if explicit_uk_sub else "https://shuffler.io"
+            else:
+                url = f"https://{canonical_reg}.shuffler.io"
+
+    if not url and ("self" in locals() or "self" in globals()):
+        fallback_url = str(getattr(self, "url", "") or "").strip().rstrip("/")
+        if fallback_url:
+            url = fallback_url
+    return reg, url
+
+for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
+    actions = rule.get("actions") or []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        atype = action.get("type")
+        if atype in FIELD_ACTION_TYPES:
+            continue
+
+        if atype in ("suggest_move", "move"):
+            target_org = str(action.get("targetOrgId") or "").strip()
+            target_org_name = str(action.get("targetOrgName") or "").strip()
+            raw_region_url = action.get("targetRegionUrl") or action.get("region_url") or ""
+            raw_region = action.get("targetRegion") or action.get("region") or ""
+            resolved_reg, resolved_reg_url = normalize_cloud_region(raw_region_url, raw_region)
+            if target_org:
+                raw_ocsf = cur_exec.setdefault("rawOCSF", {})
+                meta = raw_ocsf.setdefault("metadata", {})
+                ext = meta.setdefault("extensions", {})
+                custom_attrs = ext.setdefault("custom_attributes", {})
+
+                prev_tenants = [t for t in (custom_attrs.get("_tenants") or []) if isinstance(t, str) and t != target_org]
+                removed_tenants = list(custom_attrs.get("_tenants_removed") or [])
+                for pt in prev_tenants:
+                    if pt not in removed_tenants:
+                        removed_tenants.append(pt)
+                if source_org_id and source_org_id != target_org and source_org_id not in removed_tenants:
+                    removed_tenants.append(source_org_id)
+                custom_attrs["_tenants"] = [target_org]
+                custom_attrs["_tenants_removed"] = removed_tenants
+                custom_attrs["_tenants_updated_at"] = now_ms
+
+                suggs = custom_attrs.setdefault("routing_suggestions", [])
+                already = any(s.get("ruleId") == rule_id and s.get("status") in ("pending", "moved") for s in suggs if isinstance(s, dict))
+                target_label = target_org_name or target_org
+                if not already:
+                    sugg_entry = {
+                        "ruleId": rule_id,
+                        "ruleName": rule_name,
+                        "targetOrgId": target_org,
+                        "targetOrgName": target_org_name,
+                        "reason": action.get("reason", ""),
+                        "suggestedTs": now_ms,
+                        "status": "moved",
+                    }
+                    if resolved_reg:
+                        sugg_entry["targetRegion"] = resolved_reg
+                        sugg_entry["region"] = resolved_reg
+                    if resolved_reg_url:
+                        sugg_entry["targetRegionUrl"] = resolved_reg_url
+                        sugg_entry["region_url"] = resolved_reg_url
+                    suggs.append(sugg_entry)
+                move_to_org = True
+                target_org_id = target_org
+                target_region = resolved_reg
+                target_region_url = resolved_reg_url
+                changed = True
+                record_field_change("target_org_id", source_org_id or "current", target_label, rule_name)
+                reg_suffix = f" [region: {resolved_reg}]" if resolved_reg else ""
+                msg = f"move/forward to org '{target_label}' ({target_org}){reg_suffix}"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+
         elif atype == "run_agent":
             prompt = str(action.get("value") or "").strip()
             if prompt:
@@ -6499,93 +8502,57 @@ for m in matches:
                     cur_act.append({
                         "id": f"routing-agent-{now_ms}-{len(cur_act)}",
                         "type": "comment",
-                        "user": "Incident Routing Rules",
+                        "user": "Automated Routing Rules",
                         "timestamp": now_ms,
                         "content": content,
                         "details": {"source": "incident_routing_rule", "rule": rule_name, "run_agent": True},
                         "attachments": [],
                         "ai_handled": True,
                     })
-                    agent_prompts.append(prompt)
                     changed = True
-        elif atype == "set_field":
-            field = str(action.get("field") or "").strip()
-            if field:
-                val = parse_action_value(action.get("value"))
-                canonical = field[len("rawOCSF."):] if field.startswith("rawOCSF.") else field
-                if canonical == "title":
-                    cur_exec["title"] = str(val)
-                elif canonical in ("description", "desc", "message"):
-                    cur_exec["message"] = str(val)
-                    cur_exec["description"] = str(val)
-                elif canonical == "severity":
-                    s = normalize_severity(val)
-                    if s: cur_exec["severity"] = s
-                elif canonical == "status":
-                    s = normalize_status(val)
-                    if s: cur_exec["status"] = s
-                elif canonical == "assignee":
-                    cur_exec["assignee"] = str(val)
-                elif canonical == "priority":
-                    cur_exec["priority"] = str(val)
-                    cur_exec.setdefault("rawOCSF", {})["priority"] = str(val)
-                elif canonical in ("labels", "types"):
-                    lbl = str(val).strip()
-                    cur_labels = cur_exec.setdefault("labels", [])
-                    if lbl and lbl not in cur_labels:
-                        cur_labels.append(lbl)
-                elif field.startswith("rawOCSF."):
-                    set_deep(cur_exec.setdefault("rawOCSF", {}), field[len("rawOCSF."):], val)
+                    record_field_change("agent_prompt", "none", prompt, rule_name)
+                    msg = f"queued @AIAgent: '{prompt}'"
+                    rule_reports[rk]["did"].append(msg)
+                    what_happened.append(f"[{rule_name}] {msg}")
                 else:
-                    cf = cur_exec.setdefault("customFields", {})
-                    clean_k = re.sub(r"^(customFields\.|custom_fields\.)", "", field)
-                    cf[clean_k] = val
-                changed = True
+                    rule_reports[rk]["did"].append("@AIAgent prompt already queued (no change)")
 
-# Auto-resolve audit comment
-resolving = {"resolved", "closed"}
-now_status = str(cur_exec.get("status") or "").lower()
-if prev_status not in resolving and now_status in resolving:
-    status_lbl = "Resolved" if now_status == "resolved" else "Closed"
-    note = f"{status_lbl} automatically by routing rule."
-    cur_act = cur_exec.setdefault("activity", [])
-    cur_act.append({
-        "id": f"routing-autoresolve-{now_ms}-{len(cur_act)}",
-        "type": "comment",
-        "user": "Incident Routing Rules",
-        "timestamp": now_ms,
-        "content": note,
-        "details": {"source": "incident_routing_rule", "auto_resolved": True},
-        "attachments": [],
-        "ai_handled": True,
-    })
-    changed = True
-
-item_key = r"""$exec.shuffle_datastore.key"""
-item_cat = r"""$exec.shuffle_datastore.category"""
-
-if not item_key or item_key.startswith("$"):
-    item_key = cur_exec.get("finding_uid") or cur_exec.get("id") or cur_exec.get("key") or cur_exec.get("cve")
-if not item_cat or item_cat.startswith("$"):
-    item_cat = target_entity_category
-
+# ── PHASE 3: Persist final entity state once at the very end ───────────────
 db_updated = False
-if changed and item_key:
+if changed and item_key and item_cat:
     try:
         if "self" in locals() or "self" in globals():
             res = self.set_key(item_key, json.dumps(cur_exec), category=item_cat)
             db_updated = isinstance(res, dict) and res.get("success", False)
-    except Exception:
-        pass
+            if db_updated:
+                what_happened.append(f"Updated '{item_key}' in datastore category '{item_cat}'")
+            else:
+                what_happened.append(f"Attempted datastore update for '{item_key}' in '{item_cat}', but set_key returned {res}")
+    except Exception as e:
+        what_happened.append(f"Datastore update failed for '{item_key}': {str(e)}")
+elif not changed:
+    what_happened.append("Rules matched, but all target fields already had the configured values (no changes needed)")
 
-print(json.dumps({
-    "success": True,
-    "changed": changed,
+output_payload = {
+    "matched": len(rule_order) > 0,
+    "matched_rules": [rule_reports[rk] for rk, _, _, _, _, _ in rule_order],
+    "unmatched_rules": unmatched_rules,
+    "modified_fields": modified_fields,
+    "what_happened": what_happened,
     "db_updated": db_updated,
-    "matched_rules": [m["rule"].get("name") for m in matches if isinstance(m.get("rule"), dict)],
-    "incident": cur_exec,
-    "agent_prompts": agent_prompts,
-}))`
+    "move_to_org": move_to_org,
+    "target_org_id": target_org_id,
+    "target_region": target_region,
+    "target_region_url": target_region_url,
+    "stats_key": f"routing_rule_{rule_order[0][3]}" if len(rule_order) > 0 else "routing_rules_matched",
+    "stats_value": 1 if len(rule_order) > 0 else 0,
+}
+if move_to_org:
+    output_payload["key"] = item_key
+    output_payload["category"] = item_cat
+    output_payload["updated_value"] = cur_exec
+
+print(json.dumps(output_payload))`
 
 	return strings.ReplaceAll(script, "__TARGET_CATEGORY__", targetCategory)
 }
