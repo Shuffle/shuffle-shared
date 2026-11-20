@@ -5121,6 +5121,8 @@ type WorkflowSearch struct {
 
 	IgnoreOrg  bool `json:"ignore_org"`
 	SuborgRuns bool `json:"suborg_runs" default:"false"`
+
+	Light bool `json:"light"`
 }
 
 type WorkflowSearchResult struct {
@@ -6358,6 +6360,8 @@ type WorkflowSetOpsResponse struct {
 	CacheExpiresIn    int               `json:"cache_expires_in"`     // seconds
 	Error             string            `json:"error,omitempty"`
 	FailedAtOp        int               `json:"failed_at_op,omitempty"`
+
+	Validation map[string]interface{} `json:"validation,omitempty"`
 }
 
 type rawField struct {

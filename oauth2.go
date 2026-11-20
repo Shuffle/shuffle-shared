@@ -2109,7 +2109,7 @@ func GetCurrentPodNetworkConfig(ctx context.Context, clientset *kubernetes.Clien
 
 // returns apikey, url based on project
 func GetGeminiCredentials(ctx context.Context) (string, string, string) { 
-	foundModel := "google/gemini-3.7-flash"  
+	foundModel := "google/gemini-3.8-flash"  
 
 	projectID := os.Getenv("SHUFFLE_GCEPROJECT")
 	if len(projectID) == 0 { 
@@ -2136,7 +2136,8 @@ func GetGeminiCredentials(ctx context.Context) (string, string, string) {
 		return "", "", foundModel
 	}
 
-	parsedUrl := fmt.Sprintf("https://aiplatform.googleapis.com/v1/projects/%s/locations/%s/endpoints/openapi", projectID, location)
+	// Gemini 3.8 (and newer publisher models) are only served from the global location, not regional ones
+	parsedUrl := fmt.Sprintf("https://aiplatform.googleapis.com/v1/projects/%s/locations/global/endpoints/openapi", projectID)
 	return tok.AccessToken, parsedUrl, foundModel
 }
 
