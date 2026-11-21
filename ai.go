@@ -97,6 +97,8 @@ type AgentOutput struct {
 	LLMResponses []openai.ChatCompletionResponse `json:"llm_responses,omitempty" datastore:"llm_responses"`
 }
 
+var bodyTemplateSlot = regexp.MustCompile(`\$\{([^}]+)\}`)
+
 func init() {
 	if tok := os.Getenv("AI_MAX_TOKENS"); tok != "" {
 		if t, err := strconv.Atoi(tok); err == nil {
@@ -9727,7 +9729,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				}
 
 				if len(sortedAppActions) > 0 {
-					specificAppMetadata += fmt.Sprintf("\n\n**Available actions and fields for Tool '%s'**:\n", baseToolName)
+					specificAppMetadata += fmt.Sprintf("\n\n**Available actions and fields for Tool '%s'**:\nbody= is one JSON field: fill the <...> values in its example (arrays and objects stay JSON, not strings) and send the whole JSON as the single field \"body\". Never send its keys as separate fields.\n", baseToolName)
 
 					previousDesc := ""
 					for counter, sortedAppAction := range sortedAppActions {
@@ -9745,6 +9747,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 								if strings.HasPrefix(param.Example, "{") || strings.HasPrefix(param.Example, "[") {
 									newExample := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(param.Example, "\n", ""), "\t", ""), "  ", ""), "\\\"", "\"")
+									// ponytail: App Creator writes body keys as ${key}, which the model sent as separate fields. Shown as <key> slots until the tool format changes.
+									newExample = bodyTemplateSlot.ReplaceAllString(newExample, "<$1>")
 									requiredParams = append(requiredParams, fmt.Sprintf("body=%s", newExample))
 								} else {
 									requiredParams = append(requiredParams, fmt.Sprintf("body"))
@@ -10322,7 +10326,7 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 
 ### PHASE 2: RECOVERY & RETRY
 **Only proceed if the task is NOT done.**
-1. **Auth Failure (401/403):** STOP. Output: category="finish", action="finish", output="**Authentication Failed**".
+1. **Auth Failure (401/403):** STOP. Output: category="finish", action="finish", output saying which tool and action failed and the reason from its response. Never guess which app's credentials are wrong.
 2. **General Failure:**
    - If "runs" >= 5: STOP. Output: category="finish", action="finish", output="**Task Failed**".
    - If "runs" < 5: RETRY same action. Reason: "Attempt [runs+1]/5."
