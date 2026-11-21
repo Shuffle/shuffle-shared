@@ -9746,9 +9746,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 								}
 
 								if strings.HasPrefix(param.Example, "{") || strings.HasPrefix(param.Example, "[") {
-									newExample := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(param.Example, "\n", ""), "\t", ""), "  ", ""), "\\\"", "\"")
-									// ponytail: App Creator writes body keys as ${key}, which the model sent as separate fields. Shown as <key> slots until the tool format changes.
-									newExample = bodyTemplateSlot.ReplaceAllString(newExample, "<$1>")
+									newExample := bodyTemplateSlot.ReplaceAllString(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(param.Example, "\n", ""), "\t", ""), "  ", ""), "\\\"", "\""), "<$1>")
 									requiredParams = append(requiredParams, fmt.Sprintf("body=%s", newExample))
 								} else {
 									requiredParams = append(requiredParams, fmt.Sprintf("body"))
