@@ -3927,9 +3927,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		}
 
 		if len(workflow.Name) == 0 && len(workflow.Actions) <= 1 {
-			if debug {
-				log.Printf("[DEBUG] Skipping workflow '%s' (%s) for org %s because it has no name and only 1 action", workflow.Name, workflow.ID, user.ActiveOrg.Id)
-			}
+			//if debug {
+			//	log.Printf("[DEBUG] Skipping workflow '%s' (%s) for org %s because it has no name and only 1 action", workflow.Name, workflow.ID, user.ActiveOrg.Id)
+			//}
 
 			continue
 		}

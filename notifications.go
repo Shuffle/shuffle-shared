@@ -95,6 +95,14 @@ func IsDeviceOrgAllowedForType(device Device, pushType string, orgId string) boo
 }
 
 func IsDeviceEnabledForTypeAndOrg(device Device, pushType string, orgId string) bool {
+	if project.Environment == "cloud" {
+		if gceProject := strings.TrimSpace(os.Getenv("SHUFFLE_GCEPROJECT")); len(gceProject) > 0 {
+			if devRegion := strings.TrimSpace(device.Region); len(devRegion) > 0 && !strings.EqualFold(devRegion, gceProject) {
+				return false
+			}
+		}
+	}
+
 	resolvedType := ResolveNotificationPushType(pushType, "", "")
 	enabled := false
 	switch resolvedType {
@@ -2143,13 +2151,7 @@ func CreatePersonalNotification(ctx context.Context, title, description, referen
 			if project.Environment == "cloud" {
 				go func(u User, req NotificationRequest, n Notification) {
 					bgCtx := context.Background()
-					var successCount int
-					var pushErr error
-					if isSecondaryCloudRegion() {
-						successCount, pushErr = forwardPushToMainRegion(req, u.ApiKey)
-					} else {
-						_, successCount, pushErr = DispatchFCMPushNotification(bgCtx, req, &u)
-					}
+					_, successCount, pushErr := DispatchFCMPushNotification(bgCtx, req, &u)
 					if pushErr != nil {
 						log.Printf("[WARNING] Failed dispatching personal push notification '%s' to user %s: %v", req.Title, u.Id, pushErr)
 						return
@@ -2202,68 +2204,6 @@ func CreatePersonalNotification(ctx context.Context, title, description, referen
 	}
 
 	return nil
-}
-
-func isSecondaryCloudRegion() bool {
-	if project.Environment != "cloud" {
-		return false
-	}
-	gceProject := strings.TrimSpace(os.Getenv("SHUFFLE_GCEPROJECT"))
-	return len(gceProject) > 0 && gceProject != "shuffler" && gceProject != sandboxProject
-}
-
-func getMainRegionBaseURL() string {
-	proxyScheme := "https"
-	proxyHost := "shuffler.io"
-	if envHost := strings.TrimSpace(os.Getenv("SHUFFLE_MAIN_REGION_HOST")); len(envHost) > 0 {
-		proxyHost = envHost
-		if strings.HasPrefix(proxyHost, "http://") {
-			proxyScheme = "http"
-			proxyHost = strings.TrimPrefix(proxyHost, "http://")
-		} else if strings.HasPrefix(proxyHost, "https://") {
-			proxyHost = strings.TrimPrefix(proxyHost, "https://")
-		}
-	}
-	return fmt.Sprintf("%s://%s", proxyScheme, strings.TrimRight(proxyHost, "/"))
-}
-
-func forwardPushToMainRegion(req NotificationRequest, userApiKey string) (int, error) {
-	req.SkipNotificationRecord = true
-	reqBytes, err := json.Marshal(req)
-	if err != nil {
-		return 0, err
-	}
-
-	pagerURL := fmt.Sprintf("%s/api/v1/functions/pager", getMainRegionBaseURL())
-	httpReq, err := http.NewRequest(http.MethodPost, pagerURL, bytes.NewBuffer(reqBytes))
-	if err != nil {
-		return 0, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if len(strings.TrimSpace(userApiKey)) > 0 {
-		httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", strings.TrimSpace(userApiKey)))
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	httpResp, err := client.Do(httpReq)
-	if err != nil {
-		return 0, err
-	}
-	defer httpResp.Body.Close()
-
-	respBody, _ := ioutil.ReadAll(httpResp.Body)
-	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return 0, fmt.Errorf("main region pager returned %d: %s", httpResp.StatusCode, string(respBody))
-	}
-
-	var parsed struct {
-		Success   bool `json:"success"`
-		Delivered int  `json:"delivered"`
-	}
-	if jsonErr := json.Unmarshal(respBody, &parsed); jsonErr == nil && parsed.Delivered > 0 {
-		return parsed.Delivered, nil
-	}
-	return len(req.TargetTokens), nil
 }
 
 func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {

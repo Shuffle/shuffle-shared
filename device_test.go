@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
 
@@ -173,5 +174,66 @@ func TestOAuthTokenMultiTenancy(t *testing.T) {
 	reqNoHeader := httptest.NewRequest("GET", "/api/v1/workflows", nil)
 	if eff := resolveOAuthEffectiveOrg(orgField, user, reqNoHeader); eff != orgA {
 		t.Fatalf("expected user active org %s, got %s", orgA, eff)
+	}
+}
+
+func TestDevicePlusRegionUniqueConnection(t *testing.T) {
+	origEnv := project.Environment
+	origProj := os.Getenv("SHUFFLE_GCEPROJECT")
+	project.Environment = "cloud"
+	os.Setenv("SHUFFLE_GCEPROJECT", "uk")
+	defer func() {
+		project.Environment = origEnv
+		os.Setenv("SHUFFLE_GCEPROJECT", origProj)
+	}()
+
+	ctx := context.Background()
+	user := User{Id: "user-1"}
+
+	// Register same device ID in US ("shuffler") and UK ("uk")
+	var err error
+	user, err = upsertDeviceIntoUser(ctx, user, Device{
+		ID:       "iphone-1",
+		Token:    "tok-us",
+		Platform: "ios",
+		Region:   "shuffler",
+		Preferences: DeviceNotificationPreferences{
+			GeneralAlerts: true,
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("failed adding US device: %v", err)
+	}
+
+	user, err = upsertDeviceIntoUser(ctx, user, Device{
+		ID:       "iphone-1",
+		Token:    "tok-uk",
+		Platform: "ios",
+		Region:   "uk",
+		Preferences: DeviceNotificationPreferences{
+			GeneralAlerts: true,
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("failed adding UK device: %v", err)
+	}
+
+	if len(user.Devices) != 2 {
+		t.Fatalf("expected 2 distinct Device+Region connections, got %d", len(user.Devices))
+	}
+
+	// In UK region, only the UK token should be selected
+	tokens := GetUserDeviceTokensForTypeAndOrg(user, NotificationTypeGeneral, "org-1")
+	if len(tokens) != 1 || tokens[0] != "tok-uk" {
+		t.Fatalf("expected only UK token [tok-uk], got %v", tokens)
+	}
+
+	// Removing UK connection leaves US connection intact
+	user, err = handleDeviceRemove(ctx, user, "iphone-1", "uk")
+	if err != nil {
+		t.Fatalf("failed removing UK device: %v", err)
+	}
+	if len(user.Devices) != 1 || user.Devices[0].Region != "shuffler" {
+		t.Fatalf("expected US device to remain, got %+v", user.Devices)
 	}
 }

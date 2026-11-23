@@ -6287,8 +6287,12 @@ func ValidateFCMToken(ctx context.Context, client *messaging.Client, token strin
 }
 
 func GetFCMClient(ctx context.Context) (*messaging.Client, error) {
+	var cfg *firebase.Config
+	if fbProjectID := strings.TrimSpace(os.Getenv("SHUFFLE_FIREBASE_PROJECT_ID")); len(fbProjectID) > 0 {
+		cfg = &firebase.Config{ProjectID: fbProjectID}
+	}
 	// Passing nil config tells Firebase to use Google Application Default Credentials (ADC)
-	app, err := firebase.NewApp(ctx, nil)
+	app, err := firebase.NewApp(ctx, cfg)
 	if err != nil {
 		log.Printf("[ERROR] Failed to initialize Firebase App with ADC: %v", err)
 		return nil, err
@@ -6378,20 +6382,48 @@ func syncDeviceWebhookIndex(ctx context.Context, user User, oldToken string, dev
 	return nil
 }
 
+func resolveDeviceRegion(region string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(region))
+	if len(trimmed) == 0 && project.Environment == "cloud" {
+		trimmed = strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_GCEPROJECT")))
+	}
+	return trimmed
+}
+
+func deviceMatchesRegion(devRegion, targetRegion string) bool {
+	d := strings.ToLower(strings.TrimSpace(devRegion))
+	t := strings.ToLower(strings.TrimSpace(targetRegion))
+	if len(t) == 0 {
+		return true
+	}
+	return d == t || d == ""
+}
+
 func upsertDeviceIntoUser(ctx context.Context, user User, device Device, validateToken bool) (User, error) {
 	if len(device.ID) == 0 {
 		log.Printf("[ERROR] No ID in device upsert")
 		return user, errors.New("No device ID provided")
 	}
 
+	device.Region = resolveDeviceRegion(device.Region)
+
 	foundIndex := -1
+	legacyIndex := -1
 	for deviceIndex, curDevices := range user.Devices {
 		if curDevices.ID != device.ID {
 			continue
 		}
-
-		foundIndex = deviceIndex
-		break
+		curReg := strings.ToLower(strings.TrimSpace(curDevices.Region))
+		if curReg == device.Region {
+			foundIndex = deviceIndex
+			break
+		}
+		if curReg == "" && legacyIndex < 0 {
+			legacyIndex = deviceIndex
+		}
+	}
+	if foundIndex < 0 && legacyIndex >= 0 {
+		foundIndex = legacyIndex
 	}
 
 	device.Token = strings.TrimSpace(device.Token)
@@ -6549,17 +6581,25 @@ func isDeviceUnregisterAction(action string) bool {
 	}
 }
 
-func removeDeviceFromUser(user User, deviceID string) (User, error) {
+func removeDeviceFromUser(user User, deviceID string, region ...string) (User, error) {
 	trimmedID := strings.TrimSpace(deviceID)
 	if len(trimmedID) == 0 {
 		log.Printf("[ERROR] No ID in device removal")
 		return user, errors.New("No device ID provided")
 	}
 
+	targetRegion := ""
+	if len(region) > 0 {
+		targetRegion = strings.ToLower(strings.TrimSpace(region[0]))
+	}
+	if len(targetRegion) == 0 && project.Environment == "cloud" {
+		targetRegion = strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_GCEPROJECT")))
+	}
+
 	filtered := make([]Device, 0, len(user.Devices))
 	removed := false
 	for _, curDevice := range user.Devices {
-		if curDevice.ID == trimmedID {
+		if curDevice.ID == trimmedID && deviceMatchesRegion(curDevice.Region, targetRegion) {
 			removed = true
 			continue
 		}
@@ -6584,17 +6624,25 @@ func HandleHybridDeviceRemove(user User, deviceID string) (User, error) {
 }
 
 // handleDeviceRemove unregisters a device (and its FCM notification token/preferences/webhook) from a user account.
-func handleDeviceRemove(ctx context.Context, user User, deviceID string) (User, error) {
+func handleDeviceRemove(ctx context.Context, user User, deviceID string, region ...string) (User, error) {
 	trimmedID := strings.TrimSpace(deviceID)
+	targetRegion := ""
+	if len(region) > 0 {
+		targetRegion = strings.ToLower(strings.TrimSpace(region[0]))
+	}
+	if len(targetRegion) == 0 && project.Environment == "cloud" {
+		targetRegion = strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_GCEPROJECT")))
+	}
+
 	var oldWebhookToken string
 	for _, curDevice := range user.Devices {
-		if curDevice.ID == trimmedID {
+		if curDevice.ID == trimmedID && deviceMatchesRegion(curDevice.Region, targetRegion) {
 			oldWebhookToken = curDevice.WebhookToken
 			break
 		}
 	}
 
-	updatedUser, err := removeDeviceFromUser(user, deviceID)
+	updatedUser, err := removeDeviceFromUser(user, deviceID, targetRegion)
 	if err != nil {
 		return user, err
 	}
@@ -6890,7 +6938,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		var retUser User
 		var err error
 		if isDeviceUnregisterAction(t.Device.Action) {
-			retUser, err = handleDeviceRemove(ctx, *foundUser, t.Device.ID)
+			retUser, err = handleDeviceRemove(ctx, *foundUser, t.Device.ID, t.Device.Region)
 		} else {
 			retUser, err = handleDeviceUpsert(ctx, *foundUser, t.Device)
 		}
@@ -7248,7 +7296,7 @@ func HandleUnregisterDevice(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	retUser, err := handleDeviceRemove(ctx, *foundUser, deviceID)
+	retUser, err := handleDeviceRemove(ctx, *foundUser, deviceID, request.URL.Query().Get("region"))
 	if err != nil {
 		statusCode := 400
 		if errors.Is(err, errDeviceNotFound) {
@@ -7318,8 +7366,9 @@ func HandleDeviceWebhookControl(resp http.ResponseWriter, request *http.Request)
 	}
 
 	type webhookControlReq struct {
-		Enabled    bool `json:"enabled"`
-		Regenerate bool `json:"regenerate"`
+		Enabled    bool   `json:"enabled"`
+		Regenerate bool   `json:"regenerate"`
+		Region     string `json:"region"`
 	}
 	var req webhookControlReq
 	if len(bytes.TrimSpace(body)) > 0 {
@@ -7346,9 +7395,14 @@ func HandleDeviceWebhookControl(resp http.ResponseWriter, request *http.Request)
 		}
 	}
 
+	targetRegion := resolveDeviceRegion(req.Region)
+	if len(targetRegion) == 0 {
+		targetRegion = resolveDeviceRegion(request.URL.Query().Get("region"))
+	}
+
 	foundIdx := -1
 	for i, d := range foundUser.Devices {
-		if d.ID == deviceID {
+		if d.ID == deviceID && deviceMatchesRegion(d.Region, targetRegion) {
 			foundIdx = i
 			break
 		}
@@ -7439,15 +7493,6 @@ func HandleDeviceWebhookTrigger(resp http.ResponseWriter, request *http.Request)
 	cors := HandleCors(resp, request)
 	if cors {
 		return
-	}
-
-	if project.Environment == "cloud" {
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting Device Webhook Trigger request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
 	}
 
 	if err := ValidateRequestOverload(resp, request, 30); err != nil {

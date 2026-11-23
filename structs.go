@@ -805,6 +805,7 @@ type Device struct {
 	ID          string                        `json:"id"`                                         // Unique device identifier
 	Token       string                        `datastore:",noindex" json:"token"`                 // FCM registration token
 	Platform    string                        `json:"platform"`                                   // "ios", "android", "web", "desktop"
+	Region      string                        `datastore:",omitempty" json:"region,omitempty"`     // Cloud region (e.g. "shuffler", "uk", "eu") for unique Device+Region connections
 	DeviceName  string                        `datastore:",omitempty" json:"device_name,omitempty"` // e.g., "iPhone 16 Pro", "Chrome macOS"
 	AppVersion  string                        `datastore:",omitempty" json:"app_version,omitempty"` // App version
 	Preferences    DeviceNotificationPreferences `json:"preferences"`                                     // Granular notification settings
@@ -6498,6 +6499,5 @@ type NotificationRequest struct {
 	WorkflowID  string `json:"workflow_id,omitempty"`
 	Action      string `json:"action,omitempty"`
 	// General / FYI specific fields
-	ReferenceURL           string `json:"reference_url,omitempty"`
-	SkipNotificationRecord bool   `json:"skip_notification_record,omitempty"`
+	ReferenceURL string `json:"reference_url,omitempty"`
 }
