@@ -63,6 +63,8 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/subtle"
 	mathrand "math/rand"
 
 	"github.com/bradfitz/slice"
@@ -145,6 +147,16 @@ func AllowedDomain(referer string) bool {
 
 var prPreviewOriginRegex = regexp.MustCompile(`^https://shuffler-pr-previews--pr-[0-9]+-[a-z0-9]+\.web\.app$`)
 
+// Allows any https://*.shuffler.io origin.
+func isShufflerSubdomainOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "https" || parsed.Port() != "" || parsed.Path != "" {
+		return false
+	}
+
+	return strings.HasSuffix(strings.ToLower(parsed.Hostname()), ".shuffler.io")
+}
+
 func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	origin := request.Header["Origin"]
 	resp.Header().Set("Vary", "Origin")
@@ -214,6 +226,10 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			}
 
 			if !allowed && prPreviewOriginRegex.MatchString(origin[0]) {
+				allowed = true
+			}
+
+			if !allowed && isShufflerSubdomainOrigin(origin[0]) {
 				allowed = true
 			}
 
@@ -1251,10 +1267,18 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 		if len(org.CreatorOrg) == 0 {
 			allChildOrgs, _, err := GetAllChildOrgs(ctx, org.Id)
-			if err == nil {
-				if len(allChildOrgs) != len(org.ChildOrgs) {
-					allChildOrgsMini := []OrgMini{}
-					for _, child := range allChildOrgs {
+			if err == nil && len(allChildOrgs) > len(org.ChildOrgs) {
+				existingChildIds := map[string]bool{}
+				allChildOrgsMini := make([]OrgMini, 0, len(allChildOrgs))
+				for _, existingChild := range org.ChildOrgs {
+					if len(existingChild.Id) > 0 {
+						existingChildIds[existingChild.Id] = true
+						allChildOrgsMini = append(allChildOrgsMini, existingChild)
+					}
+				}
+				for _, child := range allChildOrgs {
+					if len(child.Id) > 0 && !existingChildIds[child.Id] {
+						existingChildIds[child.Id] = true
 						allChildOrgsMini = append(allChildOrgsMini, OrgMini{
 							Id:         child.Id,
 							Name:       child.Name,
@@ -1263,6 +1287,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 							RegionUrl:  child.RegionUrl,
 						})
 					}
+				}
+				if len(allChildOrgsMini) > len(org.ChildOrgs) {
 					org.ChildOrgs = allChildOrgsMini
 					org.SyncFeatures.MultiTenant.Usage = int64(len(allChildOrgsMini) + 1)
 					org.SyncUsage.MultiTenant.Counter = int64(len(allChildOrgsMini) + 1)
@@ -1402,65 +1428,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Make sure to add all orgs that are childs IF you have access
-	org.ChildOrgs = []OrgMini{}
-
-	wg := sync.WaitGroup{}
-	ch := make(chan OrgMini, len(user.Orgs))
-	for _, orgloop := range user.Orgs {
-		wg.Add(1)
-
-		// Goroutine this
-		go func(orgId string) {
-			suborg, err := GetOrg(ctx, orgId)
-			if err != nil {
-				ch <- OrgMini{}
-				wg.Done()
-
-				return
-			}
-
-			// Check if current user is in that org
-			found := false
-			for _, userloop := range suborg.Users {
-				if userloop.Id == user.Id {
-					found = true
-				}
-			}
-
-			if !found {
-				ch <- OrgMini{}
-				wg.Done()
-
-				return
-			}
-
-			if suborg.CreatorOrg == org.Id {
-				ch <- OrgMini{
-					Id:         suborg.Id,
-					Name:       suborg.Name,
-					CreatorOrg: suborg.CreatorOrg,
-					Image:      suborg.Image,
-					RegionUrl:  suborg.RegionUrl,
-				}
-			} else {
-				ch <- OrgMini{}
-			}
-
-			wg.Done()
-		}(orgloop)
-	}
-
-	wg.Wait()
-	close(ch)
-
-	for suborg := range ch {
-		if suborg.CreatorOrg == org.Id {
-			suborg.Image = ""
-			org.ChildOrgs = append(org.ChildOrgs, suborg)
-		}
-	}
-
 	org.SyncConfig.Apikey = ""
 	org.SyncConfig.Source = ""
 
@@ -1494,6 +1461,65 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	} else {
+		// Make sure to add all orgs that are childs IF you have access
+		org.ChildOrgs = []OrgMini{}
+
+		wg := sync.WaitGroup{}
+		ch := make(chan OrgMini, len(user.Orgs))
+		for _, orgloop := range user.Orgs {
+			wg.Add(1)
+
+			// Goroutine this
+			go func(orgId string) {
+				suborg, err := GetOrg(ctx, orgId)
+				if err != nil {
+					ch <- OrgMini{}
+					wg.Done()
+
+					return
+				}
+
+				// Check if current user is in that org
+				found := false
+				for _, userloop := range suborg.Users {
+					if userloop.Id == user.Id {
+						found = true
+					}
+				}
+
+				if !found {
+					ch <- OrgMini{}
+					wg.Done()
+
+					return
+				}
+
+				if suborg.CreatorOrg == org.Id {
+					ch <- OrgMini{
+						Id:         suborg.Id,
+						Name:       suborg.Name,
+						CreatorOrg: suborg.CreatorOrg,
+						Image:      suborg.Image,
+						RegionUrl:  suborg.RegionUrl,
+					}
+				} else {
+					ch <- OrgMini{}
+				}
+
+				wg.Done()
+			}(orgloop)
+		}
+
+		wg.Wait()
+		close(ch)
+
+		for suborg := range ch {
+			if suborg.CreatorOrg == org.Id {
+				suborg.Image = ""
+				org.ChildOrgs = append(org.ChildOrgs, suborg)
+			}
+		}
+
 		org.Users = []User{}
 	}
 
@@ -3840,9 +3866,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			userdata.AllowedApps = oauthTok.AllowedApps
 			userdata.AllowedTools = oauthTok.AllowedTools
 			userdata.OAuthScope = oauthTok.Scope
-			if oauthTok.OrgId != "" {
-				userdata.ActiveOrg.Id = oauthTok.OrgId
-				if orgData, orgErr := GetOrg(ctx, oauthTok.OrgId); orgErr == nil && orgData != nil {
+			if effectiveOrg := resolveOAuthEffectiveOrg(oauthTok.OrgId, userdata, request); effectiveOrg != "" {
+				userdata.ActiveOrg.Id = effectiveOrg
+				if orgData, orgErr := GetOrg(ctx, effectiveOrg); orgErr == nil && orgData != nil {
 					userdata.ActiveOrg.Name = orgData.Name
 					userdata.ActiveOrg.Image = orgData.Image
 				}
@@ -3852,9 +3878,10 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				log.Printf("[DEBUG] Authenticated via OAuth MCP Token for user %s, org %s on %s %s", userdata.Id, userdata.ActiveOrg.Id, request.Method, request.URL.Path)
 			}
 
-			// Increment API usage
+			// Increment API usage & OAuth connected app usage
 			if userdata.Username != "scheduler@shuffler.io" {
 				go IncrementCache(ctx, userdata.ActiveOrg.Id, "api_usage")
+				go RecordOAuthTokenUsage(oauthTok.ID, userdata.ActiveOrg.Id)
 			}
 
 			return userdata, nil
@@ -3945,15 +3972,18 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 					userdata.AllowedApps = oauthTok.AllowedApps
 					userdata.AllowedTools = oauthTok.AllowedTools
 					userdata.OAuthScope = oauthTok.Scope
-					if oauthTok.OrgId != "" {
-						userdata.ActiveOrg.Id = oauthTok.OrgId
-						if orgData, orgErr := GetOrg(ctx, oauthTok.OrgId); orgErr == nil && orgData != nil {
+					if effectiveOrg := resolveOAuthEffectiveOrg(oauthTok.OrgId, userdata, request); effectiveOrg != "" {
+						userdata.ActiveOrg.Id = effectiveOrg
+						if orgData, orgErr := GetOrg(ctx, effectiveOrg); orgErr == nil && orgData != nil {
 							userdata.ActiveOrg.Name = orgData.Name
 							userdata.ActiveOrg.Image = orgData.Image
 						}
 					}
 					if debug {
 						log.Printf("[DEBUG] Authenticated via OAuth MCP Token for user %s, org %s on %s %s", userdata.Id, userdata.ActiveOrg.Id, request.Method, request.URL.Path)
+					}
+					if userdata.Username != "scheduler@shuffler.io" {
+						go RecordOAuthTokenUsage(oauthTok.ID, userdata.ActiveOrg.Id)
 					}
 				}
 			}
@@ -6266,8 +6296,12 @@ func ValidateFCMToken(ctx context.Context, client *messaging.Client, token strin
 }
 
 func GetFCMClient(ctx context.Context) (*messaging.Client, error) {
+	var cfg *firebase.Config
+	if fbProjectID := strings.TrimSpace(os.Getenv("SHUFFLE_FIREBASE_PROJECT_ID")); len(fbProjectID) > 0 {
+		cfg = &firebase.Config{ProjectID: fbProjectID}
+	}
 	// Passing nil config tells Firebase to use Google Application Default Credentials (ADC)
-	app, err := firebase.NewApp(ctx, nil)
+	app, err := firebase.NewApp(ctx, cfg)
 	if err != nil {
 		log.Printf("[ERROR] Failed to initialize Firebase App with ADC: %v", err)
 		return nil, err
@@ -6280,25 +6314,135 @@ func GetFCMClient(ctx context.Context) (*messaging.Client, error) {
 	return client, nil
 }
 
-func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, error) {
-	if project.Environment != "cloud" {
-		log.Printf("[ERROR] Device upsert attempted in non-cloud environment")
-		return user, errors.New("Device upsert is only allowed in cloud environment (for now). Cloud Sync required")
+var errCloudSyncRequired = errors.New("Cloud Sync must be active to manage devices and push notifications in an on-prem environment. Enable Cloud Sync in your organization settings first.")
+
+func validateCloudSyncForDevices(ctx context.Context, user User) (Org, string, error) {
+	orgId := strings.TrimSpace(user.ActiveOrg.Id)
+	if len(orgId) == 0 && len(user.Orgs) > 0 {
+		orgId = strings.TrimSpace(user.Orgs[0])
+	}
+	if len(orgId) == 0 {
+		return Org{}, "", errCloudSyncRequired
 	}
 
-	if len(device.ID) == 0 {
+	org, err := GetOrg(ctx, orgId)
+	if err != nil || org == nil {
+		log.Printf("[ERROR] Failed getting org %s for Cloud Sync device check: %v", orgId, err)
+		return Org{}, "", errCloudSyncRequired
+	}
+
+	syncKey := strings.TrimSpace(org.SyncConfig.Apikey)
+	if !org.CloudSyncActive || len(syncKey) == 0 {
+		log.Printf("[INFO] Device management blocked for org %s: Cloud Sync is not active", orgId)
+		return *org, "", errCloudSyncRequired
+	}
+
+	return *org, syncKey, nil
+}
+
+func isMobileDevicePlatform(platform string) bool {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "ios", "android":
+		return true
+	default:
+		return false
+	}
+}
+
+func generateDeviceWebhookToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return "shfl_dev_" + base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func hashDeviceWebhookToken(token string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(token)))
+	return hex.EncodeToString(sum[:])
+}
+
+func syncDeviceWebhookIndex(ctx context.Context, user User, oldToken string, device Device) error {
+	trimmedOld := strings.TrimSpace(oldToken)
+	trimmedNew := strings.TrimSpace(device.WebhookToken)
+
+	if len(trimmedOld) > 0 && (!device.WebhookEnabled || trimmedOld != trimmedNew) {
+		if delErr := DeleteDeviceWebhookIndex(ctx, hashDeviceWebhookToken(trimmedOld)); delErr != nil {
+			log.Printf("[WARNING] Failed deleting old device webhook index for device %s: %v", device.ID, delErr)
+		}
+	}
+
+	if device.WebhookEnabled && len(trimmedNew) > 0 {
+		orgId := strings.TrimSpace(user.ActiveOrg.Id)
+		if len(orgId) == 0 && len(user.Orgs) > 0 {
+			orgId = strings.TrimSpace(user.Orgs[0])
+		}
+		rec := DeviceWebhookIndex{
+			ID:        hashDeviceWebhookToken(trimmedNew),
+			UserID:    user.Id,
+			OrgID:     orgId,
+			DeviceID:  device.ID,
+			Enabled:   true,
+			CreatedAt: time.Now().Unix(),
+		}
+		return SetDeviceWebhookIndex(ctx, rec)
+	}
+
+	return nil
+}
+
+func resolveDeviceRegion(region string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(region))
+	if len(trimmed) == 0 && project.Environment == "cloud" {
+		trimmed = strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_GCEPROJECT")))
+	}
+	return trimmed
+}
+
+func deviceMatchesRegion(devRegion, targetRegion string) bool {
+	d := strings.ToLower(strings.TrimSpace(devRegion))
+	t := strings.ToLower(strings.TrimSpace(targetRegion))
+	if len(t) == 0 {
+		return true
+	}
+	return d == t || d == ""
+}
+
+func namespaceDeviceID(deviceID, region string) string {
+	trimmedID := strings.TrimSpace(deviceID)
+	trimmedRegion := strings.ToLower(strings.TrimSpace(region))
+	if len(trimmedID) == 0 || len(trimmedRegion) == 0 {
+		return trimmedID
+	}
+	if strings.HasPrefix(strings.ToLower(trimmedID), trimmedRegion+"_") {
+		return trimmedID
+	}
+	return fmt.Sprintf("%s_%s", trimmedRegion, trimmedID)
+}
+
+func upsertDeviceIntoUser(ctx context.Context, user User, device Device, validateToken bool) (User, error) {
+	rawID := strings.TrimSpace(device.ID)
+	if len(rawID) == 0 {
 		log.Printf("[ERROR] No ID in device upsert")
 		return user, errors.New("No device ID provided")
 	}
 
-	foundIndex := -1
-	for deviceIndex, curDevices := range user.Devices {
-		if curDevices.ID != device.ID {
-			continue
-		}
+	device.Region = resolveDeviceRegion(device.Region)
+	device.ID = namespaceDeviceID(rawID, device.Region)
 
-		foundIndex = deviceIndex
-		break
+	foundIndex := -1
+	legacyIndex := -1
+	for deviceIndex, curDevices := range user.Devices {
+		if curDevices.ID == device.ID {
+			foundIndex = deviceIndex
+			break
+		}
+		if curDevices.ID == rawID && strings.TrimSpace(curDevices.Region) == "" && legacyIndex < 0 {
+			legacyIndex = deviceIndex
+		}
+	}
+	if foundIndex < 0 && legacyIndex >= 0 {
+		foundIndex = legacyIndex
 	}
 
 	device.Token = strings.TrimSpace(device.Token)
@@ -6308,8 +6452,21 @@ func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, er
 	// Allow disconnecting an existing registered device by clearing its token
 	if len(device.Token) == 0 {
 		if foundIndex >= 0 {
-			if user.Devices[foundIndex].CreatedAt > 0 {
-				device.CreatedAt = user.Devices[foundIndex].CreatedAt
+			existing := user.Devices[foundIndex]
+			if existing.CreatedAt > 0 {
+				device.CreatedAt = existing.CreatedAt
+			}
+			if len(device.Platform) == 0 {
+				device.Platform = existing.Platform
+			}
+			if len(device.DeviceName) == 0 {
+				device.DeviceName = existing.DeviceName
+			}
+			if len(device.AppVersion) == 0 {
+				device.AppVersion = existing.AppVersion
+			}
+			if device.LastSeenAt == 0 {
+				device.LastSeenAt = existing.LastSeenAt
 			}
 			user.Devices[foundIndex] = device
 			return user, nil
@@ -6319,36 +6476,226 @@ func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, er
 		return user, errors.New("No device token provided")
 	}
 
-	fcmClient, err := GetFCMClient(ctx)
-	if err != nil {
-		log.Printf("[ERROR] Failed to get FCM client: %v", err)
-		return user, err
-	}
+	if validateToken {
+		fcmClient, err := GetFCMClient(ctx)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get FCM client: %v", err)
+			return user, err
+		}
 
-	// Validate token with Google Firebase Dry Run
-	isValid, err := ValidateFCMToken(ctx, fcmClient, device.Token)
-	if err != nil {
-		log.Printf("[ERROR] Failed to validate FCM token: %v", err)
-		return user, err
-	}
+		// Validate token with Google Firebase Dry Run
+		isValid, err := ValidateFCMToken(ctx, fcmClient, device.Token)
+		if err != nil {
+			log.Printf("[ERROR] Failed to validate FCM token: %v", err)
+			return user, err
+		}
 
-	if !isValid {
-		return user, errors.New("Invalid device token provided")
+		if !isValid {
+			return user, errors.New("Invalid device token provided")
+		}
 	}
 
 	if foundIndex >= 0 {
-		if user.Devices[foundIndex].CreatedAt > 0 {
-			device.CreatedAt = user.Devices[foundIndex].CreatedAt
+		existing := user.Devices[foundIndex]
+		if existing.CreatedAt > 0 {
+			device.CreatedAt = existing.CreatedAt
+		}
+		if device.WebhookEnabled {
+			if !isMobileDevicePlatform(device.Platform) {
+				return user, errors.New("Device webhook is only supported for mobile devices (ios, android)")
+			}
+			if len(strings.TrimSpace(device.WebhookToken)) == 0 {
+				if len(strings.TrimSpace(existing.WebhookToken)) > 0 {
+					device.WebhookToken = existing.WebhookToken
+				} else {
+					tok, genErr := generateDeviceWebhookToken()
+					if genErr != nil {
+						return user, genErr
+					}
+					device.WebhookToken = tok
+				}
+			}
+		} else {
+			device.WebhookToken = ""
+		}
+		if err := syncDeviceWebhookIndex(ctx, user, existing.WebhookToken, device); err != nil {
+			log.Printf("[WARNING] Failed syncing device webhook index for %s: %v", device.ID, err)
 		}
 		user.Devices[foundIndex] = device
 	} else {
 		if device.CreatedAt == 0 {
 			device.CreatedAt = now
 		}
+		if device.WebhookEnabled {
+			if !isMobileDevicePlatform(device.Platform) {
+				return user, errors.New("Device webhook is only supported for mobile devices (ios, android)")
+			}
+			if len(strings.TrimSpace(device.WebhookToken)) == 0 {
+				tok, genErr := generateDeviceWebhookToken()
+				if genErr != nil {
+					return user, genErr
+				}
+				device.WebhookToken = tok
+			}
+			if err := syncDeviceWebhookIndex(ctx, user, "", device); err != nil {
+				log.Printf("[WARNING] Failed syncing device webhook index for %s: %v", device.ID, err)
+			}
+		} else {
+			device.WebhookToken = ""
+		}
 		user.Devices = append(user.Devices, device)
 	}
 
 	return user, nil
+}
+
+// HandleHybridDeviceUpsert validates and upserts a hybrid device on Cloud without requiring user.ActiveOrg.
+func HandleHybridDeviceUpsert(ctx context.Context, user User, device Device) (User, error) {
+	return upsertDeviceIntoUser(ctx, user, device, true)
+}
+
+func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, error) {
+	if project.Environment == "cloud" {
+		return upsertDeviceIntoUser(ctx, user, device, true)
+	}
+
+	org, syncApikey, err := validateCloudSyncForDevices(ctx, user)
+	if err != nil {
+		return user, err
+	}
+
+	updatedUser, err := upsertDeviceIntoUser(ctx, user, device, false)
+	if err != nil {
+		return user, err
+	}
+
+	devBytes, err := json.Marshal(device)
+	if err != nil {
+		return user, err
+	}
+
+	syncJob := CloudSyncJob{
+		Type:          "device",
+		Action:        "upsert",
+		OrgId:         org.Id,
+		PrimaryItemId: user.Id,
+		SecondaryItem: string(devBytes),
+	}
+	if err := executeCloudAction(syncJob, syncApikey); err != nil {
+		log.Printf("[ERROR] Failed syncing device upsert to Cloud for user %s: %v", user.Id, err)
+		return user, err
+	}
+
+	return updatedUser, nil
+}
+
+var errDeviceNotFound = errors.New("Device not found")
+
+func isDeviceUnregisterAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "unregister", "remove", "delete":
+		return true
+	default:
+		return false
+	}
+}
+
+func removeDeviceFromUser(user User, deviceID string, region ...string) (User, error) {
+	trimmedID := strings.TrimSpace(deviceID)
+	if len(trimmedID) == 0 {
+		log.Printf("[ERROR] No ID in device removal")
+		return user, errors.New("No device ID provided")
+	}
+
+	targetRegion := ""
+	if len(region) > 0 {
+		targetRegion = strings.ToLower(strings.TrimSpace(region[0]))
+	}
+	if len(targetRegion) == 0 && project.Environment == "cloud" {
+		targetRegion = strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_GCEPROJECT")))
+	}
+	altID := namespaceDeviceID(trimmedID, targetRegion)
+
+	filtered := make([]Device, 0, len(user.Devices))
+	removed := false
+	for _, curDevice := range user.Devices {
+		if curDevice.ID == trimmedID || (curDevice.ID == altID && deviceMatchesRegion(curDevice.Region, targetRegion)) {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, curDevice)
+	}
+
+	if !removed {
+		return user, errDeviceNotFound
+	}
+
+	user.Devices = filtered
+	return user, nil
+}
+
+// HandleHybridDeviceRemove removes a hybrid device on Cloud (idempotent if already absent).
+func HandleHybridDeviceRemove(user User, deviceID string) (User, error) {
+	updated, err := removeDeviceFromUser(user, deviceID)
+	if errors.Is(err, errDeviceNotFound) {
+		return user, nil
+	}
+	return updated, err
+}
+
+// handleDeviceRemove unregisters a device (and its FCM notification token/preferences/webhook) from a user account.
+func handleDeviceRemove(ctx context.Context, user User, deviceID string, region ...string) (User, error) {
+	trimmedID := strings.TrimSpace(deviceID)
+	targetRegion := ""
+	if len(region) > 0 {
+		targetRegion = strings.ToLower(strings.TrimSpace(region[0]))
+	}
+	if len(targetRegion) == 0 && project.Environment == "cloud" {
+		targetRegion = strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_GCEPROJECT")))
+	}
+	altID := namespaceDeviceID(trimmedID, targetRegion)
+
+	var oldWebhookToken string
+	for _, curDevice := range user.Devices {
+		if curDevice.ID == trimmedID || (curDevice.ID == altID && deviceMatchesRegion(curDevice.Region, targetRegion)) {
+			oldWebhookToken = curDevice.WebhookToken
+			break
+		}
+	}
+
+	updatedUser, err := removeDeviceFromUser(user, deviceID, targetRegion)
+	if err != nil {
+		return user, err
+	}
+
+	if len(strings.TrimSpace(oldWebhookToken)) > 0 {
+		if delErr := DeleteDeviceWebhookIndex(ctx, hashDeviceWebhookToken(oldWebhookToken)); delErr != nil {
+			log.Printf("[WARNING] Failed deleting device webhook index during removal of %s: %v", trimmedID, delErr)
+		}
+	}
+
+	if project.Environment == "cloud" {
+		return updatedUser, nil
+	}
+
+	org, syncApikey, err := validateCloudSyncForDevices(ctx, user)
+	if err != nil {
+		return user, err
+	}
+
+	syncJob := CloudSyncJob{
+		Type:          "device",
+		Action:        "unregister",
+		OrgId:         org.Id,
+		PrimaryItemId: user.Id,
+		SecondaryItem: strings.TrimSpace(deviceID),
+	}
+	if err := executeCloudAction(syncJob, syncApikey); err != nil {
+		log.Printf("[ERROR] Failed syncing device removal to Cloud for user %s: %v", user.Id, err)
+		return user, err
+	}
+
+	return updatedUser, nil
 }
 
 func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
@@ -6406,7 +6753,8 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		SpecializedApps    []MinimizedApps `json:"specialized_apps"`
 		Theme              string          `json:"theme"`
 
-		Device Device `json:"device" datastore:"device"` 
+		Device         Device `json:"device" datastore:"device"`
+		RemoveDeviceID string `json:"remove_device_id"`
 	}
 
 	ctx := GetContext(request)
@@ -6578,10 +6926,51 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		foundUser.PersonalInfo.Role = t.CompanyRole
 	}
 
-	if len(t.Device.ID) > 0 { 
-		retUser, err := handleDeviceUpsert(ctx, *foundUser, t.Device)
+	if len(t.RemoveDeviceID) > 0 {
+		if userInfo.Id != foundUser.Id {
+			log.Printf("[WARNING] User %s (%s) tried to remove device for user %s (%s)", userInfo.Username, userInfo.Id, foundUser.Username, foundUser.Id)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "You can only unregister your own devices"}`))
+			return
+		}
+
+		retUser, err := handleDeviceRemove(ctx, *foundUser, t.RemoveDeviceID)
 		if err != nil {
-			resp.WriteHeader(400)
+			statusCode := 400
+			if errors.Is(err, errDeviceNotFound) {
+				statusCode = 404
+			} else if errors.Is(err, errCloudSyncRequired) {
+				statusCode = 403
+			}
+			resp.WriteHeader(statusCode)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		}
+
+		foundUser = &retUser
+	} else if len(t.Device.ID) > 0 {
+		if userInfo.Id != foundUser.Id {
+			log.Printf("[WARNING] User %s (%s) tried to modify device for user %s (%s)", userInfo.Username, userInfo.Id, foundUser.Username, foundUser.Id)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "You can only manage your own devices"}`))
+			return
+		}
+
+		var retUser User
+		var err error
+		if isDeviceUnregisterAction(t.Device.Action) {
+			retUser, err = handleDeviceRemove(ctx, *foundUser, t.Device.ID, t.Device.Region)
+		} else {
+			retUser, err = handleDeviceUpsert(ctx, *foundUser, t.Device)
+		}
+		if err != nil {
+			statusCode := 400
+			if errors.Is(err, errDeviceNotFound) {
+				statusCode = 404
+			} else if errors.Is(err, errCloudSyncRequired) {
+				statusCode = 403
+			}
+			resp.WriteHeader(statusCode)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 			return
 		}
@@ -6878,6 +7267,489 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
 }
 
+// HandleUnregisterDevice removes a registered device and its notification token/preferences from the authenticated user's account.
+// Route: DELETE /api/v1/users/devices/{deviceId}
+func HandleUnregisterDevice(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Unregister Device request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	userInfo, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in unregister device: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	deviceID := strings.TrimPrefix(request.URL.Path, "/api/v1/users/devices/")
+	deviceID = strings.Trim(deviceID, "/")
+	if unescaped, unescErr := url.PathUnescape(deviceID); unescErr == nil {
+		deviceID = unescaped
+	}
+	if len(strings.TrimSpace(deviceID)) == 0 {
+		deviceID = request.URL.Query().Get("device_id")
+	}
+
+	if requestedUserID := strings.TrimSpace(request.URL.Query().Get("user_id")); len(requestedUserID) > 0 && requestedUserID != userInfo.Id {
+		log.Printf("[WARNING] User %s (%s) tried to unregister device for user %s", userInfo.Username, userInfo.Id, requestedUserID)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "You can only unregister your own devices"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	foundUser, err := GetUser(ctx, userInfo.Id)
+	if err != nil {
+		log.Printf("[WARNING] Can't find user %s (unregister device): %s", userInfo.Id, err)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "User not found"}`))
+		return
+	}
+
+	retUser, err := handleDeviceRemove(ctx, *foundUser, deviceID, request.URL.Query().Get("region"))
+	if err != nil {
+		statusCode := 400
+		if errors.Is(err, errDeviceNotFound) {
+			statusCode = 404
+		} else if errors.Is(err, errCloudSyncRequired) {
+			statusCode = 403
+		}
+		resp.WriteHeader(statusCode)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	if err := SetUser(ctx, &retUser, false); err != nil {
+		log.Printf("[WARNING] Error unregistering device %s for user %s: %s", deviceID, foundUser.Username, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed saving user"}`))
+		return
+	}
+
+	ip := GetRequestIp(request)
+	log.Printf("[AUDIT] Successfully unregistered device %s for user %s (%s) with IP: %s", deviceID, foundUser.Username, foundUser.Id, ip)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+
+// HandleDeviceWebhookControl enables, disables, or rotates the unauthenticated webhook URL for a mobile device.
+// Route: POST /api/v1/users/devices/{deviceId}/webhook
+func HandleDeviceWebhookControl(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	userInfo, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	deviceID := strings.TrimPrefix(request.URL.Path, "/api/v1/users/devices/")
+	deviceID = strings.TrimSuffix(deviceID, "/webhook")
+	deviceID = strings.Trim(deviceID, "/")
+	if unescaped, unescErr := url.PathUnescape(deviceID); unescErr == nil {
+		deviceID = unescaped
+	}
+	if len(strings.TrimSpace(deviceID)) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No device ID provided"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading request body"}`))
+		return
+	}
+
+	type webhookControlReq struct {
+		Enabled    bool   `json:"enabled"`
+		Regenerate bool   `json:"regenerate"`
+		Region     string `json:"region"`
+	}
+	var req webhookControlReq
+	if len(bytes.TrimSpace(body)) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Invalid JSON body"}`))
+			return
+		}
+	}
+
+	ctx := GetContext(request)
+	foundUser, err := GetUser(ctx, userInfo.Id)
+	if err != nil {
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "User not found"}`))
+		return
+	}
+
+	if project.Environment != "cloud" {
+		if _, _, csErr := validateCloudSyncForDevices(ctx, *foundUser); csErr != nil {
+			resp.WriteHeader(403)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, csErr)))
+			return
+		}
+	}
+
+	targetRegion := resolveDeviceRegion(req.Region)
+	if len(targetRegion) == 0 {
+		targetRegion = resolveDeviceRegion(request.URL.Query().Get("region"))
+	}
+
+	altID := namespaceDeviceID(deviceID, targetRegion)
+	foundIdx := -1
+	for i, d := range foundUser.Devices {
+		if d.ID == deviceID || (d.ID == altID && deviceMatchesRegion(d.Region, targetRegion)) {
+			foundIdx = i
+			break
+		}
+	}
+	if foundIdx < 0 {
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Device not found"}`))
+		return
+	}
+
+	dev := foundUser.Devices[foundIdx]
+	if (req.Enabled || req.Regenerate) && !isMobileDevicePlatform(dev.Platform) {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Device webhook is only supported for mobile devices (ios, android)"}`))
+		return
+	}
+
+	oldToken := dev.WebhookToken
+	if !req.Enabled && !req.Regenerate {
+		dev.WebhookEnabled = false
+		dev.WebhookToken = ""
+	} else {
+		dev.WebhookEnabled = true
+		if req.Regenerate || len(strings.TrimSpace(dev.WebhookToken)) == 0 {
+			newTok, genErr := generateDeviceWebhookToken()
+			if genErr != nil {
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed generating webhook token"}`))
+				return
+			}
+			dev.WebhookToken = newTok
+		}
+	}
+	dev.EditedAt = time.Now().Unix()
+
+	if err := syncDeviceWebhookIndex(ctx, *foundUser, oldToken, dev); err != nil {
+		log.Printf("[ERROR] Failed syncing device webhook index for user %s device %s: %v", foundUser.Id, dev.ID, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed saving device webhook"}`))
+		return
+	}
+
+	foundUser.Devices[foundIdx] = dev
+	if err := SetUser(ctx, foundUser, false); err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed saving user"}`))
+		return
+	}
+
+	webhookURL := ""
+	if dev.WebhookEnabled && len(dev.WebhookToken) > 0 {
+		scheme := "https"
+		if strings.HasPrefix(request.Host, "localhost") || strings.HasPrefix(request.Host, "127.0.0.1") {
+			scheme = "http"
+		}
+		if len(request.Host) > 0 {
+			webhookURL = fmt.Sprintf("%s://%s/api/v1/devices/webhook/%s", scheme, request.Host, dev.WebhookToken)
+		} else {
+			webhookURL = fmt.Sprintf("/api/v1/devices/webhook/%s", dev.WebhookToken)
+		}
+	}
+
+	respBody, _ := json.Marshal(map[string]interface{}{
+		"success":         true,
+		"webhook_enabled": dev.WebhookEnabled,
+		"webhook_token":   dev.WebhookToken,
+		"webhook_url":     webhookURL,
+	})
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write(respBody)
+}
+
+func writeJSONReason(resp http.ResponseWriter, statusCode int, reason string) {
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(statusCode)
+	b, _ := json.Marshal(map[string]interface{}{
+		"success": false,
+		"reason":  reason,
+	})
+	resp.Write(b)
+}
+
+// HandleDeviceWebhookTrigger receives an unauthenticated webhook request for a mobile device
+// and dispatches a push notification to that device.
+// Route: POST /api/v1/devices/webhook/{token}
+func HandleDeviceWebhookTrigger(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if err := ValidateRequestOverload(resp, request, 30); err != nil {
+		writeJSONReason(resp, http.StatusTooManyRequests, "Too many requests")
+		return
+	}
+
+	token := strings.TrimPrefix(request.URL.Path, "/api/v1/devices/webhook/")
+	token = strings.Trim(token, "/")
+	if unescaped, unescErr := url.PathUnescape(token); unescErr == nil {
+		token = unescaped
+	}
+	token = strings.TrimSpace(token)
+	if len(token) < 20 {
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Webhook not found or disabled"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	idx, err := GetDeviceWebhookIndex(ctx, hashDeviceWebhookToken(token))
+	if err != nil || !idx.Enabled || len(idx.UserID) == 0 || len(idx.DeviceID) == 0 {
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Webhook not found or disabled"}`))
+		return
+	}
+
+	foundUser, err := GetUser(ctx, idx.UserID)
+	if err != nil || foundUser == nil {
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Webhook not found or disabled"}`))
+		return
+	}
+
+	var targetDev *Device
+	for i := range foundUser.Devices {
+		if foundUser.Devices[i].ID == idx.DeviceID {
+			targetDev = &foundUser.Devices[i]
+			break
+		}
+	}
+	if targetDev == nil || !targetDev.WebhookEnabled || !isMobileDevicePlatform(targetDev.Platform) ||
+		subtle.ConstantTimeCompare([]byte(targetDev.WebhookToken), []byte(token)) != 1 {
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Webhook not found or disabled"}`))
+		return
+	}
+
+	if len(strings.TrimSpace(targetDev.Token)) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Target mobile device has no active push token"}`))
+		return
+	}
+
+	bodyBytes, _ := ioutil.ReadAll(io.LimitReader(request.Body, 64*1024))
+	rawBody := strings.TrimSpace(string(bodyBytes))
+	rawQuery := ""
+	if request.URL != nil {
+		rawQuery = strings.TrimSpace(request.URL.RawQuery)
+	}
+
+	type webhookPayload struct {
+		Type         string `json:"type"`
+		Title        string `json:"title"`
+		Body         string `json:"body"`
+		Description  string `json:"description"`
+		Message      string `json:"message"`
+		Severity     string `json:"severity"`
+		Source       string `json:"source"`
+		ReferenceURL string `json:"reference_url"`
+		OrgID        string `json:"org_id"`
+	}
+	var payload webhookPayload
+	if len(rawBody) > 0 {
+		if jsonErr := json.Unmarshal(bodyBytes, &payload); jsonErr != nil {
+			payload.Body = rawBody
+		}
+	}
+
+	// Also allow GET/query-param overrides when not set in JSON body
+	if request.URL != nil {
+		q := request.URL.Query()
+		if len(strings.TrimSpace(payload.Title)) == 0 {
+			payload.Title = q.Get("title")
+		}
+		if len(strings.TrimSpace(payload.Body)) == 0 {
+			payload.Body = q.Get("body")
+		}
+		if len(strings.TrimSpace(payload.Description)) == 0 {
+			payload.Description = q.Get("description")
+		}
+		if len(strings.TrimSpace(payload.Message)) == 0 {
+			payload.Message = q.Get("message")
+		}
+		if len(strings.TrimSpace(payload.Type)) == 0 {
+			payload.Type = q.Get("type")
+		}
+		if len(strings.TrimSpace(payload.Severity)) == 0 {
+			payload.Severity = q.Get("severity")
+		}
+		if len(strings.TrimSpace(payload.Source)) == 0 {
+			payload.Source = q.Get("source")
+		}
+		if len(strings.TrimSpace(payload.ReferenceURL)) == 0 {
+			payload.ReferenceURL = q.Get("reference_url")
+		}
+		if len(strings.TrimSpace(payload.OrgID)) == 0 {
+			payload.OrgID = q.Get("org_id")
+		}
+	}
+
+	msgBody := strings.TrimSpace(payload.Body)
+	if len(msgBody) == 0 {
+		msgBody = strings.TrimSpace(payload.Description)
+	}
+	if len(msgBody) == 0 {
+		msgBody = strings.TrimSpace(payload.Message)
+	}
+
+	// If no explicit title was provided, forward whatever details they sent directly as the title
+	if len(strings.TrimSpace(payload.Title)) == 0 {
+		switch {
+		case len(msgBody) > 0:
+			payload.Title = msgBody
+		case len(rawBody) > 0:
+			payload.Title = rawBody
+		case len(rawQuery) > 0:
+			if decoded, decErr := url.QueryUnescape(rawQuery); decErr == nil && len(strings.TrimSpace(decoded)) > 0 {
+				payload.Title = strings.TrimSpace(decoded)
+			} else {
+				payload.Title = rawQuery
+			}
+		default:
+			payload.Title = "Device Notification"
+		}
+	}
+
+	if len(msgBody) == 0 {
+		switch {
+		case len(rawBody) > 0:
+			msgBody = rawBody
+		case len(rawQuery) > 0:
+			msgBody = payload.Title
+		default:
+			msgBody = "Triggered via mobile device webhook"
+		}
+	}
+
+	pushType := strings.ToLower(strings.TrimSpace(payload.Type))
+	if pushType != NotificationTypeCritical && pushType != NotificationTypeAgentRequest && pushType != NotificationTypeGeneral {
+		pushType = NotificationTypeGeneral
+	}
+
+	orgID := strings.TrimSpace(payload.OrgID)
+	if len(orgID) > 0 {
+		if !userBelongsToOrg(ctx, *foundUser, orgID) {
+			writeJSONReason(resp, http.StatusForbidden, "Forbidden: user does not belong to target organization")
+			return
+		}
+	} else {
+		orgID = idx.OrgID
+	}
+	if len(orgID) == 0 {
+		orgID = foundUser.ActiveOrg.Id
+	}
+
+	pushReq := NotificationRequest{
+		Type:         pushType,
+		Title:        payload.Title,
+		Body:         msgBody,
+		Description:  msgBody,
+		Source:       payload.Source,
+		Severity:     payload.Severity,
+		ReferenceURL: payload.ReferenceURL,
+		UserID:       foundUser.Id,
+		OrgID:        orgID,
+		TargetTokens: []string{strings.TrimSpace(targetDev.Token)},
+	}
+
+	if project.Environment == "cloud" {
+		_, successCount, pushErr := DispatchFCMPushNotification(ctx, pushReq, foundUser)
+		if pushErr != nil {
+			writeJSONReason(resp, 500, pushErr.Error())
+			return
+		}
+		if successCount > 0 {
+			recordDeviceWebhookStat(orgID, targetDev.ID)
+		}
+		resp.Header().Set("Content-Type", "application/json")
+		resp.WriteHeader(200)
+		resp.Write([]byte(fmt.Sprintf(`{"success": true, "delivered": %d}`, successCount)))
+		return
+	}
+
+	org, syncApikey, csErr := validateCloudSyncForDevices(ctx, *foundUser)
+	if csErr != nil {
+		writeJSONReason(resp, 403, csErr.Error())
+		return
+	}
+
+	reqBytes, _ := json.Marshal(pushReq)
+	syncJob := CloudSyncJob{
+		Type:          "notification",
+		Action:        "dispatch",
+		OrgId:         org.Id,
+		PrimaryItemId: foundUser.Id,
+		SecondaryItem: string(reqBytes),
+	}
+	if syncErr := executeCloudAction(syncJob, syncApikey); syncErr != nil {
+		writeJSONReason(resp, 502, syncErr.Error())
+		return
+	}
+
+	recordDeviceWebhookStat(orgID, targetDev.ID)
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "delivered": 1}`))
+}
+
+func recordDeviceWebhookStat(orgID, deviceID string) {
+	trimmedOrg := strings.TrimSpace(orgID)
+	if len(trimmedOrg) == 0 {
+		return
+	}
+	normalizedDevID := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(deviceID), " ", "_"))
+	go func(oID, dID string) {
+		bgCtx := context.Background()
+		IncrementCache(bgCtx, oID, "device_notifications_webhook")
+		if len(dID) > 0 {
+			IncrementCache(bgCtx, oID, fmt.Sprintf("device_notification_%s_webhook", dID))
+		}
+	}(trimmedOrg, normalizedDevID)
+}
+
 func GenerateApikey(ctx context.Context, userInfo User) (User, error) {
 	if len(userInfo.Username) == 0 || len(userInfo.Id) == 0 {
 		return userInfo, fmt.Errorf("User ID and username are required to generate API key")
@@ -7000,8 +7872,8 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("Error with body read: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading the request body"}`))
 		return
 	}
 
@@ -7009,8 +7881,8 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	err = json.Unmarshal(body, &workflow)
 	if err != nil {
 		log.Printf("Failed unmarshaling: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "The body must be workflow JSON, e.g. {\"name\": \"...\", \"description\": \"...\"}"}`))
 		return
 	}
 
@@ -10895,10 +11767,11 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			item.Orgs = append(item.Orgs, user.ActiveOrg.Id)
 		}
 
-		// Removes tokens 
+		// Removes tokens
 		if item.Username != user.Username {
-			for deviceIndex, _ := range item.Devices {
+			for deviceIndex := range item.Devices {
 				item.Devices[deviceIndex].Token = ""
+				item.Devices[deviceIndex].WebhookToken = ""
 			}
 		}
 
@@ -12604,7 +13477,7 @@ func HandleDeleteUsersAccountPermanent(resp http.ResponseWriter, request *http.R
 	}
 
 	org.Users = users
-	if len(org.Users) > 1 {
+	if len(org.Users) > 0 {
 		err = SetOrg(ctx, *org, org.Id)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating org (delete user %s) %s: %s", foundUser.Username, org.Id, err)
@@ -13900,6 +14773,20 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		RegionUrl:       parentOrg.RegionUrl,
 
 		Defaults: parentOrg.Defaults,
+		SyncFeatures: SyncFeatures{
+			AppExecutions: SyncData{
+				Active: true,
+				Limit:  2000,
+			},
+			MultiEnv: SyncData{
+				Active: true,
+				Limit:  1,
+			},
+			MultiTenant: SyncData{
+				Active: true,
+				Limit:  3,
+			},
+		},
 
 		// FIXME: Should this be here? Makes things slow~
 		// Should only append apps owned by the parentorg itself
@@ -15013,6 +15900,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Reset limits to defaults (2000 app runs / 1 env / 3 tenants) for org %s (no license)", org.Id)
 		}
 
+		org.SyncFeatures.Editing = true
 		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 
 		if newLeadinfo.EnterpriseLicenseCloud ||
@@ -15219,8 +16107,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		oldOnpremAppExecutionsLimit := org.SyncFeatures.OnpremAppExecutions.Limit
 
 		org.SyncFeatures = tmpData.SyncFeatures
-		org.SyncFeatures.Editing = false
-
+		org.SyncFeatures.Editing = true
 		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 	}
 
@@ -15288,8 +16175,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		oldOnpremAppExecutionsLimit := org.SyncFeatures.OnpremAppExecutions.Limit
 
 		org.SyncFeatures = tmpData.SyncFeatures
-		org.SyncFeatures.Editing = false
-
+		org.SyncFeatures.Editing = true
 		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 	}
 
@@ -22683,10 +23569,6 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 		log.Printf("[WARNING] Encryption modifier rollover is not set. This means that the encryption key is not rotated and auth values are not encrypted with a new key. This is a security risk.")
 	}
 
-	if debug {
-		log.Printf("[DEBUG] Decrypting value, %d key(s) available to try", len(decryptWith))
-	}
-
 	// Try each available key, newest first. AES-GCM authentication means the
 	// wrong key fails cleanly, so the first key that opens the value is correct.
 	var lastErr error
@@ -22695,18 +23577,18 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 		if err == nil {
 			if debug {
 				if i == 0 {
-					log.Printf("[DEBUG] Decrypted value with the current (older) key [%d/%d]", i+1, len(decryptWith))
+					//log.Printf("[DEBUG] Decrypted value with the current (older) key [%d/%d]", i+1, len(decryptWith))
 				} else {
-					log.Printf("[DEBUG] Decrypted value with an new key [%d/%d] - value not yet moved to the current key", i+1, len(decryptWith))
+					//log.Printf("[DEBUG] Decrypted value with an new key [%d/%d] - value not yet moved to the current key", i+1, len(decryptWith))
 				}
 			}
 
 			return plaintext, nil
 		}
 
-		if debug {
-			log.Printf("[DEBUG] Key [%d/%d] did not open the value, trying next key", i+1, len(decryptWith))
-		}
+		//if debug {
+		//	log.Printf("[DEBUG] Key [%d/%d] did not open the value, trying next key", i+1, len(decryptWith))
+		//}
 
 		lastErr = err
 	}
