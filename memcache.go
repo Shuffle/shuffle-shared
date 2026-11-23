@@ -71,7 +71,11 @@ func (client *shuffleMemcacheClient) disableServer(server *shuffleMemcacheServer
 	now := time.Now()
 	client.mutex.Lock()
 	wasDisabled := now.Before(server.disabledUntil)
-	server.disabledUntil = now.Add(30 * time.Second)
+	// Claims also probe disabled replicas. Do not let repeated failures keep
+	// moving the deadline, or DNS can never refresh while executions are active.
+	if !wasDisabled {
+		server.disabledUntil = now.Add(30 * time.Second)
+	}
 	client.mutex.Unlock()
 
 	if !wasDisabled {

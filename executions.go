@@ -88,11 +88,81 @@ func MergeExecutionResults(incoming, saved []ActionResult) []ActionResult {
 // - Setexecution
 // - Getexecution
 
+// Propagate skips in the snapshot, without re-entering an execution update lock.
+func propagateSkippedResults(execution *WorkflowExecution) bool {
+	if execution.Status != "EXECUTING" {
+		return false
+	}
+	statuses := make(map[string]string, len(execution.Results))
+	queue := []string{}
+	for _, result := range execution.Results {
+		if statuses[result.Action.ID] != "SUCCESS" && statuses[result.Action.ID] != "FINISHED" {
+			statuses[result.Action.ID] = result.Status
+		}
+		if result.Status == "SKIPPED" {
+			queue = append(queue, result.Action.ID)
+		}
+	}
+	if len(queue) == 0 {
+		return false
+	}
+	parents, children := map[string][]string{}, map[string][]string{}
+	for _, branch := range execution.Workflow.Branches {
+		parents[branch.DestinationID] = append(parents[branch.DestinationID], branch.SourceID)
+		children[branch.SourceID] = append(children[branch.SourceID], branch.DestinationID)
+	}
+	changed := false
+	for index := 0; index < len(queue); index++ {
+		for _, id := range children[queue[index]] {
+			if _, exists := statuses[id]; exists || id == execution.Start || id == execution.Workflow.Start {
+				continue
+			}
+			blocked := true
+			for _, parent := range parents[id] {
+				if statuses[parent] != "SKIPPED" && statuses[parent] != "FAILURE" && statuses[parent] != "ABORTED" {
+					blocked = false
+					break
+				}
+			}
+			if !blocked {
+				continue
+			}
+			action := GetAction(*execution, id, "")
+			if action.ID == "" {
+				continue
+			}
+			if action.AppName == "Shuffle Workflow" {
+				action.AppName = "shuffle-subflow"
+			}
+			action = Action{
+				ID: action.ID, Name: action.Name, Label: action.Label, AppName: action.AppName, AppVersion: action.AppVersion,
+				Parameters: append([]WorkflowAppActionParameter(nil), action.Parameters...), ExecutionVariable: action.ExecutionVariable,
+			}
+			for index, parameter := range action.Parameters {
+				if parameter.Configuration {
+					action.Parameters[index].Value = ""
+				}
+			}
+			execution.Results = append(execution.Results, ActionResult{
+				Action: action, ExecutionId: execution.ExecutionId, Authorization: execution.Authorization,
+				Status: "SKIPPED", Result: `{"success": false, "reason": "Skipped because of previous node"}`,
+			})
+			statuses[id] = "SKIPPED"
+			queue = append(queue, id)
+			changed = true
+		}
+	}
+	return changed
+}
+
 func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (WorkflowExecution, bool) {
 	dbsave := false
 	workflowExecution.Workflow.Image = ""
 
 	workflowExecution = cleanupProtectedKeys(workflowExecution)
+	if project.Environment != "cloud" && propagateSkippedResults(&workflowExecution) {
+		dbsave = true
+	}
 	validation, err := GetExecutionValidation(ctx, workflowExecution.ExecutionId)
 	if err == nil {
 		if workflowExecution.NotificationsCreated > 0 {
