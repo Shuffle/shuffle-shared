@@ -6399,26 +6399,36 @@ func deviceMatchesRegion(devRegion, targetRegion string) bool {
 	return d == t || d == ""
 }
 
+func namespaceDeviceID(deviceID, region string) string {
+	trimmedID := strings.TrimSpace(deviceID)
+	trimmedRegion := strings.ToLower(strings.TrimSpace(region))
+	if len(trimmedID) == 0 || len(trimmedRegion) == 0 {
+		return trimmedID
+	}
+	if strings.HasPrefix(strings.ToLower(trimmedID), trimmedRegion+"_") {
+		return trimmedID
+	}
+	return fmt.Sprintf("%s_%s", trimmedRegion, trimmedID)
+}
+
 func upsertDeviceIntoUser(ctx context.Context, user User, device Device, validateToken bool) (User, error) {
-	if len(device.ID) == 0 {
+	rawID := strings.TrimSpace(device.ID)
+	if len(rawID) == 0 {
 		log.Printf("[ERROR] No ID in device upsert")
 		return user, errors.New("No device ID provided")
 	}
 
 	device.Region = resolveDeviceRegion(device.Region)
+	device.ID = namespaceDeviceID(rawID, device.Region)
 
 	foundIndex := -1
 	legacyIndex := -1
 	for deviceIndex, curDevices := range user.Devices {
-		if curDevices.ID != device.ID {
-			continue
-		}
-		curReg := strings.ToLower(strings.TrimSpace(curDevices.Region))
-		if curReg == device.Region {
+		if curDevices.ID == device.ID {
 			foundIndex = deviceIndex
 			break
 		}
-		if curReg == "" && legacyIndex < 0 {
+		if curDevices.ID == rawID && strings.TrimSpace(curDevices.Region) == "" && legacyIndex < 0 {
 			legacyIndex = deviceIndex
 		}
 	}
@@ -6595,11 +6605,12 @@ func removeDeviceFromUser(user User, deviceID string, region ...string) (User, e
 	if len(targetRegion) == 0 && project.Environment == "cloud" {
 		targetRegion = strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_GCEPROJECT")))
 	}
+	altID := namespaceDeviceID(trimmedID, targetRegion)
 
 	filtered := make([]Device, 0, len(user.Devices))
 	removed := false
 	for _, curDevice := range user.Devices {
-		if curDevice.ID == trimmedID && deviceMatchesRegion(curDevice.Region, targetRegion) {
+		if curDevice.ID == trimmedID || (curDevice.ID == altID && deviceMatchesRegion(curDevice.Region, targetRegion)) {
 			removed = true
 			continue
 		}
@@ -6633,10 +6644,11 @@ func handleDeviceRemove(ctx context.Context, user User, deviceID string, region 
 	if len(targetRegion) == 0 && project.Environment == "cloud" {
 		targetRegion = strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_GCEPROJECT")))
 	}
+	altID := namespaceDeviceID(trimmedID, targetRegion)
 
 	var oldWebhookToken string
 	for _, curDevice := range user.Devices {
-		if curDevice.ID == trimmedID && deviceMatchesRegion(curDevice.Region, targetRegion) {
+		if curDevice.ID == trimmedID || (curDevice.ID == altID && deviceMatchesRegion(curDevice.Region, targetRegion)) {
 			oldWebhookToken = curDevice.WebhookToken
 			break
 		}
@@ -7400,9 +7412,10 @@ func HandleDeviceWebhookControl(resp http.ResponseWriter, request *http.Request)
 		targetRegion = resolveDeviceRegion(request.URL.Query().Get("region"))
 	}
 
+	altID := namespaceDeviceID(deviceID, targetRegion)
 	foundIdx := -1
 	for i, d := range foundUser.Devices {
-		if d.ID == deviceID && deviceMatchesRegion(d.Region, targetRegion) {
+		if d.ID == deviceID || (d.ID == altID && deviceMatchesRegion(d.Region, targetRegion)) {
 			foundIdx = i
 			break
 		}

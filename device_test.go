@@ -221,6 +221,9 @@ func TestDevicePlusRegionUniqueConnection(t *testing.T) {
 	if len(user.Devices) != 2 {
 		t.Fatalf("expected 2 distinct Device+Region connections, got %d", len(user.Devices))
 	}
+	if user.Devices[0].ID != "shuffler_iphone-1" || user.Devices[1].ID != "uk_iphone-1" {
+		t.Fatalf("expected namespaced IDs shuffler_iphone-1 and uk_iphone-1, got %q and %q", user.Devices[0].ID, user.Devices[1].ID)
+	}
 
 	// In UK region, only the UK token should be selected
 	tokens := GetUserDeviceTokensForTypeAndOrg(user, NotificationTypeGeneral, "org-1")
@@ -228,12 +231,12 @@ func TestDevicePlusRegionUniqueConnection(t *testing.T) {
 		t.Fatalf("expected only UK token [tok-uk], got %v", tokens)
 	}
 
-	// Removing UK connection leaves US connection intact
-	user, err = handleDeviceRemove(ctx, user, "iphone-1", "uk")
+	// Removing by unique device ID alone (no region param needed) leaves US connection intact
+	user, err = handleDeviceRemove(ctx, user, "uk_iphone-1")
 	if err != nil {
 		t.Fatalf("failed removing UK device: %v", err)
 	}
-	if len(user.Devices) != 1 || user.Devices[0].Region != "shuffler" {
-		t.Fatalf("expected US device to remain, got %+v", user.Devices)
+	if len(user.Devices) != 1 || user.Devices[0].ID != "shuffler_iphone-1" {
+		t.Fatalf("expected shuffler_iphone-1 to remain, got %+v", user.Devices)
 	}
 }
