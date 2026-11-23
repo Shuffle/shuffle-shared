@@ -5993,6 +5993,131 @@ func SetApikey(ctx context.Context, Userdata User) error {
 	return nil
 }
 
+func hybridDeviceDocID(orgId, userId string) string {
+	return fmt.Sprintf("%s_%s", strings.TrimSpace(orgId), strings.TrimSpace(userId))
+}
+
+// SetHybridUserDevices persists hybrid device registrations for an on-prem user scoped to a Cloud Sync org.
+func SetHybridUserDevices(ctx context.Context, record HybridUserDevices) error {
+	nameKey := "hybrid_devices"
+	id := hybridDeviceDocID(record.OrgID, record.UserID)
+	if len(record.ID) == 0 {
+		record.ID = id
+	}
+
+	if project.DbType == "opensearch" {
+		data, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		return indexEs(ctx, nameKey, id, data)
+	}
+
+	k := datastore.NameKey(nameKey, id, nil)
+	_, err := project.Dbclient.Put(ctx, k, &record)
+	return err
+}
+
+// GetHybridUserDevices loads hybrid device registrations for an on-prem user scoped to a Cloud Sync org.
+func GetHybridUserDevices(ctx context.Context, orgId, userId string) (HybridUserDevices, error) {
+	nameKey := "hybrid_devices"
+	id := hybridDeviceDocID(orgId, userId)
+	rec := HybridUserDevices{
+		ID:     id,
+		OrgID:  strings.TrimSpace(orgId),
+		UserID: strings.TrimSpace(userId),
+	}
+
+	if project.DbType == "opensearch" {
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: id,
+		})
+		if err != nil {
+			return rec, err
+		}
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return rec, errDeviceNotFound
+		}
+		if err := json.NewDecoder(res.Body).Decode(&struct {
+			Source *HybridUserDevices `json:"_source"`
+		}{Source: &rec}); err != nil {
+			return rec, err
+		}
+		return rec, nil
+	}
+
+	k := datastore.NameKey(nameKey, id, nil)
+	if err := project.Dbclient.Get(ctx, k, &rec); err != nil {
+		return rec, err
+	}
+	return rec, nil
+}
+
+// SetDeviceWebhookIndex persists a hashed mobile device webhook lookup record.
+func SetDeviceWebhookIndex(ctx context.Context, record DeviceWebhookIndex) error {
+	nameKey := "device_webhook"
+	if project.DbType == "opensearch" {
+		data, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		return indexEs(ctx, nameKey, record.ID, data)
+	}
+
+	k := datastore.NameKey(nameKey, record.ID, nil)
+	_, err := project.Dbclient.Put(ctx, k, &record)
+	return err
+}
+
+// GetDeviceWebhookIndex retrieves a hashed mobile device webhook lookup record.
+func GetDeviceWebhookIndex(ctx context.Context, tokenHash string) (DeviceWebhookIndex, error) {
+	nameKey := "device_webhook"
+	rec := DeviceWebhookIndex{ID: tokenHash}
+	if project.DbType == "opensearch" {
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: tokenHash,
+		})
+		if err != nil {
+			return rec, err
+		}
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return rec, errors.New("webhook not found")
+		}
+		if err := json.NewDecoder(res.Body).Decode(&struct {
+			Source *DeviceWebhookIndex `json:"_source"`
+		}{Source: &rec}); err != nil {
+			return rec, err
+		}
+		return rec, nil
+	}
+
+	k := datastore.NameKey(nameKey, tokenHash, nil)
+	if err := project.Dbclient.Get(ctx, k, &rec); err != nil {
+		return rec, err
+	}
+	return rec, nil
+}
+
+// DeleteDeviceWebhookIndex removes a hashed mobile device webhook lookup record.
+func DeleteDeviceWebhookIndex(ctx context.Context, tokenHash string) error {
+	if len(strings.TrimSpace(tokenHash)) == 0 {
+		return nil
+	}
+	nameKey := "device_webhook"
+	if project.DbType == "opensearch" {
+		return DeleteKey(ctx, nameKey, tokenHash)
+	}
+
+	k := datastore.NameKey(nameKey, tokenHash, nil)
+	return project.Dbclient.Delete(ctx, k)
+}
+
 func SetOpenApiDatastore(ctx context.Context, id string, openapi ParsedOpenApi) error {
 	nameKey := "openapi3"
 	if project.DbType == "opensearch" {
@@ -7068,9 +7193,11 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 			newUsers = append(newUsers, orgUser)
 		}
 		org.Users = newUsers
-		err = SetOrg(ctx, *org, org.Id)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting org %s (1)", orgId)
+		if len(org.Users) > 0 {
+			err = SetOrg(ctx, *org, org.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting org %s (1)", orgId)
+			}
 		}
 	}
 

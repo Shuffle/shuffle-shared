@@ -40,6 +40,7 @@ var PredictableDataTypes = []string{
 	"workflow_executions_cloud",
 	"workflow_executions_onprem",
 	"api_usage",
+	"oauth_api_usage",
 	"ai_executions",
 	"agent_executions",
 	"agent_executions_successful",
@@ -424,6 +425,8 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 			return d.OnpremExecutions
 		case "api_usage":
 			return d.ApiUsage
+		case "oauth_api_usage":
+			return d.OAuthApiUsage
 		case "ai_executions":
 			return d.AIUsage
 		case "agent_executions":
@@ -524,6 +527,8 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 			todayValue = info.DailyOnpremExecutions
 		case "api_usage":
 			todayValue = info.DailyApiUsage
+		case "oauth_api_usage":
+			todayValue = info.DailyOAuthApiUsage
 		case "ai_executions":
 			todayValue = info.DailyAIUsage
 		}
@@ -1710,6 +1715,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		deltaOnprem := carryDailyDelta(executionInfo.DailyOnpremExecutions, prevDay.OnpremExecutions)
 		deltaAI := carryDailyDelta(executionInfo.DailyAIUsage, prevDay.AIUsage)
 		deltaApi := carryDailyDelta(executionInfo.DailyApiUsage, prevDay.ApiUsage)
+		deltaOAuthApi := carryDailyDelta(executionInfo.DailyOAuthApiUsage, prevDay.OAuthApiUsage)
 		deltaAgentExec := carryDailyDelta(executionInfo.DailyAgentExecutions, prevDay.AgentExecutions)
 		deltaAgentTokens := carryDailyDelta(executionInfo.DailyAgentTokens, prevDay.AgentTokens)
 		deltaAgentInputTokens := carryDailyDelta(executionInfo.DailyAgentInputTokens, prevDay.AgentInputTokens)
@@ -1802,6 +1808,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.DailyCloudExecutions = deltaCloud
 		executionInfo.DailyOnpremExecutions = deltaOnprem
 		executionInfo.DailyApiUsage = deltaApi
+		executionInfo.DailyOAuthApiUsage = deltaOAuthApi
 		executionInfo.DailyAIUsage = deltaAI
 		executionInfo.DailyAgentExecutions = deltaAgentExec
 		executionInfo.DailyLLMTokens = deltaLLM
@@ -1858,6 +1865,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.DailyStatistics[lastIdx].OnpremExecutions = executionInfo.DailyOnpremExecutions
 		executionInfo.DailyStatistics[lastIdx].AIUsage = executionInfo.DailyAIUsage
 		executionInfo.DailyStatistics[lastIdx].ApiUsage = executionInfo.DailyApiUsage
+		executionInfo.DailyStatistics[lastIdx].OAuthApiUsage = executionInfo.DailyOAuthApiUsage
 		executionInfo.DailyStatistics[lastIdx].Additions = executionInfo.Additions
 		executionInfo.DailyStatistics[lastIdx].AgentExecutions = executionInfo.DailyAgentExecutions
 		executionInfo.DailyStatistics[lastIdx].AgentTokens = executionInfo.DailyAgentTokens
@@ -1904,6 +1912,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyCloudExecutions = carriedDay.CloudExecutions
 		executionInfo.MonthlyOnpremExecutions = carriedDay.OnpremExecutions
 		executionInfo.MonthlyApiUsage = carriedDay.ApiUsage
+		executionInfo.MonthlyOAuthApiUsage = carriedDay.OAuthApiUsage
 		executionInfo.MonthlyAIUsage = carriedDay.AIUsage
 		executionInfo.MonthlyAgentExecutions = carriedDay.AgentExecutions
 		executionInfo.MonthlyAgentExecutionsSuccessful = carriedDay.AgentExecutionsSuccessful
@@ -2142,6 +2151,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalApiUsage += int64(increment)
 		orgStatistics.MonthlyApiUsage += int64(increment)
 		orgStatistics.DailyApiUsage += int64(increment)
+	} else if dataType == "oauth_api_usage" {
+		orgStatistics.TotalOAuthApiUsage += int64(increment)
+		orgStatistics.MonthlyOAuthApiUsage += int64(increment)
+		orgStatistics.DailyOAuthApiUsage += int64(increment)
 	} else if dataType == "ai_executions" {
 		orgStatistics.TotalAIUsage += int64(increment)
 		orgStatistics.MonthlyAIUsage += int64(increment)
