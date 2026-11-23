@@ -7850,8 +7850,8 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("Error with body read: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading the request body"}`))
 		return
 	}
 
@@ -7859,8 +7859,8 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	err = json.Unmarshal(body, &workflow)
 	if err != nil {
 		log.Printf("Failed unmarshaling: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "The body must be workflow JSON, e.g. {\"name\": \"...\", \"description\": \"...\"}"}`))
 		return
 	}
 
