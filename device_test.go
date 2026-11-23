@@ -240,3 +240,15 @@ func TestDevicePlusRegionUniqueConnection(t *testing.T) {
 		t.Fatalf("expected shuffler_iphone-1 to remain, got %+v", user.Devices)
 	}
 }
+
+func TestAllowDeviceWebhookRequestRateLimit(t *testing.T) {
+	key := "test-rate-limit-hash"
+	for i := 0; i < deviceWebhookRateMaxRequests; i++ {
+		if !allowDeviceWebhookRequest(key) {
+			t.Fatalf("expected request %d to be allowed", i+1)
+		}
+	}
+	if allowDeviceWebhookRequest(key) {
+		t.Fatalf("expected request %d to be rate-limited", deviceWebhookRateMaxRequests+1)
+	}
+}

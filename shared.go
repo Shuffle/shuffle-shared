@@ -6357,13 +6357,13 @@ func syncDeviceWebhookIndex(ctx context.Context, user User, oldToken string, dev
 	trimmedOld := strings.TrimSpace(oldToken)
 	trimmedNew := strings.TrimSpace(device.WebhookToken)
 
-	if len(trimmedOld) > 0 && (!device.WebhookEnabled || trimmedOld != trimmedNew) {
+	if len(trimmedOld) > 0 && trimmedOld != trimmedNew {
 		if delErr := DeleteDeviceWebhookIndex(ctx, hashDeviceWebhookToken(trimmedOld)); delErr != nil {
 			log.Printf("[WARNING] Failed deleting old device webhook index for device %s: %v", device.ID, delErr)
 		}
 	}
 
-	if device.WebhookEnabled && len(trimmedNew) > 0 {
+	if len(trimmedNew) > 0 {
 		orgId := strings.TrimSpace(user.ActiveOrg.Id)
 		if len(orgId) == 0 && len(user.Orgs) > 0 {
 			orgId = strings.TrimSpace(user.Orgs[0])
@@ -6373,7 +6373,7 @@ func syncDeviceWebhookIndex(ctx context.Context, user User, oldToken string, dev
 			UserID:    user.Id,
 			OrgID:     orgId,
 			DeviceID:  device.ID,
-			Enabled:   true,
+			Enabled:   device.WebhookEnabled,
 			CreatedAt: time.Now().Unix(),
 		}
 		return SetDeviceWebhookIndex(ctx, rec)
@@ -6421,6 +6421,11 @@ func upsertDeviceIntoUser(ctx context.Context, user User, device Device, validat
 	device.Region = resolveDeviceRegion(device.Region)
 	device.ID = namespaceDeviceID(rawID, device.Region)
 
+	if debug {
+		log.Printf("[DEBUG] Device upsert attempt: user=%s (%s) raw_id=%q resolved_id=%q region=%q platform=%q has_token=%t validate_fcm=%t webhook_enabled=%t",
+			user.Username, user.Id, rawID, device.ID, device.Region, device.Platform, len(strings.TrimSpace(device.Token)) > 0, validateToken, device.WebhookEnabled)
+	}
+
 	foundIndex := -1
 	legacyIndex := -1
 	for deviceIndex, curDevices := range user.Devices {
@@ -6460,6 +6465,7 @@ func upsertDeviceIntoUser(ctx context.Context, user User, device Device, validat
 				device.LastSeenAt = existing.LastSeenAt
 			}
 			user.Devices[foundIndex] = device
+			log.Printf("[INFO] Disconnected device %s (platform=%s, region=%s) for user %s (%s)", device.ID, device.Platform, device.Region, user.Username, user.Id)
 			return user, nil
 		}
 
@@ -6482,6 +6488,7 @@ func upsertDeviceIntoUser(ctx context.Context, user User, device Device, validat
 		}
 
 		if !isValid {
+			log.Printf("[ERROR] Invalid device FCM token provided for device %s (user %s)", device.ID, user.Id)
 			return user, errors.New("Invalid device token provided")
 		}
 	}
@@ -6507,23 +6514,27 @@ func upsertDeviceIntoUser(ctx context.Context, user User, device Device, validat
 				}
 			}
 		} else {
-			device.WebhookToken = ""
+			device.WebhookEnabled = existing.WebhookEnabled
+			device.WebhookToken = existing.WebhookToken
 		}
 		if err := syncDeviceWebhookIndex(ctx, user, existing.WebhookToken, device); err != nil {
 			log.Printf("[WARNING] Failed syncing device webhook index for %s: %v", device.ID, err)
 		}
 		user.Devices[foundIndex] = device
+		log.Printf("[INFO] Updated registered device %s (platform=%s, region=%s) for user %s (%s)", device.ID, device.Platform, device.Region, user.Username, user.Id)
 	} else {
 		if device.CreatedAt == 0 {
 			device.CreatedAt = now
 		}
 		if device.WebhookEnabled {
 			if !isMobileDevicePlatform(device.Platform) {
+				log.Printf("[ERROR] Device webhook rejected for non-mobile platform %q on device %s (user %s)", device.Platform, device.ID, user.Id)
 				return user, errors.New("Device webhook is only supported for mobile devices (ios, android)")
 			}
 			if len(strings.TrimSpace(device.WebhookToken)) == 0 {
 				tok, genErr := generateDeviceWebhookToken()
 				if genErr != nil {
+					log.Printf("[ERROR] Failed generating webhook token for device %s (user %s): %v", device.ID, user.Id, genErr)
 					return user, genErr
 				}
 				device.WebhookToken = tok
@@ -6535,6 +6546,7 @@ func upsertDeviceIntoUser(ctx context.Context, user User, device Device, validat
 			device.WebhookToken = ""
 		}
 		user.Devices = append(user.Devices, device)
+		log.Printf("[INFO] Registered new device %s (platform=%s, region=%s) for user %s (%s)", device.ID, device.Platform, device.Region, user.Username, user.Id)
 	}
 
 	return user, nil
@@ -6918,6 +6930,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(t.RemoveDeviceID) > 0 {
+		if debug {
+			log.Printf("[DEBUG] HandleUpdateUser device removal attempt: caller=%s (%s) target_user=%s remove_device_id=%q",
+				userInfo.Username, userInfo.Id, foundUser.Id, t.RemoveDeviceID)
+		}
 		if userInfo.Id != foundUser.Id {
 			log.Printf("[WARNING] User %s (%s) tried to remove device for user %s (%s)", userInfo.Username, userInfo.Id, foundUser.Username, foundUser.Id)
 			resp.WriteHeader(403)
@@ -6927,19 +6943,23 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 		retUser, err := handleDeviceRemove(ctx, *foundUser, t.RemoveDeviceID)
 		if err != nil {
+			log.Printf("[ERROR] Failed removing device %s for user %s (%s): %v", t.RemoveDeviceID, foundUser.Username, foundUser.Id, err)
 			statusCode := 400
 			if errors.Is(err, errDeviceNotFound) {
 				statusCode = 404
 			} else if errors.Is(err, errCloudSyncRequired) {
 				statusCode = 403
 			}
-			resp.WriteHeader(statusCode)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			writeJSONReason(resp, statusCode, err.Error())
 			return
 		}
 
 		foundUser = &retUser
 	} else if len(t.Device.ID) > 0 {
+		if debug {
+			log.Printf("[DEBUG] HandleUpdateUser device attempt: caller=%s (%s) target_user=%s device_id=%q action=%q platform=%q region=%q has_token=%t",
+				userInfo.Username, userInfo.Id, foundUser.Id, t.Device.ID, t.Device.Action, t.Device.Platform, t.Device.Region, len(strings.TrimSpace(t.Device.Token)) > 0)
+		}
 		if userInfo.Id != foundUser.Id {
 			log.Printf("[WARNING] User %s (%s) tried to modify device for user %s (%s)", userInfo.Username, userInfo.Id, foundUser.Username, foundUser.Id)
 			resp.WriteHeader(403)
@@ -6955,14 +6975,14 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			retUser, err = handleDeviceUpsert(ctx, *foundUser, t.Device)
 		}
 		if err != nil {
+			log.Printf("[ERROR] Failed device operation (%s) on device %s for user %s (%s): %v", t.Device.Action, t.Device.ID, foundUser.Username, foundUser.Id, err)
 			statusCode := 400
 			if errors.Is(err, errDeviceNotFound) {
 				statusCode = 404
 			} else if errors.Is(err, errCloudSyncRequired) {
 				statusCode = 403
 			}
-			resp.WriteHeader(statusCode)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			writeJSONReason(resp, statusCode, err.Error())
 			return
 		}
 
@@ -7292,6 +7312,11 @@ func HandleUnregisterDevice(resp http.ResponseWriter, request *http.Request) {
 		deviceID = request.URL.Query().Get("device_id")
 	}
 
+	if debug {
+		log.Printf("[DEBUG] HandleUnregisterDevice attempt: user=%s (%s) device_id=%q region=%q",
+			userInfo.Username, userInfo.Id, deviceID, request.URL.Query().Get("region"))
+	}
+
 	if requestedUserID := strings.TrimSpace(request.URL.Query().Get("user_id")); len(requestedUserID) > 0 && requestedUserID != userInfo.Id {
 		log.Printf("[WARNING] User %s (%s) tried to unregister device for user %s", userInfo.Username, userInfo.Id, requestedUserID)
 		resp.WriteHeader(403)
@@ -7310,14 +7335,14 @@ func HandleUnregisterDevice(resp http.ResponseWriter, request *http.Request) {
 
 	retUser, err := handleDeviceRemove(ctx, *foundUser, deviceID, request.URL.Query().Get("region"))
 	if err != nil {
+		log.Printf("[ERROR] Failed unregistering device %s for user %s (%s): %v", deviceID, foundUser.Username, foundUser.Id, err)
 		statusCode := 400
 		if errors.Is(err, errDeviceNotFound) {
 			statusCode = 404
 		} else if errors.Is(err, errCloudSyncRequired) {
 			statusCode = 403
 		}
-		resp.WriteHeader(statusCode)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		writeJSONReason(resp, statusCode, err.Error())
 		return
 	}
 
@@ -7391,6 +7416,11 @@ func HandleDeviceWebhookControl(resp http.ResponseWriter, request *http.Request)
 		}
 	}
 
+	if debug {
+		log.Printf("[DEBUG] HandleDeviceWebhookControl attempt: user=%s (%s) device_id=%q enabled=%t regenerate=%t region=%q",
+			userInfo.Username, userInfo.Id, deviceID, req.Enabled, req.Regenerate, req.Region)
+	}
+
 	ctx := GetContext(request)
 	foundUser, err := GetUser(ctx, userInfo.Id)
 	if err != nil {
@@ -7435,8 +7465,8 @@ func HandleDeviceWebhookControl(resp http.ResponseWriter, request *http.Request)
 
 	oldToken := dev.WebhookToken
 	if !req.Enabled && !req.Regenerate {
+		// Pause/disable without rotating the token so re-enabling keeps the same URL
 		dev.WebhookEnabled = false
-		dev.WebhookToken = ""
 	} else {
 		dev.WebhookEnabled = true
 		if req.Regenerate || len(strings.TrimSpace(dev.WebhookToken)) == 0 {
@@ -7466,7 +7496,7 @@ func HandleDeviceWebhookControl(resp http.ResponseWriter, request *http.Request)
 	}
 
 	webhookURL := ""
-	if dev.WebhookEnabled && len(dev.WebhookToken) > 0 {
+	if len(dev.WebhookToken) > 0 {
 		scheme := "https"
 		if strings.HasPrefix(request.Host, "localhost") || strings.HasPrefix(request.Host, "127.0.0.1") {
 			scheme = "http"
@@ -7487,6 +7517,41 @@ func HandleDeviceWebhookControl(resp http.ResponseWriter, request *http.Request)
 	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(200)
 	resp.Write(respBody)
+}
+
+var (
+	deviceWebhookRateMu      sync.Mutex
+	deviceWebhookRateHistory = make(map[string][]int64)
+)
+
+const (
+	deviceWebhookRateWindowSeconds = 60
+	deviceWebhookRateMaxRequests   = 5
+)
+
+func allowDeviceWebhookRequest(tokenHash string) bool {
+	now := time.Now().Unix()
+	cutoff := now - deviceWebhookRateWindowSeconds
+
+	deviceWebhookRateMu.Lock()
+	defer deviceWebhookRateMu.Unlock()
+
+	timestamps := deviceWebhookRateHistory[tokenHash]
+	pruned := make([]int64, 0, len(timestamps)+1)
+	for _, ts := range timestamps {
+		if ts > cutoff {
+			pruned = append(pruned, ts)
+		}
+	}
+
+	if len(pruned) >= deviceWebhookRateMaxRequests {
+		deviceWebhookRateHistory[tokenHash] = pruned
+		return false
+	}
+
+	pruned = append(pruned, now)
+	deviceWebhookRateHistory[tokenHash] = pruned
+	return true
 }
 
 func writeJSONReason(resp http.ResponseWriter, statusCode int, reason string) {
@@ -7519,14 +7584,28 @@ func HandleDeviceWebhookTrigger(resp http.ResponseWriter, request *http.Request)
 		token = unescaped
 	}
 	token = strings.TrimSpace(token)
+	if debug {
+		tokPreview := token
+		if len(tokPreview) > 12 {
+			tokPreview = tokPreview[:12] + "..."
+		}
+		log.Printf("[DEBUG] HandleDeviceWebhookTrigger attempt: method=%s path=%s token=%q", request.Method, request.URL.Path, tokPreview)
+	}
 	if len(token) < 20 {
 		resp.WriteHeader(404)
 		resp.Write([]byte(`{"success": false, "reason": "Webhook not found or disabled"}`))
 		return
 	}
 
+	tokenHash := hashDeviceWebhookToken(token)
+	if !allowDeviceWebhookRequest(tokenHash) {
+		resp.Header().Set("Retry-After", "60")
+		writeJSONReason(resp, http.StatusTooManyRequests, "Rate limit exceeded for this device webhook (max 5 requests per minute)")
+		return
+	}
+
 	ctx := GetContext(request)
-	idx, err := GetDeviceWebhookIndex(ctx, hashDeviceWebhookToken(token))
+	idx, err := GetDeviceWebhookIndex(ctx, tokenHash)
 	if err != nil || !idx.Enabled || len(idx.UserID) == 0 || len(idx.DeviceID) == 0 {
 		resp.WriteHeader(404)
 		resp.Write([]byte(`{"success": false, "reason": "Webhook not found or disabled"}`))
@@ -7625,6 +7704,14 @@ func HandleDeviceWebhookTrigger(resp http.ResponseWriter, request *http.Request)
 		msgBody = strings.TrimSpace(payload.Message)
 	}
 
+	deviceLabel := strings.TrimSpace(targetDev.DeviceName)
+	if len(deviceLabel) == 0 {
+		deviceLabel = strings.TrimSpace(targetDev.Platform)
+	}
+	if len(deviceLabel) == 0 {
+		deviceLabel = "Mobile Device"
+	}
+
 	// If no explicit title was provided, forward whatever details they sent directly as the title
 	if len(strings.TrimSpace(payload.Title)) == 0 {
 		switch {
@@ -7639,7 +7726,7 @@ func HandleDeviceWebhookTrigger(resp http.ResponseWriter, request *http.Request)
 				payload.Title = rawQuery
 			}
 		default:
-			payload.Title = "Device Notification"
+			payload.Title = fmt.Sprintf("Shuffle Webhook Ping (%s)", deviceLabel)
 		}
 	}
 
@@ -7650,7 +7737,7 @@ func HandleDeviceWebhookTrigger(resp http.ResponseWriter, request *http.Request)
 		case len(rawQuery) > 0:
 			msgBody = payload.Title
 		default:
-			msgBody = "Triggered via mobile device webhook"
+			msgBody = fmt.Sprintf("Triggered via %s from %s on %s with no payload. Pass ?title=...&body=... or JSON to customize.", request.Method, GetRequestIp(request), deviceLabel)
 		}
 	}
 
@@ -11530,6 +11617,7 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 	user, err := GetUser(GetContext(request), userInfo.Id)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get user in settings: %s", err)
+	} else if user != nil {
 		userInfo.Devices = user.Devices
 	}
 

@@ -543,6 +543,26 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 			totalEntires++
 			totalValue += int(todayValue)
 		}
+	} else {
+		var todayValue int64 = 0
+		for _, addition := range info.Additions {
+			newKey := strings.ToLower(strings.ReplaceAll(addition.Key, " ", "_"))
+			if newKey == statsKey {
+				todayValue = addition.Value
+				break
+			}
+		}
+
+		today := time.Now()
+		if todayValue > 0 && !today.Before(time.Now().AddDate(0, 0, -statDays)) {
+			statEntries = append(statEntries, AdditionalUseConfig{
+				Key:   statsKey,
+				Value: todayValue,
+				Date:  today,
+			})
+			totalEntires++
+			totalValue += int(todayValue)
+		}
 	}
 
 	// Deduplicate and merge same days
@@ -603,23 +623,15 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	// Append cache for right now as it may not be in the DB yet
 	for statEntryIndex, statEntry := range statEntries {
 		if statEntry.Date.Day() == time.Now().Day() && statEntry.Date.Month() == time.Now().Month() && statEntry.Date.Year() == time.Now().Year() {
-			for _, addition := range info.Additions {
-				if addition.Key != statsKey {
-					continue
-				}
-
-				key := fmt.Sprintf("cache_%s_%s", orgId, addition.Key)
-				cacheItem, err := GetCache(ctx, key)
+			key := fmt.Sprintf("cache_%s_%s", orgId, statsKey)
+			cacheItem, err := GetCache(ctx, key)
+			if err == nil {
+				parsedItem := []byte(cacheItem.([]uint8))
+				increment, err := strconv.Atoi(string(parsedItem))
 				if err == nil {
-					parsedItem := []byte(cacheItem.([]uint8))
-					increment, err := strconv.Atoi(string(parsedItem))
-					if err == nil {
-						statEntries[statEntryIndex].Value += int64(increment)
-						totalValue += int(increment)
-					}
+					statEntries[statEntryIndex].Value += int64(increment)
+					totalValue += int(increment)
 				}
-
-				break
 			}
 		}
 	}

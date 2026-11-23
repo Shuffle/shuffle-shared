@@ -7157,7 +7157,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	}
 
 	if project.CacheDb {
-		cacheKey := fmt.Sprintf("user_%s", parsedKey)
+		cacheKey := fmt.Sprintf("user_%s", strings.ToLower(parsedKey))
 
 		err = SetCache(ctx, cacheKey, data, 1440)
 		if err != nil {
@@ -11383,7 +11383,9 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &user)
 			if err == nil && len(user.Id) > 0 {
-
+				if freshUser, uErr := GetUser(ctx, user.Id); uErr == nil && freshUser != nil && len(freshUser.Id) > 0 {
+					return *freshUser, nil
+				}
 				return *user, nil
 			} else {
 				log.Printf("[WARNING] Bad cache for %s: %s", sessionId, err)
