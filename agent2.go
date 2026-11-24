@@ -2373,7 +2373,7 @@ func triggerAgentStart(
 }
 
 // HTTP handler for /api/v1/agent/loop/tools that validates auth, flushes 202 Accepted immediately, and runs runAgentTools synchronously in this container request.
-func HandleAgentRunTools2(resp http.ResponseWriter, request *http.Request) {
+func HandleAgentLoopTools(resp http.ResponseWriter, request *http.Request) {
 	ctx, execution, reqPayload, ok := authenticateAndAckAgentInternalRequest(resp, request)
 	if !ok {
 		return
@@ -2381,12 +2381,12 @@ func HandleAgentRunTools2(resp http.ResponseWriter, request *http.Request) {
 
 	_, _, err := runAgentTools(ctx, execution, reqPayload.StartNode, reqPayload.AgentOutput, reqPayload.ParsedDecisions)
 	if err != nil {
-		log.Printf("[WARNING][%s] HandleAgentRunTools2 completed with error: %v", execution.ExecutionId, err)
+		log.Printf("[WARNING][%s] HandleAgentLoopTools completed with error: %v", execution.ExecutionId, err)
 	}
 }
 
 // HTTP handler for /api/v1/agent/loop/turn that validates auth, flushes 202 Accepted immediately, and runs HandleAiAgentExecutionStart2 synchronously in this container request.
-func HandleAgentStart2(resp http.ResponseWriter, request *http.Request) {
+func HandleAgentLoopTurn(resp http.ResponseWriter, request *http.Request) {
 	ctx, execution, reqPayload, ok := authenticateAndAckAgentInternalRequest(resp, request)
 	if !ok {
 		return
@@ -2394,7 +2394,7 @@ func HandleAgentStart2(resp http.ResponseWriter, request *http.Request) {
 
 	_, err := HandleAiAgentExecutionStart2(ctx, execution, reqPayload.StartNode, reqPayload.AgentOutput, reqPayload.Caller)
 	if err != nil {
-		log.Printf("[WARNING][%s] HandleAgentStart2 completed with error: %v", execution.ExecutionId, err)
+		log.Printf("[WARNING][%s] HandleAgentLoopTurn completed with error: %v", execution.ExecutionId, err)
 	}
 }
 
