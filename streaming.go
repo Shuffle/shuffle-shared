@@ -508,6 +508,17 @@ func pruneStreamOpsBeforeSave(ctx context.Context, workflowID string, prevSaveSe
 	}
 }
 
+// Like a stream "save" op, for saves that don't send one (the agent, a revert, the API)
+func markStreamSaved(ctx context.Context, workflowID string) {
+	seq := currentStreamSeq(ctx, workflowID)
+	if seq <= lastStreamSaveSeq(ctx, workflowID) {
+		return
+	}
+	if err := SetCache(ctx, streamLastSaveKey(workflowID), []byte(strconv.FormatInt(seq, 10)), streamSeqTTLMinutes); err != nil {
+		log.Printf("[WARNING] Failed moving the stream save baseline for %s: %s", workflowID, err)
+	}
+}
+
 // Main stream update function :)
 func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
