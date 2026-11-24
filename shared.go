@@ -22735,7 +22735,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 			log.Printf("[INFO][%s] AI Agent: %s Started standalone for org %s, execution id %s, workflow %s", exec.ExecutionId, callerName, user.ActiveOrg.Id, exec.ExecutionId, exec.WorkflowId)
 
-			action, err := HandleAiAgentExecutionStart(exec, action, false, callerName)
+			action, err := HandleAiAgentExecutionStart2(ctx, exec, action, AgentOutput{}, callerName)
 			if err != nil {
 				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
 			}
@@ -23632,6 +23632,10 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				log.Printf("[ERROR][%s] Failed in decision output mapping (2): %s", oldExec.ExecutionId, err)
 			}
 
+			if mappedOutput.Status == "RUNNING" || mappedOutput.Status == "EXECUTING" || mappedOutput.Status == "WAITING" {
+				return workflowExecution, errors.New("Cannot rerun decision while the AI Agent is actively executing or waiting for input.")
+			}
+
 			availableDecisions := []string{}
 			foundDecisionIndex := -1
 			decisionPosition := -1
@@ -23697,50 +23701,11 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 			mappedOutput.Decisions = newNewDecisions
 
-			mappedOutput.Status = "WAITING"
-			marshalledResult, err := json.Marshal(mappedOutput)
-			if err == nil {
-				oldExec.Results[foundResultIndex].Result = string(marshalledResult)
-			} else {
-				return workflowExecution, errors.New(fmt.Sprintf("Failed to marshal and rerun the decision. Please try again or contact support@shuffler.io if the error persists."))
+			_, err = HandleAiAgentExecutionStart2(ctx, *oldExec, oldExec.Results[foundResultIndex].Action, mappedOutput, "decision_rerun")
+			if err != nil {
+				log.Printf("[ERROR][%s] Failed handling agent decision rerun: %s", oldExec.ExecutionId, err)
 			}
 
-			oldExec.Results[foundResultIndex].Status = "WAITING"
-			oldExec.Results[foundResultIndex].CompletedAt = 0
-			oldExec.Results[foundResultIndex].Result = string(marshalledResult)
-
-
-			// Resets the action cache to ensure reruns happen
-
-			// 1. Update db & cache etc.
-			// 2. Force rerun the decision
-			oldExec.CompletedAt = 0
-			oldExec.Status = "EXECUTING"
-
-			// Action reset (in the workflow)
-			SetCache(ctx, fmt.Sprintf("%s_%s_result", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID), marshalledResult, 60)
-
-			// Decision reset
-			DeleteCache(ctx, fmt.Sprintf("agent-%s-%s", oldExec.ExecutionId, decisionId))
-
-			// Decision run reset
-			for _, terminalStatus := range []string{"FINISHED", "SUCCESS", "ABORTED", "FAILURE"} {
-				go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_%s", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID, terminalStatus))
-			}
-
-			// Execution reset
-			executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExec.ExecutionId)
-
-			DeleteCache(ctx, executionCacheKey)
-			marshalledTotalResult, err := json.Marshal(oldExec)
-			if err == nil {
-				SetCache(ctx, executionCacheKey, marshalledTotalResult, 30)
-			}
-			SetWorkflowExecution(ctx, *oldExec, true)
-
-			go RunAgentDecisionAction(*oldExec, mappedOutput, mappedOutput.Decisions[foundDecisionIndex])
-
-			// FIXME: This is to ensure hadnling of the EXACT SAME decision happens.
 			return workflowExecution, errors.New(fmt.Sprintf("Successfully started rerun of decision %s. This will replace the current result.", decisionId))
 		}
 	}
@@ -26880,7 +26845,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			//log.Printf("Result len: %d", len(oldExecution.Results))
 			newResults := []ActionResult{}
 			foundresult := ActionResult{}
-			for resultIndex, result := range oldExecution.Results {
+			for _, result := range oldExecution.Results {
 				if result.Action.ID == start[0] {
 					if result.Status == "ABORTED" {
 						log.Printf("[INFO][%s] Found aborted result: %s (%s)", oldExecution.ExecutionId, result.Action.Label, result.Action.ID)
@@ -26906,8 +26871,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					log.Printf("[INFO][%s] Should fix the decision by injecting the values and continuing to the next step! :3", oldExecution.ExecutionId)
 
 					// 1. Find the result inside the result.Result -> AgentOutput
-					unmarshalledDecision := AgentOutput{}
-					err = json.Unmarshal([]byte(result.Result), &unmarshalledDecision)
+					agentOutput := AgentOutput{}
+					err = json.Unmarshal([]byte(result.Result), &agentOutput)
 					if err != nil {
 						log.Printf("[ERROR][%s] Failed unmarshalling decision inside agentic workflow: %s", oldExecution.ExecutionId, err)
 						return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed handling decision for agentic runs. Please contact support@shuffler.io. Details: %s", err), err
@@ -26928,7 +26893,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					lastIndex := -1
 					decisionIndex := -1
 					selectedDecision := AgentDecision{} 
-					for curIndex, decision := range unmarshalledDecision.Decisions {
+					for curIndex, decision := range agentOutput.Decisions {
 						if decision.I > lastIndex { 
 							lastIndex = decision.I
 						}
@@ -26958,11 +26923,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							// Handles special case for Continuing an existing Agent run by modifying the "finish" action
 							log.Printf("[DEBUG][%s] Handling key '%s' with value '%s' during agentic decision handling. findContinue: %#v", oldExecution.ExecutionId, key, value, findContinue)
 							if key == "approve" && decision.RunDetails.Status == "WAITING" && (decision.Category == "singul" || decision.Category == "standalone") {
+								if agentOutput.Status != "WAITING" {
+									return workflowExecution, ExecInfo{}, "Cannot approve: agent is not waiting for input.", errors.New("Agent is not in waiting state")
+								}
 								log.Printf("[INFO][%s] Approving decision '%s' with value '%s' during agentic decision handling. This will finish the decision and the execution if it's a standalone decision.", oldExecution.ExecutionId, key, value)
 
 								if value == "true" {
-									unmarshalledDecision.Status = "RUNNING"
-
 									decision.RunDetails.Status = "RUNNING"
 									decision.Fields = append(decision.Fields, Valuereplace{
 										Key:   "approve",
@@ -26984,21 +26950,19 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									log.Printf("[ERROR][%s] Invalid value for 'approve': %s", oldExecution.ExecutionId, value)
 								}
 
-								unmarshalledDecision.Decisions[curIndex] = decision
+								agentOutput.Decisions[curIndex] = decision
 								break
 							}
 
 							if findContinue {
 								// The only key we care about in this case
 								if key == "continue" {
-									// Overwrite everything
-									if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
-										workflowExecution.Status = "EXECUTING"
-										workflowExecution.CompletedAt = 0
+									if agentOutput.Status == "RUNNING" || agentOutput.Status == "EXECUTING" || agentOutput.Status == "WAITING" {
+										return workflowExecution, ExecInfo{}, "Cannot continue: agent is still running or waiting for input.", errors.New("Agent is not in a terminal state")
 									}
 
-									unmarshalledDecision.Status = "RUNNING"
-									unmarshalledDecision.Output = ""
+									// Overwrite everything
+									agentOutput.Output = ""
 									decision.Fields = []Valuereplace{
 										Valuereplace{
 											Key:    "continue",
@@ -27013,7 +26977,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 									// Make the value max 50 bytes
 									decision.Reason = fmt.Sprintf("User Input: %.50s", value)
-									unmarshalledDecision.Decisions[curIndex] = decision
+									agentOutput.Decisions[curIndex] = decision
 
 									fieldsChanged = true
 									cleanupFailures = true
@@ -27048,6 +27012,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								log.Printf("[DEBUG] Mapping field %d to value %s", fieldNumber, value)
 							}
 
+							if agentOutput.Status != "WAITING" {
+								return workflowExecution, ExecInfo{}, "Cannot answer: agent is not waiting for input.", errors.New("Agent is not in waiting state")
+							}
+
 							decision.Fields[fieldNumber].Answer = value
 							fieldsChanged = true
 						}
@@ -27063,6 +27031,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					// A recovery mechanism for possible errors, as to allow continues
 					// almost no matter what
 					if strings.HasPrefix(decisionId, "MISSING_") && !fieldsChanged { 
+						if agentOutput.Status == "RUNNING" || agentOutput.Status == "EXECUTING" || agentOutput.Status == "WAITING" {
+							return workflowExecution, ExecInfo{}, "Cannot continue: agent is still running or waiting for input.", errors.New("Agent is not in a terminal state")
+						}
 						// Map execArg into map[string]string and find "continue" 
 						parsedArg := execArg
 						if strings.Contains(parsedArg, "continue") { 
@@ -27073,6 +27044,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							}
 						}
 						
+						agentOutput.Output = ""
+
 						// Build a new 
 						selectedDecision = AgentDecision{
 							I: lastIndex+1,
@@ -27100,91 +27073,43 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							},
 						}
 
-						unmarshalledDecision.Decisions = append(unmarshalledDecision.Decisions, selectedDecision)
-						decisionIndex = len(unmarshalledDecision.Decisions) - 1
+						agentOutput.Decisions = append(agentOutput.Decisions, selectedDecision)
+						decisionIndex = len(agentOutput.Decisions) - 1
 						fieldsChanged = true
 					}
 
 					if fieldsChanged && decisionIndex >= 0 {
 						selectedDecision.RunDetails.Status = "FINISHED"
 						selectedDecision.RunDetails.CompletedAt = time.Now().UnixMilli()
-						unmarshalledDecision.Decisions[decisionIndex] = selectedDecision
-
-						// Updates cache live
-						decisionId := fmt.Sprintf("agent-%s-%s", oldExecution.ExecutionId, selectedDecision.RunDetails.Id)
-						marshalledDecision, err := json.Marshal(selectedDecision)
-						if err != nil {
-							log.Printf("[ERROR][%s] Failed marshalling decision during agentic decision handling: %s", oldExecution.ExecutionId, err)
-						} else {
-							SetCache(ctx, decisionId, marshalledDecision, 600)
-						}
+						agentOutput.Decisions[decisionIndex] = selectedDecision
 					}
 
 					// Cleans them up to be "IGNORED" instead
 					// This is a concept to allow for better UX
 					// Only runs if you "continue" running an agent run
 					if cleanupFailures {
-						for decisionIndex, _ := range unmarshalledDecision.Decisions {
-							decision := unmarshalledDecision.Decisions[decisionIndex]
+						for decisionIndex, _ := range agentOutput.Decisions {
+							decision := agentOutput.Decisions[decisionIndex]
 							if decision.RunDetails.Status != "FAILURE" {
 								continue
 							}
 
 							decision.RunDetails.Status = "IGNORED"
-							unmarshalledDecision.Decisions[decisionIndex] = decision
-
-							decisionId := fmt.Sprintf("agent-%s-%s", oldExecution.ExecutionId, decision.RunDetails.Id)
-							marshalledDecision, err := json.Marshal(decision)
-							if err != nil {
-								log.Printf("[ERROR][%s] Failed marshalling decision during agentic decision handling: %s", oldExecution.ExecutionId, err)
-							} else {
-								SetCache(ctx, decisionId, marshalledDecision, 600)
-							}
-
+							agentOutput.Decisions[decisionIndex] = decision
 							fieldsChanged = true
 						}
 					}
 
-					// This is a weird if statement, due to it being used for
-					// multiple purposes around field change & decision id finding
-
-					// FIXME: Not sure if this is correct to catch bad decision IDs
-					//if !fieldsChanged && cleanupFailures {
 					if !fieldsChanged {
-						//if cleanupFailures {
 						return workflowExecution, ExecInfo{}, fmt.Sprintf("Could not find fields for decision '%s'. Did you fill them in?", decisionId), errors.New(fmt.Sprintf("Could not find fields decision '%s'. Did you fill them in?", decisionId))
 					}
 
-					newDecisionBytes, err := json.Marshal(unmarshalledDecision)
-					if err != nil {
-						log.Printf("[ERROR][%s] Failed marshalling decision inside agentic workflow: %s", oldExecution.ExecutionId, err)
-					} else {
-						result.Result = string(newDecisionBytes)
-					}
-
-					actionCacheId := fmt.Sprintf("%s_%s_result", oldExecution.ExecutionId, result.Action.ID)
-					err = SetCache(ctx, actionCacheId, []byte(result.Result), 600)
-					if err != nil {
-						log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
-					}
-
-					oldExecution.Results[resultIndex] = result
-					
-					// Persist intermediate agent state to DB to prevent handleAgentDecisionStreamResult from fetching a stale copy
-					executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExecution.ExecutionId)
-					if marshalledExec, execMarshalErr := json.Marshal(*oldExecution); execMarshalErr == nil {
-						SetCache(ctx, executionCacheKey, marshalledExec, 600)
-					}
-					go SetWorkflowExecution(ctx, *oldExecution, true)
-
-					// FIXME: Can we force continue the agent from here? Or do we send another action inbetween?
-					result.Status = fmt.Sprintf("%s_%s", "FINISHED", decisionId)
-					newExec, _, err := handleAgentDecisionStreamResult(*oldExecution, result)
+					_, err = HandleAiAgentExecutionStart2(ctx, *oldExecution, result.Action, agentOutput, "user_input")
 					if err != nil {
 						log.Printf("[ERROR][%s] Failed handling agentic decision result: %s", oldExecution.ExecutionId, err)
 					}
 
-					return *newExec, ExecInfo{}, fmt.Sprintf("Agentic question handled (%s)", oldExecution.ExecutionId), errors.New("User Input: Agentic question action handled successfully!")
+					return *oldExecution, ExecInfo{}, fmt.Sprintf("Agentic question handled (%s)", oldExecution.ExecutionId), errors.New("User Input: Agentic question action handled successfully!")
 
 				} else if result.Status == "WAITING" && !agentic {
 					log.Printf("[INFO][%s] Found relevant User Input result: %s (%s)", result.ExecutionId, result.Action.Label, result.Action.ID)
