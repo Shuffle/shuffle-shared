@@ -6817,11 +6817,11 @@ func HandleOAuthRevoke(resp http.ResponseWriter, request *http.Request) {
 		if userErr == nil && len(currentUser.Id) > 0 {
 			// Verify user belongs to the token's Org or has support access
 			userAllowed := false
-			if currentUser.ActiveOrg.Id == token.OrgId || currentUser.Id == token.UserId || currentUser.SupportAccess {
+			if oauthTokenAllowsOrg(token.OrgId, currentUser.ActiveOrg.Id) || currentUser.Id == token.UserId || currentUser.SupportAccess {
 				userAllowed = true
 			} else {
 				for _, org := range currentUser.Orgs {
-					if org == token.OrgId {
+					if oauthTokenAllowsOrg(token.OrgId, org) {
 						userAllowed = true
 						break
 					}
@@ -6916,7 +6916,7 @@ func HandleListOAuthTokens(resp http.ResponseWriter, request *http.Request) {
 	// 1. Always include tokens directly associated with this user account (unless filtered to a specific org)
 	if userTokens, uErr := GetOAuthTokensByUser(ctx, user.Id); uErr == nil {
 		for _, tok := range userTokens {
-			if explicitOrg != "" && tok.OrgId != explicitOrg {
+			if explicitOrg != "" && !oauthTokenAllowsOrg(tok.OrgId, explicitOrg) {
 				continue
 			}
 			addToken(tok)
@@ -7207,6 +7207,9 @@ func HandleOAuthUserInfo(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	effectiveOrg := resolveOAuthEffectiveOrg(oauthTok.OrgId, *userObj, request)
+	go RecordOAuthTokenUsage(oauthTok.ID, effectiveOrg)
+
 	email := strings.TrimSpace(userObj.Username)
 	sub := userObj.Id
 	if sub == "" {
@@ -7214,8 +7217,8 @@ func HandleOAuthUserInfo(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	orgName := ""
-	if oauthTok.OrgId != "" {
-		if orgData, orgErr := safeGetOrgForOAuth(ctx, oauthTok.OrgId); orgErr == nil && orgData != nil {
+	if effectiveOrg != "" {
+		if orgData, orgErr := safeGetOrgForOAuth(ctx, effectiveOrg); orgErr == nil && orgData != nil {
 			orgName = orgData.Name
 		}
 	}
@@ -7227,7 +7230,7 @@ func HandleOAuthUserInfo(resp http.ResponseWriter, request *http.Request) {
 		Name:              email,
 		PreferredUsername: email,
 		Username:          email,
-		OrgId:             oauthTok.OrgId,
+		OrgId:             effectiveOrg,
 		OrgName:           orgName,
 	}
 
@@ -7573,6 +7576,85 @@ func initDefaultOAuthRules() {
 	})
 }
 
+// RecordOAuthTokenUsage increments the tenant-level "oauth_api_usage" statistic
+// and the per-session "oauth_session_<token_id>" statistic via IncrementCache without modifying the token entity.
+func RecordOAuthTokenUsage(tokenID, orgId string) {
+	bgCtx := context.Background()
+	trimmedOrg := strings.TrimSpace(orgId)
+	if len(trimmedOrg) == 0 {
+		return
+	}
+
+	IncrementCache(bgCtx, trimmedOrg, "oauth_api_usage")
+	if trimmedID := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(tokenID), " ", "_")); len(trimmedID) > 0 {
+		IncrementCache(bgCtx, trimmedOrg, fmt.Sprintf("oauth_session_%s", trimmedID))
+	}
+}
+
+func parseOAuthTokenOrgs(orgField string) []string {
+	parts := strings.Split(orgField, ",")
+	orgs := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if len(trimmed) > 0 && !seen[trimmed] {
+			seen[trimmed] = true
+			orgs = append(orgs, trimmed)
+		}
+	}
+	return orgs
+}
+
+func oauthTokenAllowsOrg(tokenOrgField, targetOrg string) bool {
+	trimmedTarget := strings.TrimSpace(targetOrg)
+	if len(trimmedTarget) == 0 {
+		return false
+	}
+	for _, candidate := range parseOAuthTokenOrgs(tokenOrgField) {
+		if candidate == trimmedTarget {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveOAuthRequestOrg(request *http.Request) string {
+	if request == nil {
+		return ""
+	}
+	reqOrg := strings.TrimSpace(request.Header.Get("Org-Id"))
+	if reqOrg == "" {
+		reqOrg = strings.TrimSpace(request.Header.Get("OrgId"))
+	}
+	if reqOrg == "" && request.URL != nil {
+		reqOrg = strings.TrimSpace(request.URL.Query().Get("org_id"))
+	}
+	if reqOrg == "" && request.URL != nil {
+		parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+		for i, part := range parts {
+			if part == "orgs" && i+1 < len(parts) {
+				reqOrg = strings.TrimSpace(parts[i+1])
+				break
+			}
+		}
+	}
+	return reqOrg
+}
+
+func resolveOAuthEffectiveOrg(tokenOrgField string, user User, request *http.Request) string {
+	allowed := parseOAuthTokenOrgs(tokenOrgField)
+	if len(allowed) == 0 {
+		return strings.TrimSpace(user.ActiveOrg.Id)
+	}
+	if reqOrg := resolveOAuthRequestOrg(request); len(reqOrg) > 0 && oauthTokenAllowsOrg(tokenOrgField, reqOrg) {
+		return reqOrg
+	}
+	if activeOrg := strings.TrimSpace(user.ActiveOrg.Id); len(activeOrg) > 0 && oauthTokenAllowsOrg(tokenOrgField, activeOrg) {
+		return activeOrg
+	}
+	return allowed[0]
+}
+
 // ValidateOAuthTokenAccess validates that the provided OAuth token is permitted to access
 // the target endpoint represented by request. It performs:
 //  1. Token expiration check
@@ -7598,27 +7680,11 @@ func ValidateOAuthTokenAccess(ctx context.Context, token *OAuthToken, request *h
 	rawPath := request.URL.Path
 	method := strings.ToUpper(request.Method)
 
-	// 2. Organization Boundary Enforcement
-	if token.OrgId != "" {
-		reqOrg := request.Header.Get("Org-Id")
-		if reqOrg == "" {
-			reqOrg = request.Header.Get("OrgId")
-		}
-		if reqOrg == "" {
-			reqOrg = request.URL.Query().Get("org_id")
-		}
-		if reqOrg == "" {
-			parts := strings.Split(strings.Trim(rawPath, "/"), "/")
-			for i, part := range parts {
-				if part == "orgs" && i+1 < len(parts) {
-					reqOrg = parts[i+1]
-					break
-				}
-			}
-		}
-
-		if reqOrg != "" && reqOrg != token.OrgId {
-			return fmt.Errorf("org_mismatch: OAuth token is bound to organization %s, cannot access organization %s", token.OrgId, reqOrg)
+	// 2. Organization Boundary Enforcement (supports single UUID or comma-separated exact UUIDs)
+	if len(parseOAuthTokenOrgs(token.OrgId)) > 0 {
+		reqOrg := resolveOAuthRequestOrg(request)
+		if reqOrg != "" && !oauthTokenAllowsOrg(token.OrgId, reqOrg) {
+			return fmt.Errorf("org_mismatch: OAuth token is bound to organization(s) %s, cannot access organization %s", token.OrgId, reqOrg)
 		}
 	}
 

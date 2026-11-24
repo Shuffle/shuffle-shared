@@ -447,7 +447,11 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 						workflowIdFound = true
 
 						if !strings.Contains(option.Value, workflow.ID) {
-							categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+							if strings.TrimSpace(option.Value) == "" {
+								categoryConfig.Automations[automationIndex].Options[optionIndex].Value = workflow.ID
+							} else {
+								categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+							}
 						}
 
 						break
@@ -812,7 +816,11 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 						workflowIdFound = true
 
 						if !strings.Contains(option.Value, workflow.ID) {
-							categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+							if strings.TrimSpace(option.Value) == "" {
+								categoryConfig.Automations[automationIndex].Options[optionIndex].Value = workflow.ID
+							} else {
+								categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+							}
 						}
 
 						break
@@ -899,12 +907,26 @@ func resolveRoutingDatastoreCategory(actionType string, categoryAction CategoryA
 
 	lowerLabel := strings.ToLower(categoryAction.Label)
 	lowerAction := strings.ToLower(actionType)
-	for key, mapped := range baselineCategories {
-		if key == "incident" || key == "incidents" {
-			continue
-		}
-		if strings.Contains(lowerCat, key) || strings.Contains(lowerLabel, key) || strings.Contains(lowerAction, key) {
-			return mapped
+	orderedKeywords := []struct {
+		key    string
+		mapped string
+	}{
+		{"vulnerabilities", "shuffle-security_vulns"},
+		{"vulnerability", "shuffle-security_vulns"},
+		{"vulns", "shuffle-security_vulns"},
+		{"vuln", "shuffle-security_vulns"},
+		{"infrastructure", "shuffle-security_infrastructure"},
+		{"assets", "shuffle-security_assets"},
+		{"asset", "shuffle-security_assets"},
+		{"packages", "shuffle-security_packages"},
+		{"package", "shuffle-security_packages"},
+		{"software", "shuffle-security_software"},
+		{"users", "shuffle-security_users"},
+		{"user", "shuffle-security_users"},
+	}
+	for _, entry := range orderedKeywords {
+		if strings.Contains(lowerCat, entry.key) || strings.Contains(lowerLabel, entry.key) || strings.Contains(lowerAction, entry.key) {
+			return entry.mapped
 		}
 	}
 
@@ -6353,7 +6375,8 @@ func getRoutingValidationScript(targetCategory string) string {
 		targetCategory = "shuffle-security_incidents"
 	}
 
-	script := `import json
+	script := `# \${skip_liquid}\$
+import json
 import re
 import base64
 import binascii
@@ -6769,9 +6792,9 @@ def _split_field_path(path: str) -> list:
     if not path or not isinstance(path, str):
         return []
     s = path.strip()
-    # Strip common root prefixes if user typed $exec.foo or $.foo or incident.foo
-    s = re.sub(r"^\$\.?exec\.?", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"^\$\.?", "", s)
+    # Strip common root prefixes (exec.foo, $.foo, incident.foo)
+    s = re.sub(r"^[$]\.?exec\.?", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"^[$]\.?", "", s)
     # Convert bracket notation like a['b.c'][0].d or a[0].b into segments
     tokens = []
     pos = 0
@@ -7593,9 +7616,48 @@ def _infer_category_from_entity(entity: dict, fallback: str) -> str:
     return normalize_category(fallback) or "shuffle-security_incidents"
 
 
+def _get_shuffle_full_execution():
+    if "self" not in locals() and "self" not in globals():
+        return None
+    if getattr(self, "standalone", False) or getattr(self, "authorization", "") == "standalone":
+        return None
+    fe = getattr(self, "full_execution", None)
+    if isinstance(fe, str) and fe.strip():
+        try:
+            fe = json.loads(fe)
+        except Exception:
+            fe = None
+    return fe if isinstance(fe, dict) else None
+
+
+def _get_shuffle_action_result(full_exec, label_name):
+    if not isinstance(full_exec, dict):
+        return None
+    results = full_exec.get("results")
+    if not isinstance(results, list):
+        return None
+    target = label_name.replace(" ", "_").lower()
+    fallback = None
+    for res in results:
+        if not isinstance(res, dict):
+            continue
+        act = res.get("action")
+        if not isinstance(act, dict):
+            continue
+        lbl = str(act.get("label") or "").replace(" ", "_").lower()
+        if lbl == target:
+            if res.get("status") == "SUCCESS":
+                return res.get("result")
+            if fallback is None:
+                fallback = res.get("result")
+    return fallback
+
+
 # ── Validation Entrypoint ──────────────────────────────────────────────────
 
-raw_exec = r"""$exec"""
+_full_exec = _get_shuffle_full_execution()
+_fe_exec_arg = _full_exec.get("execution_argument") if isinstance(_full_exec, dict) else None
+raw_exec = _fe_exec_arg if _fe_exec_arg not in (None, "") else r"""$exec"""
 raw_datastore_key = r"""$exec.shuffle_datastore.key"""
 raw_datastore_cat = r"""$exec.shuffle_datastore.category"""
 
@@ -7664,7 +7726,8 @@ incident_ref = {
     "status": cur_exec.get("status") or "",
 }
 
-raw_rules_input = r"""$get_all_rules_from_the_system"""
+_fe_rules = _get_shuffle_action_result(_full_exec, "get_all_rules_from_the_system")
+raw_rules_input = _fe_rules if _fe_rules not in (None, "") else r"""$get_all_rules_from_the_system"""
 rules = _extract_rules(raw_rules_input)
 
 if not rules:
@@ -7746,7 +7809,8 @@ func getRoutingExecutionScript(targetCategory string) string {
 		targetCategory = "shuffle-security_incidents"
 	}
 
-	script := `import json
+	script := `# \${skip_liquid}\$
+import json
 import os
 import re
 import time
@@ -7956,13 +8020,53 @@ def _rule_priority(match_item):
         return 100
 
 
+def _get_shuffle_full_execution():
+    if "self" not in locals() and "self" not in globals():
+        return None
+    if getattr(self, "standalone", False) or getattr(self, "authorization", "") == "standalone":
+        return None
+    fe = getattr(self, "full_execution", None)
+    if isinstance(fe, str) and fe.strip():
+        try:
+            fe = json.loads(fe)
+        except Exception:
+            fe = None
+    return fe if isinstance(fe, dict) else None
+
+
+def _get_shuffle_action_result(full_exec, label_name):
+    if not isinstance(full_exec, dict):
+        return None
+    results = full_exec.get("results")
+    if not isinstance(results, list):
+        return None
+    target = label_name.replace(" ", "_").lower()
+    fallback = None
+    for res in results:
+        if not isinstance(res, dict):
+            continue
+        act = res.get("action")
+        if not isinstance(act, dict):
+            continue
+        lbl = str(act.get("label") or "").replace(" ", "_").lower()
+        if lbl == target:
+            if res.get("status") == "SUCCESS":
+                return res.get("result")
+            if fallback is None:
+                fallback = res.get("result")
+    return fallback
+
+
 # ── Execution Entrypoint ───────────────────────────────────────────────────
 
-raw_exec = r"""$exec"""
+_full_exec = _get_shuffle_full_execution()
+_fe_exec_arg = _full_exec.get("execution_argument") if isinstance(_full_exec, dict) else None
+_fe_validation = _get_shuffle_action_result(_full_exec, "find_relevant_rules_for_category")
+raw_exec = _fe_exec_arg if _fe_exec_arg not in (None, "") else r"""$exec"""
 raw_datastore_key = r"""$exec.shuffle_datastore.key"""
 raw_datastore_cat = r"""$exec.shuffle_datastore.category"""
 raw_datastore_org = r"""$exec.shuffle_datastore.org_id"""
-raw_validation = r"""$find_relevant_rules_for_category"""
+raw_validation = _fe_validation if _fe_validation not in (None, "") else r"""$find_relevant_rules_for_category"""
 
 cur_exec = _parse_input_safely(raw_exec, default={})
 datastore_meta = {}
@@ -8250,12 +8354,14 @@ for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
                     cur_exec.setdefault("rawOCSF", {})["priority"] = new_val
                     target_field = "priority"
                 elif canonical in ("labels", "types"):
-                    lbl = str(val).strip()
+                    items = val if isinstance(val, list) else [val]
                     cur_labels = list(cur_exec.get("labels") or [])
                     prev_val = list(cur_labels)
-                    if lbl and lbl not in cur_labels:
-                        cur_labels.append(lbl)
-                        cur_exec["labels"] = cur_labels
+                    for item in items:
+                        lbl = str(item).strip()
+                        if lbl and lbl not in cur_labels:
+                            cur_labels.append(lbl)
+                    cur_exec["labels"] = cur_labels
                     new_val = list(cur_labels)
                     target_field = "labels"
                 elif field.startswith("rawOCSF."):
@@ -8269,9 +8375,10 @@ for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
                     clean_k = re.sub(r"^(customFields\.|custom_fields\.)", "", field)
                     prev_val = cf.get(clean_k) if clean_k in cf else get_deep(cf, clean_k)
                     new_val = val
-                    cf[clean_k] = val
                     if "." in clean_k or "[" in clean_k:
                         set_deep(cf, clean_k, val)
+                    else:
+                        cf[clean_k] = val
                     target_field = f"customFields.{clean_k}"
                 elif "." in field or "[" in field:
                     top_key = _split_path(field)[0] if _split_path(field) else ""

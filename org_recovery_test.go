@@ -20,6 +20,7 @@ func setupOrgTestEnv(t *testing.T) context.Context {
 	project.GceProject = "release-tests"
 	project.DbType = ""
 	project.CacheDb = true
+	resetOrgRecoveryLogLimiter()
 	return context.Background()
 }
 
@@ -467,6 +468,9 @@ func TestGetOrg_RecoversFromCorruptedCacheAndValidatesDedicatedCache(t *testing.
 	if count := strings.Count(logBuf.String(), "[ORG_CORRUPTION_RECOVERED]"); count != 1 {
 		t.Errorf("expected 1 [ORG_CORRUPTION_RECOVERED] log on first healing read, got %d", count)
 	}
+	if !strings.Contains(logBuf.String(), `why="dedicated_cache_had_higher_limits"`) || !strings.Contains(logBuf.String(), "restored_fields=") {
+		t.Errorf("expected log to specify explicit why and restored_fields, got:\n%s", logBuf.String())
+	}
 
 	// Second GetOrg read must hit the now-healed Organizations_<id> cache with 0 recovery logs!
 	logBuf.Reset()
@@ -481,7 +485,44 @@ func TestGetOrg_RecoversFromCorruptedCacheAndValidatesDedicatedCache(t *testing.
 		t.Errorf("expected 0 [ORG_CORRUPTION_RECOVERED] logs after cache was healed, got %d:\n%s", count, logBuf.String())
 	}
 
-	// 4. Poison general Organizations_<id> cache with 0 users AND delete dedicated cache -> GetOrg must auto-bypass cache and load from DB
+	// 4. Verify per-org rate limiting: even if cache were poisoned again within the 15-min cooldown, it won't spam logs
+	_ = SetCache(ctx, "Organizations_"+orgId, corruptedBytes, 60)
+	logBuf.Reset()
+	recoveredThird, err := GetOrg(ctx, orgId)
+	if err != nil {
+		t.Fatalf("third GetOrg failed: %v", err)
+	}
+	if recoveredThird.SyncFeatures.AppExecutions.Limit != 300000 {
+		t.Fatalf("expected third GetOrg to still heal limit to 300000, got %d", recoveredThird.SyncFeatures.AppExecutions.Limit)
+	}
+	if count := strings.Count(logBuf.String(), "[ORG_CORRUPTION_RECOVERED]"); count != 0 {
+		t.Errorf("expected per-org cooldown to suppress duplicate [ORG_CORRUPTION_RECOVERED] log within cooldown window, got %d", count)
+	}
+
+	// 5. Verify legacy sub-orgs cached with 0 limits (and no dedicated cache) silently heal to default 2000 limit without log spam
+	subOrgId := uuid.NewV4().String()
+	subOrg := Org{
+		Id:   subOrgId,
+		Name: "hello-soar",
+		Users: []User{
+			{Id: uuid.NewV4().String(), Username: "sub@acme.io", Role: "admin"},
+		},
+	}
+	subOrgBytes, _ := json.Marshal(subOrg)
+	_ = SetCache(ctx, "Organizations_"+subOrgId, subOrgBytes, 60)
+	logBuf.Reset()
+	healedSubOrg, err := GetOrg(ctx, subOrgId)
+	if err != nil {
+		t.Fatalf("GetOrg for cached sub-org failed: %v", err)
+	}
+	if healedSubOrg.SyncFeatures.AppExecutions.Limit != 2000 {
+		t.Fatalf("expected cached sub-org with 0 limits to silently heal to 2000, got %d", healedSubOrg.SyncFeatures.AppExecutions.Limit)
+	}
+	if count := strings.Count(logBuf.String(), "[ORG_CORRUPTION_RECOVERED]"); count != 0 {
+		t.Errorf("expected 0 warning logs when healing uninitialized sub-org default limits, got %d:\n%s", count, logBuf.String())
+	}
+
+	// 6. Explicit cache bypass (GetOrg(ctx, orgId, true)) loads directly from DB even if cache has corrupted data
 	_ = DeleteCache(ctx, "org_sync_features_"+orgId)
 	corruptedNoUsers := org
 	corruptedNoUsers.Users = nil
@@ -494,12 +535,12 @@ func TestGetOrg_RecoversFromCorruptedCacheAndValidatesDedicatedCache(t *testing.
 		t.Fatalf("Datastore put failed: %v", err)
 	}
 
-	fromDB, err := GetOrg(ctx, orgId)
+	fromDB, err := GetOrg(ctx, orgId, true)
 	if err != nil {
-		t.Fatalf("GetOrg auto-bypass failed: %v", err)
+		t.Fatalf("GetOrg explicit bypass failed: %v", err)
 	}
 	if len(fromDB.Users) != 2 || fromDB.SyncFeatures.AppExecutions.Limit != 300000 {
-		t.Fatalf("expected GetOrg to bypass corrupted cache and load 2 users & 300000 limit from DB, got users=%d limit=%d",
+		t.Fatalf("expected GetOrg(bypassCache=true) to load 2 users & 300000 limit from DB, got users=%d limit=%d",
 			len(fromDB.Users), fromDB.SyncFeatures.AppExecutions.Limit)
 	}
 }
