@@ -442,8 +442,9 @@ type DailyStatistics struct {
 	ChildOrgAgentExecutionsFailed     int64 `json:"child_org_agent_executions_failed" datastore:"child_org_agent_executions_failed"`
 	ChildOrgAgentCachedTokens         int64 `json:"child_org_agent_cached_tokens" datastore:"child_org_agent_cached_tokens"`
 
-	ApiUsage int64      `json:"api_usage" datastore:"api_usage"`
-	AppUsage []AppUsage `json:"app_usage" datastore:"app_usage"`
+	ApiUsage      int64      `json:"api_usage" datastore:"api_usage"`
+	OAuthApiUsage int64      `json:"oauth_api_usage" datastore:"oauth_api_usage"`
+	AppUsage      []AppUsage `json:"app_usage" datastore:"app_usage"`
 
 	Additions []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
 }
@@ -515,6 +516,7 @@ type ExecutionInfo struct {
 	TotalChildOrgEmailUsage                int64 `json:"total_child_org_email_usage" datastore:"total_child_org_email_usage"`
 
 	MonthlyApiUsage                          int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
+	MonthlyOAuthApiUsage                     int64 `json:"monthly_oauth_api_usage,omitempty" datastore:"monthly_oauth_api_usage"`
 	MonthlyChildAppExecutions                int64 `json:"monthly_child_app_executions,omitempty" datastore:"monthly_child_app_executions"`
 	MonthlyAppExecutions                     int64 `json:"monthly_app_executions,omitempty" datastore:"monthly_app_executions"`
 	MonthlyAppExecutionsFailed               int64 `json:"monthly_app_executions_failed,omitempty" datastore:"monthly_app_executions_failed"`
@@ -617,8 +619,10 @@ type ExecutionInfo struct {
 	AnnualChildAppExecutions int64 `json:"annual_child_app_executions,omitempty" datastore:"annual_child_app_executions"`
 
 	// These are just here in case we get use of them
-	TotalApiUsage int64 `json:"total_api_usage" datastore:"total_api_usage"`
-	DailyApiUsage int64 `json:"daily_api_usage" datastore:"daily_api_usage"`
+	TotalApiUsage      int64 `json:"total_api_usage" datastore:"total_api_usage"`
+	DailyApiUsage      int64 `json:"daily_api_usage" datastore:"daily_api_usage"`
+	TotalOAuthApiUsage int64 `json:"total_oauth_api_usage" datastore:"total_oauth_api_usage"`
+	DailyOAuthApiUsage int64 `json:"daily_oauth_api_usage" datastore:"daily_oauth_api_usage"`
 
 	// Store only deleted tenants here. So it doesn't grow out of 1MB datastore limit
 	Tenants   []Tenants   `json:"tenants" datastore:"tenants"`
@@ -801,13 +805,35 @@ type Device struct {
 	ID          string                        `json:"id"`                                         // Unique device identifier
 	Token       string                        `datastore:",noindex" json:"token"`                 // FCM registration token
 	Platform    string                        `json:"platform"`                                   // "ios", "android", "web", "desktop"
+	Region      string                        `datastore:",omitempty" json:"region,omitempty"`     // Cloud region (e.g. "shuffler", "uk", "eu") for unique Device+Region connections
 	DeviceName  string                        `datastore:",omitempty" json:"device_name,omitempty"` // e.g., "iPhone 16 Pro", "Chrome macOS"
 	AppVersion  string                        `datastore:",omitempty" json:"app_version,omitempty"` // App version
-	Preferences DeviceNotificationPreferences `json:"preferences"`                                // Granular notification settings
+	Preferences    DeviceNotificationPreferences `json:"preferences"`                                     // Granular notification settings
+	Action         string                        `datastore:"-" json:"action,omitempty"`                  // Optional transient action, e.g. "unregister"
+	WebhookEnabled bool                          `datastore:"webhook_enabled" json:"webhook_enabled,omitempty"`
+	WebhookToken   string                        `datastore:"webhook_token,noindex" json:"webhook_token,omitempty"`
 
 	CreatedAt  int64 `json:"created_at"`   // Registration timestamp
 	EditedAt   int64 `json:"edited_at"`    // Last updated timestamp
 	LastSeenAt int64 `json:"last_seen_at"` // Last active timestamp
+}
+
+// HybridUserDevices stores devices synced from an on-prem/hybrid user scoped to a Cloud Sync org.
+type HybridUserDevices struct {
+	ID      string   `json:"id" datastore:"id"`
+	OrgID   string   `json:"org_id" datastore:"org_id"`
+	UserID  string   `json:"user_id" datastore:"user_id"`
+	Devices []Device `json:"devices" datastore:"devices"`
+}
+
+// DeviceWebhookIndex maps a sha256-hashed unauthenticated mobile device webhook token to its owner and device.
+type DeviceWebhookIndex struct {
+	ID        string `json:"id" datastore:"id"`
+	UserID    string `json:"user_id" datastore:"user_id"`
+	OrgID     string `json:"org_id" datastore:"org_id"`
+	DeviceID  string `json:"device_id" datastore:"device_id"`
+	Enabled   bool   `json:"enabled" datastore:"enabled"`
+	CreatedAt int64  `json:"created_at" datastore:"created_at"`
 }
 
 type User struct {

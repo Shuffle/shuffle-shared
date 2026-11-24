@@ -58,6 +58,8 @@ var skipAgentWait = os.Getenv("SHUFFLE_SKIP_AGENT_WAIT")
 var agentRunLocation = os.Getenv("SHUFFLE_AGENT_RUN_LOCATION")
 var assistantModel = model
 
+var aiTransport *http.Transport
+
 var decisionParameterName = "shuffle_agent_decision_id"
 var aiMaxTokens = 16000 // Controllable with AI_MAX_TOKENS env
 var aiReasoningEffort = ""
@@ -97,6 +99,8 @@ type AgentOutput struct {
 	LLMResponses []openai.ChatCompletionResponse `json:"llm_responses,omitempty" datastore:"llm_responses"`
 }
 
+var bodyTemplateSlot = regexp.MustCompile(`\$\{([^}]+)\}`)
+
 func init() {
 	if tok := os.Getenv("AI_MAX_TOKENS"); tok != "" {
 		if t, err := strconv.Atoi(tok); err == nil {
@@ -110,6 +114,9 @@ func init() {
 	} else if reasoningEffort == "minimal" || reasoningEffort == "off" || reasoningEffort == "none" {
 		aiReasoningEffort = "off"
 	}
+
+	aiTransport = http.DefaultTransport.(*http.Transport).Clone()
+	aiTransport.ResponseHeaderTimeout = 90 * time.Second
 
 	// Forcing it to be local for ALL requests going forward
 	agentRunLocation = "local"
@@ -9727,7 +9734,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				}
 
 				if len(sortedAppActions) > 0 {
-					specificAppMetadata += fmt.Sprintf("\n\n**Available actions and fields for Tool '%s'**:\n", baseToolName)
+					specificAppMetadata += fmt.Sprintf("\n\n**Available actions and fields for Tool '%s'**:\nbody= is one JSON field: fill the <...> values in its example (arrays and objects stay JSON, not strings) and send the whole JSON as the single field \"body\". Never send its keys as separate fields.\n", baseToolName)
 
 					previousDesc := ""
 					for counter, sortedAppAction := range sortedAppActions {
@@ -9744,7 +9751,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 								}
 
 								if strings.HasPrefix(param.Example, "{") || strings.HasPrefix(param.Example, "[") {
-									newExample := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(param.Example, "\n", ""), "\t", ""), "  ", ""), "\\\"", "\"")
+									newExample := bodyTemplateSlot.ReplaceAllString(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(param.Example, "\n", ""), "\t", ""), "  ", ""), "\\\"", "\""), "<$1>")
 									requiredParams = append(requiredParams, fmt.Sprintf("body=%s", newExample))
 								} else {
 									requiredParams = append(requiredParams, fmt.Sprintf("body"))
@@ -9916,7 +9923,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			// Increment for this iteration
 			newLoopCount := trustedCount + 1
 			_ = SetCache(ctx, loopCacheKey, []byte(strconv.Itoa(newLoopCount)), 60)
-			maxLoops := 60
+			maxLoops := 100
 			if envVal := os.Getenv("AI_AGENT_MAX_STEPS"); envVal != "" {
 				if parsed, err := strconv.Atoi(envVal); err == nil {
 					maxLoops = parsed
@@ -9924,7 +9931,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 
 			if maxLoops <= 0 {
-				maxLoops = 60
+				maxLoops = 100
 			}
 
 			if newLoopCount >= maxLoops {
@@ -10322,7 +10329,7 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 
 ### PHASE 2: RECOVERY & RETRY
 **Only proceed if the task is NOT done.**
-1. **Auth Failure (401/403):** STOP. Output: category="finish", action="finish", output="**Authentication Failed**".
+1. **Auth Failure (401/403):** STOP. Output: category="finish", action="finish", output saying which tool and action failed and the reason from its response. Never guess which app's credentials are wrong.
 2. **General Failure:**
    - If "runs" >= 5: STOP. Output: category="finish", action="finish", output="**Task Failed**".
    - If "runs" < 5: RETRY same action. Reason: "Attempt [runs+1]/5."
@@ -12635,6 +12642,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	// Fixes some model & url errors
 	config.EmptyMessagesLimit = 100000
+
+	config.HTTPClient = &http.Client{
+		Transport: aiTransport,
+	}
 	openaiClient := openai.NewClientWithConfig(config)
 
 	sysMsg := ""
@@ -12695,7 +12706,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	outputTokens := 0
 	cachedTokens := 0
 	var lastError error
-	choicesMap := make(map[int]*openai.ChatCompletionChoice)
 	var fullResp openai.ChatCompletionResponse
 	var reasoningOutput string
 	for {
@@ -12772,6 +12782,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 				return "", errors.New(fmt.Sprintf("Request from org %s with model '%s' exceeds the maximum number of tokens. %s", org, currentModel, err))
 			}
+			if strings.Contains(err.Error(), "timeout awaiting response headers") {
+				aiTransport.CloseIdleConnections()
+			}
 
 			// Some AI Providers might return multi-line error bodies. Flatten them so the whole error stays in ONE log entry instead of being split per line.
 			lastError = errors.New(strings.Join(strings.Fields(err.Error()), " "))
@@ -12787,6 +12800,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		// 2. Iterate over the stream
 		iterations := 0
 		var streamErr error
+		contentOutput = ""
+		fullResp = openai.ChatCompletionResponse{}
+		choicesMap := make(map[int]*openai.ChatCompletionChoice)
 		for {
 			iterations += 1
 

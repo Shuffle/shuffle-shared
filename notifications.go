@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -94,6 +95,14 @@ func IsDeviceOrgAllowedForType(device Device, pushType string, orgId string) boo
 }
 
 func IsDeviceEnabledForTypeAndOrg(device Device, pushType string, orgId string) bool {
+	if project.Environment == "cloud" {
+		if gceProject := strings.TrimSpace(os.Getenv("SHUFFLE_GCEPROJECT")); len(gceProject) > 0 {
+			if devRegion := strings.TrimSpace(device.Region); len(devRegion) > 0 && !strings.EqualFold(devRegion, gceProject) {
+				return false
+			}
+		}
+	}
+
 	resolvedType := ResolveNotificationPushType(pushType, "", "")
 	enabled := false
 	switch resolvedType {
@@ -715,6 +724,16 @@ func DispatchFCMPushNotification(ctx context.Context, req NotificationRequest, t
 	results := make([]TokenResult, 0, len(batchResp.Responses))
 	unregisteredTokens := make(map[string]bool)
 
+	deviceIDByToken := make(map[string]string)
+	if targetUser != nil {
+		for _, dev := range targetUser.Devices {
+			if tok := strings.TrimSpace(dev.Token); tok != "" && strings.TrimSpace(dev.ID) != "" {
+				deviceIDByToken[tok] = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(dev.ID), " ", "_"))
+			}
+		}
+	}
+	statOrgID := strings.TrimSpace(req.OrgID)
+
 	for idx, r := range batchResp.Responses {
 		tok := validTokens[idx]
 		tokenMasked := tok
@@ -729,6 +748,18 @@ func DispatchFCMPushNotification(ctx context.Context, req NotificationRequest, t
 				Success:   true,
 				MessageID: r.MessageID,
 			})
+
+			if len(statOrgID) > 0 {
+				devID := deviceIDByToken[tok]
+				go func(orgId, deviceId, nType string) {
+					bgCtx := context.Background()
+					IncrementCache(bgCtx, orgId, "device_notifications")
+					IncrementCache(bgCtx, orgId, fmt.Sprintf("device_notifications_%s", nType))
+					if len(deviceId) > 0 {
+						IncrementCache(bgCtx, orgId, fmt.Sprintf("device_notification_%s_%s", deviceId, nType))
+					}
+				}(statOrgID, devID, pushType)
+			}
 		} else {
 			isUnregistered := messaging.IsUnregistered(r.Error)
 			isSenderMismatch := messaging.IsSenderIDMismatch(r.Error)
@@ -2091,7 +2122,7 @@ func CreatePersonalNotification(ctx context.Context, title, description, referen
 	pushType := ResolveNotificationPushType("", effectiveSeverity, effectiveOrigin)
 	shouldPush := len(matchingNotifications) == 0 || wasRead || pushType == NotificationTypeCritical
 
-	if shouldPush && !isIgnored && project.Environment == "cloud" && userErr == nil && targetUser != nil && len(targetUser.Devices) > 0 && userBelongsToOrg(ctx, *targetUser, orgId) {
+	if shouldPush && !isIgnored && userErr == nil && targetUser != nil && len(targetUser.Devices) > 0 && userBelongsToOrg(ctx, *targetUser, orgId) {
 		tokens := GetUserDeviceTokensForTypeAndOrg(*targetUser, pushType, orgId)
 		if len(tokens) > 0 {
 			sourceName := orgName
@@ -2117,26 +2148,58 @@ func CreatePersonalNotification(ctx context.Context, title, description, referen
 			}
 			targetCopy := *targetUser
 			notifCopy := savedNotification
-			go func(u User, req NotificationRequest, n Notification) {
-				bgCtx := context.Background()
-				_, successCount, pushErr := DispatchFCMPushNotification(bgCtx, req, &u)
-				if pushErr != nil {
-					log.Printf("[WARNING] Failed dispatching personal push notification '%s' to user %s: %v", req.Title, u.Id, pushErr)
-					return
-				}
-				if successCount > 0 {
+			if project.Environment == "cloud" {
+				go func(u User, req NotificationRequest, n Notification) {
+					bgCtx := context.Background()
+					_, successCount, pushErr := DispatchFCMPushNotification(bgCtx, req, &u)
+					if pushErr != nil {
+						log.Printf("[WARNING] Failed dispatching personal push notification '%s' to user %s: %v", req.Title, u.Id, pushErr)
+						return
+					}
+					if successCount > 0 {
+						n.Read = true
+						n.ModifiedBy = "device_push"
+						if len(strings.TrimSpace(n.Origin)) == 0 || strings.EqualFold(n.Origin, "personal") {
+							n.Origin = "pager"
+						}
+						n.Tags = mergeNotificationTags(n.Tags, "pager", fmt.Sprintf("push:%s", req.Type), fmt.Sprintf("devices:%d/%d", successCount, len(req.TargetTokens)))
+						n.BucketDescription = fmt.Sprintf("Pager (%s) delivered to %d/%d device(s)", req.Type, successCount, len(req.TargetTokens))
+						if setErr := SetNotification(bgCtx, n); setErr != nil {
+							log.Printf("[WARNING] Failed marking pushed personal notification %s as read for user %s: %v", n.Id, u.Id, setErr)
+						}
+					}
+				}(targetCopy, pushReq, notifCopy)
+			} else if org, orgErr := GetOrg(ctx, orgId); orgErr == nil && org != nil && org.CloudSyncActive && len(strings.TrimSpace(org.SyncConfig.Apikey)) > 0 {
+				go func(req NotificationRequest, n Notification, syncOrgId, syncApikey string) {
+					bgCtx := context.Background()
+					reqBytes, marshalErr := json.Marshal(req)
+					if marshalErr != nil {
+						return
+					}
+					syncJob := CloudSyncJob{
+						Type:          "notification",
+						Action:        "dispatch",
+						OrgId:         syncOrgId,
+						PrimaryItemId: req.UserID,
+						SecondaryItem: string(reqBytes),
+					}
+					if syncErr := executeCloudAction(syncJob, syncApikey); syncErr != nil {
+						log.Printf("[WARNING] Failed forwarding push notification '%s' via Cloud Sync for user %s: %v", req.Title, req.UserID, syncErr)
+						return
+					}
 					n.Read = true
 					n.ModifiedBy = "device_push"
 					if len(strings.TrimSpace(n.Origin)) == 0 || strings.EqualFold(n.Origin, "personal") {
 						n.Origin = "pager"
 					}
-					n.Tags = mergeNotificationTags(n.Tags, "pager", fmt.Sprintf("push:%s", req.Type), fmt.Sprintf("devices:%d/%d", successCount, len(req.TargetTokens)))
-					n.BucketDescription = fmt.Sprintf("Pager (%s) delivered to %d/%d device(s)", req.Type, successCount, len(req.TargetTokens))
+					n.Tags = mergeNotificationTags(n.Tags, "pager", fmt.Sprintf("push:%s", req.Type), "cloud_sync")
 					if setErr := SetNotification(bgCtx, n); setErr != nil {
-						log.Printf("[WARNING] Failed marking pushed personal notification %s as read for user %s: %v", n.Id, u.Id, setErr)
+						log.Printf("[WARNING] Failed marking forwarded push notification %s as read for user %s: %v", n.Id, req.UserID, setErr)
 					}
-				}
-			}(targetCopy, pushReq, notifCopy)
+				}(pushReq, notifCopy, org.Id, strings.TrimSpace(org.SyncConfig.Apikey))
+			} else {
+				log.Printf("[DEBUG] Skipping device push notification for user %s: Cloud Sync is not active for org %s", userId, orgId)
+			}
 		}
 	}
 
@@ -2272,7 +2335,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			// Check if user has access to execution
-			if authHeaderParts[1] != exec.Authorization {
+			if len(strings.TrimSpace(exec.Authorization)) == 0 || subtle.ConstantTimeCompare([]byte(authHeaderParts[1]), []byte(exec.Authorization)) != 1 {
 				log.Printf("[INFO] User tried to create notification for execution %s without authorization", exec.ExecutionId)
 				resp.WriteHeader(403)
 				resp.Write([]byte(`{"success": false}`))
