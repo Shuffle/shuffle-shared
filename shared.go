@@ -37889,7 +37889,7 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 			}
 
 			if !found {
-				log.Printf("[ERROR] Failed to find operation %s. May be missing sync between app <-> openapi. ID: %s", parsedOpId, id)
+				log.Printf("[WARNING] Failed to find operation %s. May be missing sync between app <-> openapi. ID: %s", parsedOpId, id)
 			}
 		}
 	}
@@ -38015,7 +38015,7 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 	}
 
 	if foundNumber > maxRecursionDepthInt {
-		log.Printf("[ERROR] Detected potential recursion for URL %s. Hash: %d", request.URL.String(), hash1)
+		log.Printf("[WARNING] Detected potential recursion for URL %s. Hash: %d", request.URL.String(), hash1)
 		return true
 	}
 
