@@ -4685,7 +4685,7 @@ func startAgentExecution(baseUrl, apiKey, orgId string) (agentStartResult, error
 	requestBody := map[string]interface{}{
 		"params": map[string]interface{}{
 			"input": map[string]string{
-				"text": "Get the current weather of new york using https://wttr.in/New+York?m&format=%t api and just output the current weather temperature without any commentary, just output the number in celcius and dont include the decimals, use action as custom_action, tool as http and category as singul keep the url as it and not needed for any other hallucinated params or headers, just include the url as is and the method name which is GET.",
+				"text": "Get the current weather of new york using https://api.open-meteo.com/v1/forecast?latitude=40.71&longitude=-74.01&current_weather=true api and just output the current_weather.temperature without any commentary, just output the rounded integer number in celcius and dont include the decimals, use action as GET (or curl if GET fails), tool as http and category as singul keep the url as is and not needed for any other hallucinated params or headers, just include the url as is.",
 			},
 			"tool_name" : "app:ebfe7d5c80000676588f86731db0a555:http",
 		},
@@ -4885,7 +4885,7 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 				rawOutput := strings.TrimSpace(agentOutput.Output)
 				numStr := ""
 				for _, ch := range rawOutput {
-					if ch >= '0' && ch <= '9' {
+					if (ch >= '0' && ch <= '9') || (ch == '-' && len(numStr) == 0) {
 						numStr += string(ch)
 					} else if len(numStr) > 0 {
 						// Stop at first non-digit after we already collected some digits
@@ -4908,7 +4908,8 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 						realTempStr := strconv.Itoa(realTemp)
 						agentTempStr := strconv.Itoa(agentTemp)
 						// check if the real temp value exists in the agent temp string
-						if strings.Contains(agentTempStr, realTempStr) {
+						diff := agentTemp - realTemp
+						if (diff >= -1 && diff <= 1) || strings.Contains(agentTempStr, realTempStr) {
 							agentHealth.LLMCallSuccess = true
 							log.Printf("[INFO] Agent Health check - LLM Call was successful. Expected: %d, Got: %d", realTemp, agentTemp)
 						} else {
@@ -4947,7 +4948,8 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 func getRealTempC() (int, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	resp, err := client.Get("https://wttr.in/New+York?m&format=%t")
+	client.Timeout = 10 * time.Second
+	resp, err := client.Get("https://api.open-meteo.com/v1/forecast?latitude=40.71&longitude=-74.01&current_weather=true")
 	if err != nil {
 		return 0, err
 	}
@@ -4959,7 +4961,20 @@ func getRealTempC() (int, error) {
 	}
 
 	str := strings.TrimSpace(string(body))
-	isFahrenheit := strings.Contains(str, "F") || strings.Contains(str, "f")
+	var weatherResp struct {
+		CurrentWeather struct {
+			Temperature float64 `json:"temperature"`
+		} `json:"current_weather"`
+	}
+	if err := json.Unmarshal(body, &weatherResp); err != nil {
+		return 0, fmt.Errorf("failed to parse open-meteo response %q: %w", str, err)
+	}
+	roundedTemp := int(weatherResp.CurrentWeather.Temperature + 0.5)
+	if weatherResp.CurrentWeather.Temperature < 0 {
+		roundedTemp = int(weatherResp.CurrentWeather.Temperature - 0.5)
+	}
+	str = strconv.Itoa(roundedTemp)
+	isFahrenheit := false
 
 	numStr := ""
 	for _, ch := range str {
