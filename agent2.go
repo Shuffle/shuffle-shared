@@ -1415,6 +1415,9 @@ func ensureFinalFinishDecision(
 		if lastDecision.Action == "finish" || lastDecision.Category == "finish" {
 			lastDecisionIsFinish = true
 			decisions[lastIndex].RunDetails.Status = "FINISHED"
+			if decisions[lastIndex].RunDetails.StartedAt == 0 {
+				decisions[lastIndex].RunDetails.StartedAt = nowMs
+			}
 			if decisions[lastIndex].RunDetails.CompletedAt == 0 {
 				decisions[lastIndex].RunDetails.CompletedAt = nowMs
 			}
@@ -2026,7 +2029,9 @@ func runAgentTools(
 		if len(decision.RunDetails.Id) == 0 {
 			decision.RunDetails.Id = generateDecisionId()
 		}
-		decision.RunDetails.Status = "WAITING"
+		if decision.RunDetails.Status != "IGNORED" && decision.RunDetails.Status != "FINISHED" && decision.RunDetails.Status != "SUCCESS" {
+			decision.RunDetails.Status = "WAITING"
+		}
 		agentOutput.Decisions = append(agentOutput.Decisions, decision)
 	}
 
@@ -2134,7 +2139,6 @@ func runAgentTools(
 				if finishedDecision.RunDetails.Status == "WAITING" {
 					stepWaiting = true
 				}
-				execution, agentOutput, _, _ = saveAgentStateToDB(ctx, execution, startNode, agentOutput, AgentStateRunning, "")
 				stateMutex.Unlock()
 			}(decisionIndex, currentDecision)
 		}
@@ -2394,14 +2398,25 @@ func HandleAgentStart2(resp http.ResponseWriter, request *http.Request) {
 	}
 }
 
-// Returns true if any parsed decision is a runnable tool or interaction step rather than "finish".
+// Returns true if a decision is a non-tool standalone "answer" (requires no external tool call).
+func isStandaloneAnswerDecision(decision AgentDecision) bool {
+	return strings.EqualFold(strings.TrimSpace(decision.Category), "standalone") &&
+		strings.EqualFold(strings.TrimSpace(decision.Action), "answer")
+}
+
+// Returns true if parsedDecisions needs runAgentTools (any tool/ask/approval, or standalone answer without a finish).
 func hasRunnableAgentDecisions(parsedDecisions []AgentDecision) bool {
+	hasFinish := false
 	for _, decision := range parsedDecisions {
-		if !isFinishDecision(decision) {
+		if isFinishDecision(decision) {
+			hasFinish = true
+			continue
+		}
+		if !isStandaloneAnswerDecision(decision) {
 			return true
 		}
 	}
-	return false
+	return !hasFinish
 }
 
 // Extracts the final response text from a "finish" decision (checking output/body fields first, then Reason, then rawOutput).
@@ -2618,12 +2633,12 @@ func runAgentTurn(
 			maxAgentSteps = parsedMax
 		}
 	}
-	if len(agentOutput.Decisions) >= maxAgentSteps {
-		log.Printf("[ERROR][%s] AI_AGENT_MAX_STEPS_EXCEEDED: org=%s loop_count=%d (cache=%d, decisions=%d)", execution.ExecutionId, execution.Workflow.OrgId, len(agentOutput.Decisions), 0, len(agentOutput.Decisions))
+	if len(agentOutput.Decisions)+1 >= maxAgentSteps {
+		log.Printf("[ERROR][%s] AI_AGENT_MAX_STEPS_EXCEEDED: org=%s loop_count=%d (cache=%d, decisions=%d)", execution.ExecutionId, execution.Workflow.OrgId, len(agentOutput.Decisions)+1, 0, len(agentOutput.Decisions))
 		go func() {
 			_ = IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_max_loops_hit", 1)
 		}()
-		return abortAgentRun(ctx, execution, startNode, agentOutput, "max_agent_loops_reached", fmt.Sprintf("Agent reached maximum execution steps limit (%d) without finishing.", len(agentOutput.Decisions)))
+		return abortAgentRun(ctx, execution, startNode, agentOutput, "max_agent_loops_reached", fmt.Sprintf("Agent reached maximum execution steps limit (%d) without finishing.", len(agentOutput.Decisions)+1))
 	}
 
 	// 1. Build Skill, Tools Context, and Org/User Metadata
@@ -2666,6 +2681,8 @@ func runAgentTurn(
 		agentOutput.PromptTokens += int64(openaiResponse.Usage.PromptTokens)
 		agentOutput.CompletionTokens += int64(openaiResponse.Usage.CompletionTokens)
 	}
+	// RunAiQuery always streams from the upstream LLM internally while returning full JSON to our recorder.
+	completionRequest.Stream = true
 	agentOutput.LLMRequests = append(agentOutput.LLMRequests, completionRequest)
 	agentOutput.LLMResponses = append(agentOutput.LLMResponses, openaiResponse)
 
@@ -2693,6 +2710,15 @@ func runAgentTurn(
 		log.Printf("[INFO][%s] [AGENT-LOOP] runAgentTurn -> handing %d decision(s) to runAgentTools", execution.ExecutionId, len(parsedDecisions))
 		_, _, toolErr := triggerAgentToolRunner(ctx, execution, startNode, agentOutput, parsedDecisions, callerName)
 		return startNode, toolErr
+	}
+
+	nowMs := time.Now().UnixMilli()
+	for decisionIndex := range parsedDecisions {
+		if isStandaloneAnswerDecision(parsedDecisions[decisionIndex]) {
+			parsedDecisions[decisionIndex].RunDetails.Status = "FINISHED"
+			parsedDecisions[decisionIndex].RunDetails.StartedAt = nowMs
+			parsedDecisions[decisionIndex].RunDetails.CompletedAt = nowMs
+		}
 	}
 
 	log.Printf("[INFO][%s] [AGENT-LOOP] runAgentTurn -> LLM returned finish decision, finalizing agent run", execution.ExecutionId)
