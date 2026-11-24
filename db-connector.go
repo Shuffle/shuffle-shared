@@ -3927,9 +3927,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		}
 
 		if len(workflow.Name) == 0 && len(workflow.Actions) <= 1 {
-			if debug {
-				log.Printf("[DEBUG] Skipping workflow '%s' (%s) for org %s because it has no name and only 1 action", workflow.Name, workflow.ID, user.ActiveOrg.Id)
-			}
+			//if debug {
+			//	log.Printf("[DEBUG] Skipping workflow '%s' (%s) for org %s because it has no name and only 1 action", workflow.Name, workflow.ID, user.ActiveOrg.Id)
+			//}
 
 			continue
 		}
@@ -4323,6 +4323,29 @@ func mergeMissingSyncFeatures(incoming, existing SyncFeatures, intentionalEdit b
 	return incoming
 }
 
+var orgRecoveryLogLimiter sync.Map // key: "<action>:<orgId>" -> int64 (last logged unix timestamp)
+
+const orgRecoveryLogCooldownSec = int64(900) // 15 minutes per org+action
+
+func shouldLogOrgRecovery(orgId, action string) bool {
+	if orgId == "" {
+		return true
+	}
+	key := fmt.Sprintf("%s:%s", action, orgId)
+	now := time.Now().Unix()
+	if prev, ok := orgRecoveryLogLimiter.Load(key); ok {
+		if prevTs, ok := prev.(int64); ok && (now-prevTs) < orgRecoveryLogCooldownSec {
+			return false
+		}
+	}
+	orgRecoveryLogLimiter.Store(key, now)
+	return true
+}
+
+func resetOrgRecoveryLogLimiter() {
+	orgRecoveryLogLimiter = sync.Map{}
+}
+
 func getOrgCallerInfo() string {
 	for skip := 2; skip <= 6; skip++ {
 		pc, file, line, ok := runtime.Caller(skip)
@@ -4332,8 +4355,11 @@ func getOrgCallerInfo() string {
 		fnName := "unknown"
 		if fn := runtime.FuncForPC(pc); fn != nil {
 			fnName = fn.Name()
-			if idx := strings.LastIndex(fnName, "."); idx != -1 {
-				fnName = fnName[idx+1:]
+			if slashIdx := strings.LastIndex(fnName, "/"); slashIdx != -1 {
+				fnName = fnName[slashIdx+1:]
+			}
+			if dotIdx := strings.Index(fnName, "."); dotIdx != -1 {
+				fnName = fnName[dotIdx+1:]
 			}
 		}
 		if fnName == "RecoverAndValidateOrg" || fnName == "SetOrg" || fnName == "GetOrg" || fnName == "FixOrg" {
@@ -4367,12 +4393,24 @@ func FixOrg(ctx context.Context, org Org) Org {
 				beforeTenant := org.SyncFeatures.MultiTenant.Limit
 
 				merged := mergeMissingSyncFeatures(org.SyncFeatures, cachedFeatures, false)
-				if merged.AppExecutions.Limit != beforeApp ||
-					merged.OnpremAppExecutions.Limit != beforeOnprem ||
-					merged.MultiEnv.Limit != beforeEnv ||
-					merged.MultiTenant.Limit != beforeTenant {
-					log.Printf("[WARNING] [ORG_CORRUPTION_RECOVERED] action=FixOrg org_id=%s org_name=%q caller=%q reason=\"SyncFeatures limits missing or default in org struct, restored from dedicated cache\" app_exec_limit=\"%d->%d\" onprem_exec_limit=\"%d->%d\" multi_env_limit=\"%d->%d\" multi_tenant_limit=\"%d->%d\"",
+				changedLimits := []string{}
+				if merged.AppExecutions.Limit != beforeApp {
+					changedLimits = append(changedLimits, fmt.Sprintf("app_exec_limit:%d->%d", beforeApp, merged.AppExecutions.Limit))
+				}
+				if merged.OnpremAppExecutions.Limit != beforeOnprem {
+					changedLimits = append(changedLimits, fmt.Sprintf("onprem_exec_limit:%d->%d", beforeOnprem, merged.OnpremAppExecutions.Limit))
+				}
+				if merged.MultiEnv.Limit != beforeEnv {
+					changedLimits = append(changedLimits, fmt.Sprintf("multi_env_limit:%d->%d", beforeEnv, merged.MultiEnv.Limit))
+				}
+				if merged.MultiTenant.Limit != beforeTenant {
+					changedLimits = append(changedLimits, fmt.Sprintf("multi_tenant_limit:%d->%d", beforeTenant, merged.MultiTenant.Limit))
+				}
+				if len(changedLimits) > 0 && shouldLogOrgRecovery(org.Id, "FixOrg") {
+					log.Printf("[WARNING] [ORG_CORRUPTION_RECOVERED] action=FixOrg org_id=%s org_name=%q caller=%q why=%q restored_fields=%q app_exec_limit=\"%d->%d\" onprem_exec_limit=\"%d->%d\" multi_env_limit=\"%d->%d\" multi_tenant_limit=\"%d->%d\"",
 						org.Id, org.Name, getOrgCallerInfo(),
+						"dedicated_cache_had_higher_limits",
+						strings.Join(changedLimits, ","),
 						beforeApp, merged.AppExecutions.Limit,
 						beforeOnprem, merged.OnpremAppExecutions.Limit,
 						beforeEnv, merged.MultiEnv.Limit,
@@ -4432,16 +4470,42 @@ func GetOrg(ctx context.Context, id string, bypassCache ...bool) (*Org, error) {
 					beforeApp := curOrg.SyncFeatures.AppExecutions.Limit
 					beforeOnprem := curOrg.SyncFeatures.OnpremAppExecutions.Limit
 					*curOrg = FixOrg(ctx, *curOrg)
-					if curOrg.Id == id && len(curOrg.Users) > 0 && curOrg.Name != "" && curOrg.Name != "tmp" && hasSyncFeatureLimits(curOrg.SyncFeatures) {
-						if curOrg.SyncFeatures.AppExecutions.Limit != beforeApp || curOrg.SyncFeatures.OnpremAppExecutions.Limit != beforeOnprem {
+					cacheHealed := curOrg.SyncFeatures.AppExecutions.Limit != beforeApp || curOrg.SyncFeatures.OnpremAppExecutions.Limit != beforeOnprem
+
+					// Heal uninitialized default limits in cache (e.g. legacy sub-orgs with 0 limits) so they don't look corrupt
+					if !hasSyncFeatureLimits(curOrg.SyncFeatures) {
+						curOrg.SyncFeatures.AppExecutions.Limit = 2000
+						curOrg.SyncFeatures.AppExecutions.Active = true
+						if curOrg.SyncFeatures.MultiEnv.Limit <= 0 {
+							curOrg.SyncFeatures.MultiEnv.Limit = 1
+						}
+						if curOrg.SyncFeatures.MultiTenant.Limit <= 0 {
+							curOrg.SyncFeatures.MultiTenant.Limit = 3
+						}
+						cacheHealed = true
+					}
+
+					// Only bypass cache to DB if critical identity or membership fields are genuinely missing in cache
+					bypassReasons := []string{}
+					if len(curOrg.Users) == 0 {
+						bypassReasons = append(bypassReasons, "cached_users_empty")
+					}
+					if strings.TrimSpace(curOrg.Name) == "" {
+						bypassReasons = append(bypassReasons, "cached_name_empty")
+					}
+					if len(bypassReasons) == 0 {
+						if cacheHealed {
 							if healedBytes, mErr := json.Marshal(curOrg); mErr == nil {
 								_ = SetCache(ctx, cacheKey, healedBytes, 1440)
 							}
 						}
 						return curOrg, nil
 					}
-					log.Printf("[WARNING] [ORG_CORRUPTION_RECOVERED] action=GetOrg_CacheBypass org_id=%s org_name=%q caller=%q reason=\"Cached org missing critical fields or limits, bypassing cache to DB\" cached_users=%d cached_app_exec_limit=%d cached_onprem_exec_limit=%d",
-						id, curOrg.Name, getOrgCallerInfo(), len(curOrg.Users), curOrg.SyncFeatures.AppExecutions.Limit, curOrg.SyncFeatures.OnpremAppExecutions.Limit)
+					if shouldLogOrgRecovery(id, "GetOrg_CacheBypass") {
+						log.Printf("[WARNING] [ORG_CORRUPTION_RECOVERED] action=GetOrg_CacheBypass org_id=%s org_name=%q caller=%q why=%q cached_users=%d cached_app_exec_limit=%d cached_onprem_exec_limit=%d",
+							id, curOrg.Name, getOrgCallerInfo(), strings.Join(bypassReasons, ","),
+							len(curOrg.Users), curOrg.SyncFeatures.AppExecutions.Limit, curOrg.SyncFeatures.OnpremAppExecutions.Limit)
+					}
 					curOrg = &Org{}
 				}
 			}
@@ -5301,8 +5365,8 @@ func RecoverAndValidateOrg(ctx context.Context, data Org, id string) (outOrg Org
 		lostSections = append(lostSections, "ActiveApps")
 	}
 
-	// J. ChildOrgs (only count as lost section if slice is nil or dropped >1 child orgs at once)
-	if len(existingOrg.ChildOrgs) > 0 && (data.ChildOrgs == nil || (len(existingOrg.ChildOrgs) > 1 && len(data.ChildOrgs) == 0)) {
+	// J. ChildOrgs (count as lost if existing org had child orgs and incoming dropped all of them)
+	if len(existingOrg.ChildOrgs) > 0 && len(data.ChildOrgs) == 0 {
 		lostSections = append(lostSections, "ChildOrgs")
 	}
 
@@ -5312,7 +5376,8 @@ func RecoverAndValidateOrg(ctx context.Context, data Org, id string) (outOrg Org
 	if existingOrg.Name != "" {
 		orgNameForLog = existingOrg.Name
 	}
-	diffSummary = fmt.Sprintf("lost_count=%d missing_sections=%q name=%q->%q users=%d->%d app_exec_limit=%d->%d onprem_exec_limit=%d->%d subs=%d->%d licensed=%t->%t creator_org=%q region=%q",
+	diffSummary = fmt.Sprintf("why=%q lost_count=%d missing_sections=%q name=%q->%q users=%d->%d app_exec_limit=%d->%d onprem_exec_limit=%d->%d subs=%d->%d licensed=%t->%t creator_org=%q region=%q",
+		"missing_sections:"+strings.Join(lostSections, ","),
 		len(lostSections), strings.Join(lostSections, ","),
 		existingOrg.Name, data.Name,
 		existingValidUsers, incomingValidUsers,
@@ -5337,7 +5402,7 @@ func RecoverAndValidateOrg(ctx context.Context, data Org, id string) (outOrg Org
 		return data, fmt.Errorf("hard-fail: SetOrg rejected for '%s' (%s). Both Execution Limits and Subscriptions dropped simultaneously", id, existingOrg.Name)
 	}
 
-	if len(lostSections) > 0 {
+	if len(lostSections) > 0 && shouldLogOrgRecovery(id, "SetOrg_DBRecovery") {
 		log.Printf("[WARNING] [ORG_CORRUPTION_RECOVERED] action=SetOrg_DBRecovery org_id=%s org_name=%q caller=%q %s",
 			id, existingOrg.Name, callerInfo, diffSummary)
 	}
@@ -5572,7 +5637,7 @@ func RecoverAndValidateOrg(ctx context.Context, data Org, id string) (outOrg Org
 	if len(existingOrg.ActiveApps) > 0 && (data.ActiveApps == nil || (len(existingOrg.ActiveApps) > 1 && len(data.ActiveApps) == 0)) {
 		data.ActiveApps = existingOrg.ActiveApps
 	}
-	if len(existingOrg.ChildOrgs) > 0 && (data.ChildOrgs == nil || (len(existingOrg.ChildOrgs) > 1 && len(data.ChildOrgs) == 0)) {
+	if len(existingOrg.ChildOrgs) > 0 && len(data.ChildOrgs) == 0 {
 		data.ChildOrgs = existingOrg.ChildOrgs
 	}
 	if data.CreatorOrg == "" && existingOrg.CreatorOrg != "" {
@@ -5638,7 +5703,7 @@ func RecoverAndValidateOrg(ctx context.Context, data Org, id string) (outOrg Org
 		return data, fmt.Errorf("hard-fail: org '%s' has 0 valid users after recovery", id)
 	}
 	data.Name = strings.TrimSpace(data.Name)
-	if data.Name == "" || data.Name == "tmp" {
+	if data.Name == "" || (data.Name == "tmp" && existingOrg.Name != "tmp") {
 		return data, fmt.Errorf("hard-fail: org '%s' has invalid name ('%s') after recovery", id, data.Name)
 	}
 	if len(data.Org) == 0 {
@@ -5926,6 +5991,131 @@ func SetApikey(ctx context.Context, Userdata User) error {
 	}
 
 	return nil
+}
+
+func hybridDeviceDocID(orgId, userId string) string {
+	return fmt.Sprintf("%s_%s", strings.TrimSpace(orgId), strings.TrimSpace(userId))
+}
+
+// SetHybridUserDevices persists hybrid device registrations for an on-prem user scoped to a Cloud Sync org.
+func SetHybridUserDevices(ctx context.Context, record HybridUserDevices) error {
+	nameKey := "hybrid_devices"
+	id := hybridDeviceDocID(record.OrgID, record.UserID)
+	if len(record.ID) == 0 {
+		record.ID = id
+	}
+
+	if project.DbType == "opensearch" {
+		data, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		return indexEs(ctx, nameKey, id, data)
+	}
+
+	k := datastore.NameKey(nameKey, id, nil)
+	_, err := project.Dbclient.Put(ctx, k, &record)
+	return err
+}
+
+// GetHybridUserDevices loads hybrid device registrations for an on-prem user scoped to a Cloud Sync org.
+func GetHybridUserDevices(ctx context.Context, orgId, userId string) (HybridUserDevices, error) {
+	nameKey := "hybrid_devices"
+	id := hybridDeviceDocID(orgId, userId)
+	rec := HybridUserDevices{
+		ID:     id,
+		OrgID:  strings.TrimSpace(orgId),
+		UserID: strings.TrimSpace(userId),
+	}
+
+	if project.DbType == "opensearch" {
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: id,
+		})
+		if err != nil {
+			return rec, err
+		}
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return rec, errDeviceNotFound
+		}
+		if err := json.NewDecoder(res.Body).Decode(&struct {
+			Source *HybridUserDevices `json:"_source"`
+		}{Source: &rec}); err != nil {
+			return rec, err
+		}
+		return rec, nil
+	}
+
+	k := datastore.NameKey(nameKey, id, nil)
+	if err := project.Dbclient.Get(ctx, k, &rec); err != nil {
+		return rec, err
+	}
+	return rec, nil
+}
+
+// SetDeviceWebhookIndex persists a hashed mobile device webhook lookup record.
+func SetDeviceWebhookIndex(ctx context.Context, record DeviceWebhookIndex) error {
+	nameKey := "device_webhook"
+	if project.DbType == "opensearch" {
+		data, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		return indexEs(ctx, nameKey, record.ID, data)
+	}
+
+	k := datastore.NameKey(nameKey, record.ID, nil)
+	_, err := project.Dbclient.Put(ctx, k, &record)
+	return err
+}
+
+// GetDeviceWebhookIndex retrieves a hashed mobile device webhook lookup record.
+func GetDeviceWebhookIndex(ctx context.Context, tokenHash string) (DeviceWebhookIndex, error) {
+	nameKey := "device_webhook"
+	rec := DeviceWebhookIndex{ID: tokenHash}
+	if project.DbType == "opensearch" {
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: tokenHash,
+		})
+		if err != nil {
+			return rec, err
+		}
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return rec, errors.New("webhook not found")
+		}
+		if err := json.NewDecoder(res.Body).Decode(&struct {
+			Source *DeviceWebhookIndex `json:"_source"`
+		}{Source: &rec}); err != nil {
+			return rec, err
+		}
+		return rec, nil
+	}
+
+	k := datastore.NameKey(nameKey, tokenHash, nil)
+	if err := project.Dbclient.Get(ctx, k, &rec); err != nil {
+		return rec, err
+	}
+	return rec, nil
+}
+
+// DeleteDeviceWebhookIndex removes a hashed mobile device webhook lookup record.
+func DeleteDeviceWebhookIndex(ctx context.Context, tokenHash string) error {
+	if len(strings.TrimSpace(tokenHash)) == 0 {
+		return nil
+	}
+	nameKey := "device_webhook"
+	if project.DbType == "opensearch" {
+		return DeleteKey(ctx, nameKey, tokenHash)
+	}
+
+	k := datastore.NameKey(nameKey, tokenHash, nil)
+	return project.Dbclient.Delete(ctx, k)
 }
 
 func SetOpenApiDatastore(ctx context.Context, id string, openapi ParsedOpenApi) error {
@@ -6967,7 +7157,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	}
 
 	if project.CacheDb {
-		cacheKey := fmt.Sprintf("user_%s", parsedKey)
+		cacheKey := fmt.Sprintf("user_%s", strings.ToLower(parsedKey))
 
 		err = SetCache(ctx, cacheKey, data, 1440)
 		if err != nil {
@@ -7003,9 +7193,11 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 			newUsers = append(newUsers, orgUser)
 		}
 		org.Users = newUsers
-		err = SetOrg(ctx, *org, org.Id)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting org %s (1)", orgId)
+		if len(org.Users) > 0 {
+			err = SetOrg(ctx, *org, org.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting org %s (1)", orgId)
+			}
 		}
 	}
 
@@ -11191,7 +11383,9 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &user)
 			if err == nil && len(user.Id) > 0 {
-
+				if freshUser, uErr := GetUser(ctx, user.Id); uErr == nil && freshUser != nil && len(freshUser.Id) > 0 {
+					return *freshUser, nil
+				}
 				return *user, nil
 			} else {
 				log.Printf("[WARNING] Bad cache for %s: %s", sessionId, err)
