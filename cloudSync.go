@@ -2676,7 +2676,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	if os.Getenv("AGENT_TEST_MODE") == "true" {
 		log.Printf("[DEBUG][%s] AGENT_TEST_MODE enabled - using mock tool execution", execution.ExecutionId)
 		body, debugUrl, appName, err := RunAgentDecisionMockHandler(execution, decision)
-		return body, debugUrl, appName, []string{}, "", err
+		return body, debugUrl, appName, []string{}, strings.ToLower(strings.ReplaceAll(strings.TrimSpace(decision.Action), " ", "_")), err
 	}
 
 	if builderRequest, ok := getWorkflowBuilderRequest(execution, decision); ok {
