@@ -3419,6 +3419,15 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 		//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
 
 		if newresp.StatusCode != 200 {
+			var result struct {
+				AlreadyTerminal bool   `json:"already_terminal"`
+				Status          string `json:"status"`
+			}
+			if newresp.StatusCode == http.StatusConflict && json.Unmarshal(body, &result) == nil && result.AlreadyTerminal &&
+				(result.Status == "FINISHED" || result.Status == "ABORTED" || result.Status == "FAILURE") {
+				log.Printf("[DEBUG][%s] Auto-abort skipped: execution is already %s", execution.ExecutionId, result.Status)
+				continue
+			}
 			log.Printf("[ERROR] Bad statuscode in auto-abort: %d, %s", newresp.StatusCode, string(body))
 			continue
 		}
@@ -16603,15 +16612,15 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		//err = SetWorkflowExecution(ctx, *workflowExecution, true)
 		//if err != nil {
 		//}
-		log.Printf("[INFO] Stopped execution of %s with status %s", executionId, workflowExecution.Status)
+		log.Printf("[DEBUG] Execution %s is already %s; abort skipped", executionId, workflowExecution.Status)
 		if len(workflowExecution.ExecutionParent) > 0 {
 		}
 
 		//ExecutionSource    string         `json:"execution_source" datastore:"execution_source"`
 		//ExecutionParent    string         `json:"execution_parent" datastore:"execution_parent"`
 
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Status for %s is %s, which can't be aborted."}`, executionId, workflowExecution.Status)))
+		resp.WriteHeader(http.StatusConflict)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "already_terminal": true, "status": "%s", "reason": "Status for %s is %s, which can't be aborted."}`, workflowExecution.Status, executionId, workflowExecution.Status)))
 		return
 	}
 

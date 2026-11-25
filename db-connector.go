@@ -1063,6 +1063,7 @@ func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string
 	indices := []string{}
 	writeIndices := map[string]bool{}
 	if err == nil {
+		defer alias.Inspect().Response.Body.Close()
 		for name, index := range alias.Indices {
 			metadata, exists := index.Aliases[aliasName]
 			if !exists {
@@ -1076,9 +1077,16 @@ func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string
 					return nil, fmt.Errorf("decode execution alias metadata for %s: %w", name, err)
 				}
 			}
+			_, generationErr := strconv.ParseUint(strings.TrimPrefix(name, aliasName+"-"), 10, 64)
+			if !details.IsWriteIndex && name != aliasName && (!strings.HasPrefix(name, aliasName+"-") || generationErr != nil) {
+				continue
+			}
 			indices = append(indices, name)
 			writeIndices[name] = details.IsWriteIndex
 		}
+	}
+	if err == nil && len(indices) == 0 {
+		return nil, errors.New("execution alias has no canonical indices")
 	}
 	// Executions have no edited/created fields. Prefer the write index, then rollover generation.
 	sort.Slice(indices, func(i, j int) bool {
@@ -1118,11 +1126,13 @@ func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string
 		return nil, err
 	}
 
+	allowPartialResults := false
 	resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
 		Indices: []string{aliasName},
 		Body:    &buf,
 		Params: opensearchapi.SearchParams{
-			TrackTotalHits: true,
+			TrackTotalHits:            true,
+			AllowPartialSearchResults: &allowPartialResults,
 		},
 	})
 	if err != nil {
@@ -1990,15 +2000,28 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 }
 
 func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecution, action ActionResult) (string, error) {
+	expectedSize := 0
+	if strings.Contains(action.Result, "Result too large to handle") {
+		var placeholder struct {
+			Size int `json:"size"`
+		}
+		if err := json.Unmarshal([]byte(action.Result), &placeholder); err == nil {
+			expectedSize = placeholder.Size
+		}
+	}
 	fileID := action.Action.ID
-	if len(fileID) == 0 && len(action.Result) > 0 {
+	if len(action.Result) > 0 {
 		parsedPlaceholder := map[string]interface{}{}
 		if err := json.Unmarshal([]byte(action.Result), &parsedPlaceholder); err == nil {
 			if parsedID, ok := parsedPlaceholder["id"].(string); ok && len(parsedID) > 0 {
 				prefix := fmt.Sprintf("%s_", workflowExecution.ExecutionId)
 				if strings.HasPrefix(parsedID, prefix) {
-					fileID = strings.TrimPrefix(parsedID, prefix)
-				} else {
+					referencedID := strings.TrimPrefix(parsedID, prefix)
+					// Result can reference an action's file rather than execution_result.
+					if len(fileID) == 0 || (referencedID != "" && referencedID != "." && referencedID != ".." && filepath.Base(referencedID) == referencedID) {
+						fileID = referencedID
+					}
+				} else if len(fileID) == 0 {
 					fileID = parsedID
 				}
 			}
@@ -2016,7 +2039,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := string(cache.([]uint8))
-			if len(cacheData) > 0 {
+			if len(cacheData) > 0 && (expectedSize <= 0 || len(cacheData) == expectedSize) {
 				if isAgentAction(action.Action) {
 					cacheData = cleanAgentResultString(cacheData)
 				}
@@ -2085,6 +2108,9 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
+	if len(data) == 0 || (expectedSize > 0 && len(data) != expectedSize) {
+		return "", fmt.Errorf("incomplete large execution file %s: got %d bytes, expected %d", fullParsedPath, len(data), expectedSize)
+	}
 	if project.CacheDb {
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
