@@ -716,14 +716,7 @@ func buildUserMessageWithImages(textContent string, imageUrls []string, imageDet
 } // alright looks fine too
 
 // Assembles the OpenAI ChatCompletionRequest with the exact message layout expected by the agent prompt.
-func buildCompletionRequest(
-	params AgentNodeParams,
-	systemMessage string,
-	skillSystemRule string,
-	skillContext string,
-	userMetadata string,
-	historyCtx AgentHistoryContext,
-) openai.ChatCompletionRequest {
+func buildCompletionRequest(params AgentNodeParams, systemMessage string, skillSystemRule string, skillContext string, userMetadata string, historyCtx AgentHistoryContext) openai.ChatCompletionRequest {
 	selectedModel := model
 	if len(params.ModelOverride) > 0 {
 		selectedModel = params.ModelOverride
@@ -829,13 +822,7 @@ func buildCompletionRequest(
 } // wait is it how it is in the old code or did we fixed anuy thing here i see we have USER ANSWERS and USER REQUEST too ??
 
 // Executes the LLM call via RunAiQuery and returns the raw text output and parsed ChatCompletionResponse.
-func runAgentLLM(
-	ctx context.Context,
-	execution WorkflowExecution,
-	startNode Action,
-	params AgentNodeParams,
-	completionRequest openai.ChatCompletionRequest,
-) (string, openai.ChatCompletionResponse, error) {
+func runAgentLLM(ctx context.Context, execution WorkflowExecution, startNode Action, params AgentNodeParams, completionRequest openai.ChatCompletionRequest) (string, openai.ChatCompletionResponse, error) {
 	recorder := httptest.NewRecorder()
 
 	callInfo := AiCallInfo{
@@ -927,11 +914,7 @@ func normalizeDecisionIndices(decisions []AgentDecision, nextStepIndex int) []Ag
 }
 
 // Extracts and parses the LLM output into a normalized list of AgentDecision structs.
-func parseLLMDecisions(
-	rawOutput string,
-	openaiResponse openai.ChatCompletionResponse,
-	nextStepIndex int,
-) ([]AgentDecision, string, error) {
+func parseLLMDecisions(rawOutput string, openaiResponse openai.ChatCompletionResponse, nextStepIndex int) ([]AgentDecision, string, error) {
 	choicesText := ""
 	for _, choice := range openaiResponse.Choices {
 		if len(choice.Message.Content) > 0 {
@@ -1265,15 +1248,7 @@ const (
 )
 
 // Loads the latest execution from the database and extracts or initializes the AgentOutput for startNode.
-func loadAgentStateFromDB(
-	ctx context.Context,
-	execution WorkflowExecution,
-	startNode Action,
-	params AgentNodeParams,
-	originalUserInput string,
-	allowedActionString string,
-	incomingAgentOutput AgentOutput,
-) (WorkflowExecution, Action, AgentOutput) {
+func loadAgentStateFromDB(ctx context.Context, execution WorkflowExecution, startNode Action, params AgentNodeParams, originalUserInput string, allowedActionString string, incomingAgentOutput AgentOutput) (WorkflowExecution, Action, AgentOutput) {
 	if !standalone && len(execution.Results) == 0 && len(execution.Workflow.ID) == 0 {
 		callerResults := execution.Results
 		dbExecution, dbErr := GetWorkflowExecution(ctx, execution.ExecutionId)
@@ -1387,12 +1362,7 @@ func loadAgentStateFromDB(
 }
 
 // Ensures agentOutput.Decisions always ends with a completed "finish" decision and no earlier decision is left in "RUNNING".
-func ensureFinalFinishDecision(
-	decisions []AgentDecision,
-	finalReason string,
-	nowMs int64,
-	isAborted bool,
-) []AgentDecision {
+func ensureFinalFinishDecision(decisions []AgentDecision, finalReason string, nowMs int64, isAborted bool) []AgentDecision {
 	for decisionIndex, decision := range decisions {
 		currentStatus := decision.RunDetails.Status
 		if currentStatus == "RUNNING" || (isAborted && currentStatus == "WAITING") {
@@ -1450,14 +1420,7 @@ func ensureFinalFinishDecision(
 }
 
 // Updates the status hierarchy (AgentOutput -> ActionResult -> WorkflowExecution) and saves directly to the database.
-func saveAgentStateToDB(
-	ctx context.Context,
-	execution WorkflowExecution,
-	startNode Action,
-	agentOutput AgentOutput,
-	targetState string,
-	abortReason string,
-) (WorkflowExecution, AgentOutput, ActionResult, error) {
+func saveAgentStateToDB(ctx context.Context, execution WorkflowExecution, startNode Action, agentOutput AgentOutput, targetState string, abortReason string) (WorkflowExecution, AgentOutput, ActionResult, error) {
 	nowMs := time.Now().UnixMilli()
 	var dbNodeStatus string
 	var finalNodeStatus string
@@ -1676,12 +1639,7 @@ func redeployToOrborus(ctx context.Context, execution WorkflowExecution, finalSt
 }
 
 // Single-purpose notifier that records terminal agent telemetry and POSTs the completed node ActionResult to /api/v1/streams so downstream workflow nodes run.
-func notifyWorkflowStream(
-	ctx context.Context,
-	execution WorkflowExecution,
-	agentOutput AgentOutput,
-	nodeResult ActionResult,
-) {
+func notifyWorkflowStream(ctx context.Context, execution WorkflowExecution, agentOutput AgentOutput, nodeResult ActionResult) {
 	durationSeconds := int64(0)
 	if agentOutput.StartedAt > 0 && agentOutput.CompletedAt > 0 {
 		durationSeconds = (agentOutput.CompletedAt - agentOutput.StartedAt) / 1000
@@ -1756,12 +1714,7 @@ func notifyWorkflowStream(
 }
 
 // Marks the AI Agent run as FINISHED (guaranteeing a final finish decision), persists to DB, and notifies /api/v1/streams for downstream workflow nodes.
-func finishAgentRun(
-	ctx context.Context,
-	execution WorkflowExecution,
-	startNode Action,
-	agentOutput AgentOutput,
-) (Action, error) {
+func finishAgentRun(ctx context.Context, execution WorkflowExecution, startNode Action, agentOutput AgentOutput) (Action, error) {
 	nowMs := time.Now().UnixMilli()
 	agentOutput.Decisions = ensureFinalFinishDecision(agentOutput.Decisions, agentOutput.Output, nowMs, false)
 
@@ -1775,14 +1728,7 @@ func finishAgentRun(
 }
 
 // Marks the AI Agent run as ABORTED (guaranteeing a synthetic finish decision), persists to DB, and notifies /api/v1/streams with FAILURE.
-func abortAgentRun(
-	ctx context.Context,
-	execution WorkflowExecution,
-	startNode Action,
-	agentOutput AgentOutput,
-	abortLabel string,
-	abortReason string,
-) (Action, error) {
+func abortAgentRun(ctx context.Context, execution WorkflowExecution, startNode Action, agentOutput AgentOutput, abortLabel string, abortReason string) (Action, error) {
 	log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q",
 		execution.ExecutionId,
 		execution.Workflow.OrgId,
@@ -1806,11 +1752,7 @@ func abortAgentRun(
 }
 
 // Executes a single tool call via RunAgentDecisionSingulActionHandler and sets its RunDetails ("FINISHED", "WAITING", or "FAILURE").
-func runTool(
-	execution WorkflowExecution,
-	agentOutput AgentOutput,
-	decision AgentDecision,
-) (completedDecision AgentDecision) {
+func runTool(execution WorkflowExecution, agentOutput AgentOutput, decision AgentDecision) (completedDecision AgentDecision) {
 	completedDecision = decision
 	completedDecision.RunDetails.StartedAt = time.Now().UnixMilli()
 
@@ -1888,12 +1830,7 @@ func runTool(
 }
 
 // Sends an org notification when an agent decision requires user input ("ask"/"question") or tool approval.
-func sendUserWaitNotification(
-	ctx context.Context,
-	execution WorkflowExecution,
-	startNode Action,
-	decision AgentDecision,
-) {
+func sendUserWaitNotification(ctx context.Context, execution WorkflowExecution, startNode Action, decision AgentDecision) {
 	if standalone {
 		return
 	}
@@ -2012,13 +1949,7 @@ func hasPendingAgentDecisions(decisions []AgentDecision) bool {
 // - Any newly parsed non-finish LLM decisions are appended to agentOutput.Decisions upfront.
 // - Decisions with the same step 'I' run in parallel via runTool.
 // - Decisions requiring user input ("ask"/"question" or unapproved ApprovalRequired) pause in AgentStateWaiting.
-func runAgentTools(
-	ctx context.Context,
-	execution WorkflowExecution,
-	startNode Action,
-	agentOutput AgentOutput,
-	parsedDecisions []AgentDecision,
-) (WorkflowExecution, AgentOutput, error) {
+func runAgentTools(ctx context.Context, execution WorkflowExecution, startNode Action, agentOutput AgentOutput, parsedDecisions []AgentDecision) (WorkflowExecution, AgentOutput, error) {
 	isNewLLMTurn := len(parsedDecisions) > 0
 	turnStartIndex := len(agentOutput.Decisions)
 
@@ -2065,8 +1996,6 @@ func runAgentTools(
 		}
 	}
 
-	log.Printf("[INFO][%s] [AGENT-LOOP] runAgentTools: total_decisions=%d first_pending_idx=%d step_groups=%d (new_llm_turn=%t)", execution.ExecutionId, totalDecisions, firstPendingIndex, len(stepGroups), isNewLLMTurn)
-
 	waitingForUser := false
 
 	for _, stepDecisionIndices := range stepGroups {
@@ -2098,8 +2027,6 @@ func runAgentTools(
 			}
 			agentOutput.Decisions[decisionIndex] = decision
 		}
-
-		log.Printf("[INFO][%s] [AGENT-LOOP] runAgentTools step i=%d starting: decisions_in_step=%d runnable=%t", execution.ExecutionId, currentStepIndex, len(stepDecisionIndices), hasRunnableToolsInStep)
 
 		if hasRunnableToolsInStep {
 			execution, agentOutput, _, _ = saveAgentStateToDB(ctx, execution, startNode, agentOutput, AgentStateRunning, "")
@@ -2169,8 +2096,6 @@ func runAgentTools(
 			return execution, agentOutput, saveErr
 		}
 
-		log.Printf("[INFO][%s] [AGENT-LOOP] runAgentTools step i=%d finished: failed=%t waiting_for_user=%t state=%s", execution.ExecutionId, currentStepIndex, stepFailed, stepWaiting, targetStepState)
-
 		// Only notify the user after all runnable tools in a new LLM step have finished and state is saved as WAITING
 		if stepWaiting && !stepFailed && isNewLLMTurn {
 			for _, decisionIndex := range stepDecisionIndices {
@@ -2186,13 +2111,10 @@ func runAgentTools(
 	}
 
 	if !waitingForUser {
-		log.Printf("[INFO][%s] [AGENT-LOOP] runAgentTools completed batch -> handing back to HandleAiAgentExecutionStart2", execution.ExecutionId)
 		_, triggerErr := triggerAgentStart(ctx, execution, startNode, agentOutput, "runAgentTools")
 		if triggerErr != nil {
 			return execution, agentOutput, triggerErr
 		}
-	} else {
-		log.Printf("[INFO][%s] [AGENT-LOOP] runAgentTools parked agent in WAITING for user input/approval", execution.ExecutionId)
 	}
 
 	return execution, agentOutput, nil
@@ -2251,10 +2173,7 @@ func postAgentInternalWithAck(endpointPath string, payload AgentInternalRequest)
 }
 
 // Validates execution_id + authorization against the DB, immediately flushes HTTP 202 Accepted so the caller can exit, and returns a detached background context.
-func authenticateAndAckAgentInternalRequest(
-	resp http.ResponseWriter,
-	request *http.Request,
-) (context.Context, WorkflowExecution, AgentInternalRequest, bool) {
+func authenticateAndAckAgentInternalRequest(resp http.ResponseWriter, request *http.Request) (context.Context, WorkflowExecution, AgentInternalRequest, bool) {
 	if HandleCors(resp, request) {
 		return nil, WorkflowExecution{}, AgentInternalRequest{}, false
 	}
@@ -2319,14 +2238,7 @@ func authenticateAndAckAgentInternalRequest(
 }
 
 // Triggers /api/v1/agent/loop/tools with 202 Flush ACK to reset the Cloud Run timeout, falling back to in-process runAgentTools if the HTTP handoff fails.
-func triggerAgentToolRunner(
-	ctx context.Context,
-	execution WorkflowExecution,
-	startNode Action,
-	agentOutput AgentOutput,
-	parsedDecisions []AgentDecision,
-	caller string,
-) (WorkflowExecution, AgentOutput, error) {
+func triggerAgentToolRunner(ctx context.Context, execution WorkflowExecution, startNode Action, agentOutput AgentOutput, parsedDecisions []AgentDecision, caller string) (WorkflowExecution, AgentOutput, error) {
 	payload := AgentInternalRequest{
 		ExecutionId:     execution.ExecutionId,
 		Authorization:   execution.Authorization,
@@ -2338,7 +2250,6 @@ func triggerAgentToolRunner(
 
 	ackErr := postAgentInternalWithAck("/api/v1/agent/loop/tools", payload)
 	if ackErr == nil {
-		log.Printf("[INFO][%s] Handed off %d decisions to /api/v1/agent/loop/tools (caller=%s)", execution.ExecutionId, len(parsedDecisions), caller)
 		return execution, agentOutput, nil
 	}
 
@@ -2347,13 +2258,7 @@ func triggerAgentToolRunner(
 }
 
 // Triggers /api/v1/agent/loop/turn with 202 Flush ACK to reset the Cloud Run timeout, falling back to in-process HandleAiAgentExecutionStart2 if the HTTP handoff fails.
-func triggerAgentStart(
-	ctx context.Context,
-	execution WorkflowExecution,
-	startNode Action,
-	agentOutput AgentOutput,
-	caller string,
-) (Action, error) {
+func triggerAgentStart(ctx context.Context, execution WorkflowExecution, startNode Action, agentOutput AgentOutput, caller string) (Action, error) {
 	payload := AgentInternalRequest{
 		ExecutionId:   execution.ExecutionId,
 		Authorization: execution.Authorization,
@@ -2364,7 +2269,6 @@ func triggerAgentStart(
 
 	ackErr := postAgentInternalWithAck("/api/v1/agent/loop/turn", payload)
 	if ackErr == nil {
-		log.Printf("[INFO][%s] Handed off next turn to /api/v1/agent/loop/turn (caller=%s)", execution.ExecutionId, caller)
 		return startNode, nil
 	}
 
@@ -2439,13 +2343,7 @@ func extractFinalFinishOutput(parsedDecisions []AgentDecision, rawOutput string)
 }
 
 // Initializes the agent on Turn 0: logs AI_AGENT_START immediately, validates on-prem AI config, resolves $workflow variables and branch conditions ONCE, and saves initial RUNNING state to DB.
-func initAgentFirstTurn(
-	ctx context.Context,
-	execution WorkflowExecution,
-	startNode Action,
-	agentOutput AgentOutput,
-	callerName string,
-) (WorkflowExecution, Action, AgentOutput, bool, error) {
+func initAgentFirstTurn(ctx context.Context, execution WorkflowExecution, startNode Action, agentOutput AgentOutput, callerName string) (WorkflowExecution, Action, AgentOutput, bool, error) {
 	rawParams := parseNodeParams(startNode)
 	originalUserInput := rawParams.UserInput
 
@@ -2610,13 +2508,7 @@ func checkAgentBillingQuota(ctx context.Context, execution WorkflowExecution) (b
 }
 
 // Executes a single agent loop turn: builds prompt/tools/history context, calls the LLM, parses decisions, and either finishes or triggers the tool runner.
-func runAgentTurn(
-	ctx context.Context,
-	execution WorkflowExecution,
-	startNode Action,
-	agentOutput AgentOutput,
-	callerName string,
-) (Action, error) {
+func runAgentTurn(ctx context.Context, execution WorkflowExecution, startNode Action, agentOutput AgentOutput, callerName string) (Action, error) {
 	params := parseNodeParams(startNode)
 	if len(agentOutput.Input) > 0 {
 		params.UserInput = agentOutput.Input
@@ -2668,8 +2560,6 @@ func runAgentTurn(
 	systemPrompt := getAgentMainSystemPrompt(params.EnableQuestions)
 	completionRequest := buildCompletionRequest(params, systemPrompt, skillSystemRule, skillContext, userMetadata, historyCtx)
 
-	log.Printf("[INFO][%s] [AGENT-LOOP] runAgentTurn calling LLM: turn=#%d history_decisions=%d next_step_i=%d continuation=%t", execution.ExecutionId, agentOutput.LLMCallCount+1, len(agentOutput.Decisions), historyCtx.NextStepIndex, len(historyCtx.ContinuationMessage) > 0)
-
 	rawOutput, openaiResponse, llmErr := runAgentLLM(ctx, execution, startNode, params, completionRequest)
 	if llmErr != nil {
 		return abortAgentRun(ctx, execution, startNode, agentOutput, "ai_query_failed", llmErr.Error())
@@ -2703,11 +2593,8 @@ func runAgentTurn(
 		return abortAgentRun(ctx, execution, startNode, agentOutput, "decision_parse_failed", errMsg)
 	}
 
-	log.Printf("[INFO][%s] [AGENT-LOOP] runAgentTurn parsed %d decision(s) from LLM (turn=#%d, total_tokens=%d)", execution.ExecutionId, len(parsedDecisions), agentOutput.LLMCallCount, agentOutput.TotalTokens)
-
 	// 5. Route: If any runnable tool or human-in-the-loop decision exists -> hand off to Tool Runner; otherwise -> Finish
 	if hasRunnableAgentDecisions(parsedDecisions) {
-		log.Printf("[INFO][%s] [AGENT-LOOP] runAgentTurn -> handing %d decision(s) to runAgentTools", execution.ExecutionId, len(parsedDecisions))
 		_, _, toolErr := triggerAgentToolRunner(ctx, execution, startNode, agentOutput, parsedDecisions, callerName)
 		return startNode, toolErr
 	}
@@ -2721,20 +2608,13 @@ func runAgentTurn(
 		}
 	}
 
-	log.Printf("[INFO][%s] [AGENT-LOOP] runAgentTurn -> LLM returned finish decision, finalizing agent run", execution.ExecutionId)
 	agentOutput.Decisions = append(agentOutput.Decisions, parsedDecisions...)
 	agentOutput.Output = extractFinalFinishOutput(parsedDecisions, rawOutput)
 	return finishAgentRun(ctx, execution, startNode, agentOutput)
 }
 
 // Entry point for the AI Agent: loads state from DB, runs first-turn initialization ONCE on Turn 0, and delegates the active turn to runAgentTurn.
-func HandleAiAgentExecutionStart2(
-	ctx context.Context,
-	execution WorkflowExecution,
-	startNode Action,
-	incomingAgentOutput AgentOutput,
-	callerName string,
-) (Action, error) {
+func HandleAiAgentExecutionStart2(ctx context.Context, execution WorkflowExecution, startNode Action, incomingAgentOutput AgentOutput, callerName string) (Action, error) {
 	if strings.TrimSpace(callerName) == "" {
 		callerName = "unknown"
 	}
@@ -2746,8 +2626,6 @@ func HandleAiAgentExecutionStart2(
 	rawParams := parseNodeParams(startNode)
 	var agentOutput AgentOutput
 	execution, startNode, agentOutput = loadAgentStateFromDB(ctx, execution, startNode, rawParams, rawParams.UserInput, "", incomingAgentOutput)
-
-	log.Printf("[INFO][%s] [AGENT-LOOP] HandleAiAgentExecutionStart2 invoked: caller='%s' node=%s agent_status='%s' exec_status='%s' decisions=%d llm_calls=%d", execution.ExecutionId, callerName, startNode.ID, agentOutput.Status, execution.Status, len(agentOutput.Decisions), agentOutput.LLMCallCount)
 
 	// 2. First Turn Initialization (runs ONLY ONCE when there are no prior decisions)
 	if len(agentOutput.Decisions) == 0 {
@@ -2770,7 +2648,6 @@ func HandleAiAgentExecutionStart2(
 
 		// If any decision is still pending (e.g. just approved by the user, or another decision in the step is still WAITING), hand off to runAgentTools
 		if hasPendingAgentDecisions(agentOutput.Decisions) {
-			log.Printf("[INFO][%s] [AGENT-LOOP] HandleAiAgentExecutionStart2 -> pending decisions found, handing off to runAgentTools (caller='%s')", execution.ExecutionId, callerName)
 			_, _, toolErr := triggerAgentToolRunner(ctx, execution, startNode, agentOutput, nil, callerName)
 			return startNode, toolErr
 		}
