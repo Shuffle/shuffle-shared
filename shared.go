@@ -22341,15 +22341,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					"id": "%s_%s"
 				}`, itemSize, workflowExecution.ExecutionId, actionId)
 
-				if err := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); err != nil {
-					dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-					if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-						log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
-					} else if retryErr := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); retryErr != nil {
-						log.Printf("[WARNING] Failed writing execution_argument file after creating directory: %s", retryErr)
-					} else {
-						workflowExecution.ExecutionArgument = replacementJson
-					}
+				if writeErr := WriteStorageData(localPath, []byte(workflowExecution.ExecutionArgument)); writeErr != nil {
+					log.Printf("[WARNING] Failed writing large execution data to %s: %s", localPath, writeErr)
 				} else {
 					workflowExecution.ExecutionArgument = replacementJson
 				}
@@ -22396,19 +22389,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						"id": "%s_%s"
 					}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
 
-					if err := ioutil.WriteFile(localPath, []byte(rawResult), 0644); err != nil {
-						dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-						if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-							log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
-						} else if retryErr := ioutil.WriteFile(localPath, []byte(rawResult), 0644); retryErr != nil {
-							log.Printf("[WARNING][%s] Failed writing result file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
-						} else {
-							item.Result = replacementJson
-							if isAgent {
-								actionReplaceKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, item.Action.ID)
-								_ = SetCache(ctx, actionReplaceKey, []byte(rawResult), 600)
-							}
-						}
+					if writeErr := WriteStorageData(localPath, []byte(rawResult)); writeErr != nil {
+						log.Printf("[WARNING] Failed writing large execution data to %s: %s", localPath, writeErr)
 					} else {
 						item.Result = replacementJson
 						if isAgent {
@@ -22443,17 +22425,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					"id": "%s_%s"
 				}`, itemSize, workflowExecution.ExecutionId, actionId)
 
-				if err := ioutil.WriteFile(localPath, []byte(rawExecResult), 0644); err != nil {
-					dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-					if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-						log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
-					} else if retryErr := ioutil.WriteFile(localPath, []byte(rawExecResult), 0644); retryErr != nil {
-						log.Printf("[WARNING] Failed writing Result file after creating directory: %s", retryErr)
-					} else {
-						workflowExecution.Result = replacementJson
-						actionReplaceKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, actionId)
-						_ = SetCache(ctx, actionReplaceKey, []byte(rawExecResult), 600)
-					}
+				if writeErr := WriteStorageData(localPath, []byte(rawExecResult)); writeErr != nil {
+					log.Printf("[WARNING] Failed writing large execution data to %s: %s", localPath, writeErr)
 				} else {
 					workflowExecution.Result = replacementJson
 					actionReplaceKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, actionId)
@@ -22489,17 +22462,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						"id": "%s_%s"
 					}`, itemSize, workflowExecution.ExecutionId, actionId)
 
-					if err := ioutil.WriteFile(localPath, []byte(execVar.Value), 0644); err != nil {
-						dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-						if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-							log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
-							workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = "Size too large. Removed."
-						} else if retryErr := ioutil.WriteFile(localPath, []byte(execVar.Value), 0644); retryErr != nil {
-							log.Printf("[WARNING][%s] Failed writing workflow execution variable file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
-							workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = "Size too large. Removed."
-						} else {
-							workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = replacementJson
-						}
+					if writeErr := WriteStorageData(localPath, []byte(execVar.Value)); writeErr != nil {
+						log.Printf("[WARNING] Failed writing large execution data to %s: %s", localPath, writeErr)
 					} else {
 						workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = replacementJson
 					}
@@ -22534,17 +22498,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						"id": "%s_%s"
 					}`, itemSize, workflowExecution.ExecutionId, actionId)
 
-					if err := ioutil.WriteFile(localPath, []byte(execVar.Value), 0644); err != nil {
-						dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-						if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-							log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
-							workflowExecution.ExecutionVariables[execVarIndex].Value = "Size too large. Removed."
-						} else if retryErr := ioutil.WriteFile(localPath, []byte(execVar.Value), 0644); retryErr != nil {
-							log.Printf("[WARNING][%s] Failed writing execution variable file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
-							workflowExecution.ExecutionVariables[execVarIndex].Value = "Size too large. Removed."
-						} else {
-							workflowExecution.ExecutionVariables[execVarIndex].Value = replacementJson
-						}
+					if writeErr := WriteStorageData(localPath, []byte(execVar.Value)); writeErr != nil {
+						log.Printf("[WARNING] Failed writing large execution data to %s: %s", localPath, writeErr)
 					} else {
 						workflowExecution.ExecutionVariables[execVarIndex].Value = replacementJson
 					}
@@ -22575,17 +22530,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							"id": "%s_%s"
 						}`, itemSize, workflowExecution.ExecutionId, actionId)
 
-						if err := ioutil.WriteFile(localPath, []byte(param.Value), 0644); err != nil {
-							dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-							if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-								log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
-								workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
-							} else if retryErr := ioutil.WriteFile(localPath, []byte(param.Value), 0644); retryErr != nil {
-								log.Printf("[WARNING][%s] Failed writing parameter file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
-								workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
-							} else {
-								workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = replacementJson
-							}
+						if writeErr := WriteStorageData(localPath, []byte(param.Value)); writeErr != nil {
+							log.Printf("[WARNING] Failed writing large execution data to %s: %s", localPath, writeErr)
 						} else {
 							workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = replacementJson
 						}
@@ -22615,17 +22561,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							"id": "%s_%s"
 						}`, itemSize, workflowExecution.ExecutionId, actionId)
 
-						if err := ioutil.WriteFile(localPath, []byte(param.Value), 0644); err != nil {
-							dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-							if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-								log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
-								workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = "Size too large. Removed."
-							} else if retryErr := ioutil.WriteFile(localPath, []byte(param.Value), 0644); retryErr != nil {
-								log.Printf("[WARNING][%s] Failed writing invalid parameter file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
-								workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = "Size too large. Removed."
-							} else {
-								workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = replacementJson
-							}
+						if writeErr := WriteStorageData(localPath, []byte(param.Value)); writeErr != nil {
+							log.Printf("[WARNING] Failed writing large execution data to %s: %s", localPath, writeErr)
 						} else {
 							workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = replacementJson
 						}
@@ -22657,17 +22594,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							"id": "%s_%s"
 						}`, itemSize, workflowExecution.ExecutionId, actionId)
 
-						if err := ioutil.WriteFile(localPath, []byte(param.Value), 0644); err != nil {
-							dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-							if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-								log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
-								workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
-							} else if retryErr := ioutil.WriteFile(localPath, []byte(param.Value), 0644); retryErr != nil {
-								log.Printf("[WARNING][%s] Failed writing workflow parameter file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
-								workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
-							} else {
-								workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = replacementJson
-							}
+						if writeErr := WriteStorageData(localPath, []byte(param.Value)); writeErr != nil {
+							log.Printf("[WARNING] Failed writing large execution data to %s: %s", localPath, writeErr)
 						} else {
 							workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = replacementJson
 						}
@@ -22697,17 +22625,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							"id": "%s_%s"
 						}`, itemSize, workflowExecution.ExecutionId, actionId)
 
-						if err := ioutil.WriteFile(localPath, []byte(param.Value), 0644); err != nil {
-							dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-							if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-								log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
-								workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
-							} else if retryErr := ioutil.WriteFile(localPath, []byte(param.Value), 0644); retryErr != nil {
-								log.Printf("[WARNING][%s] Failed writing workflow invalid parameter file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
-								workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
-							} else {
-								workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = replacementJson
-							}
+						if writeErr := WriteStorageData(localPath, []byte(param.Value)); writeErr != nil {
+							log.Printf("[WARNING] Failed writing large execution data to %s: %s", localPath, writeErr)
 						} else {
 							workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = replacementJson
 						}

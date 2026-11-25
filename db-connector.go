@@ -566,10 +566,7 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 			return err
 		}
 
-		if err := os.MkdirAll(fmt.Sprintf("%s/app_images", basepath), 0755); err != nil {
-			return fmt.Errorf("create app image directory: %w", err)
-		}
-		if err := os.WriteFile(fmt.Sprintf("%s/%s", basepath, workflowapp.ImageFilePath), imageData, 0644); err != nil {
+		if err := WriteStorageData(workflowapp.ImageFilePath, imageData); err != nil {
 			return fmt.Errorf("write app images: %w", err)
 		}
 
@@ -1691,14 +1688,9 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 	var err error
 
 	if project.DbType == "opensearch" {
-		// On-premise: read from local filesystem
-		basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
-		if len(basepath) == 0 {
-			basepath = "files"
-		}
-
-		localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
-		data, err = ioutil.ReadFile(localPath)
+		// On-premise: read from local filesystem or object storage
+		localPath := fullParsedPath
+		data, err = ReadStorageData(fullParsedPath)
 		if err != nil {
 			// Use DEBUG for file not found (expected on first save), ERROR for other issues
 			if os.IsNotExist(err) {
@@ -2200,7 +2192,7 @@ func getStoredApp(ctx context.Context, id string, user User, skipCache bool) (*W
 			basepath = "files"
 		}
 
-		imageData, err := os.ReadFile(fmt.Sprintf("%s/app_images/%s.json", basepath, workflowApp.ID))
+		imageData, err := ReadStorageData(workflowApp.ImageFilePath)
 		if err != nil {
 			log.Printf("[WARNING] Failed reading app images for %s: %s", workflowApp.ID, err)
 		} else {
@@ -9105,7 +9097,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 					basepath = "files"
 				}
 
-				imageData, readErr := os.ReadFile(fmt.Sprintf("%s/app_images/%s.json", basepath, innerApp.ID))
+				imageData, readErr := ReadStorageData(innerApp.ImageFilePath)
 				if readErr != nil {
 					log.Printf("[WARNING] Failed reading app images for %s: %s", innerApp.ID, readErr)
 				} else {
@@ -10656,12 +10648,6 @@ func workflowParameterValues(workflow *Workflow) []*string {
 }
 
 func offloadWorkflowParameters(workflow *Workflow) error {
-	basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
-	if basepath == "" {
-		basepath = "files"
-	}
-	directory := fmt.Sprintf("%s/large_workflows", basepath)
-
 	for _, value := range workflowParameterValues(workflow) {
 		if len(*value) <= 32500 {
 			continue
@@ -10670,10 +10656,7 @@ func offloadWorkflowParameters(workflow *Workflow) error {
 		// @yashsinghcodes: content-addressed files are retained; add reference-aware cleanup if storage growth becomes material.
 		sum := sha256.Sum256([]byte(workflow.OrgId + "\x00" + *value))
 		id := hex.EncodeToString(sum[:])
-		if err := os.MkdirAll(directory, 0755); err != nil {
-			return fmt.Errorf("create large workflow parameter directory: %w", err)
-		}
-		if err := os.WriteFile(fmt.Sprintf("%s/%s", directory, id), []byte(*value), 0644); err != nil {
+		if err := WriteStorageData(fmt.Sprintf("large_workflows/%s", id), []byte(*value)); err != nil {
 			return fmt.Errorf("write large workflow parameter: %w", err)
 		}
 
@@ -10707,7 +10690,7 @@ func restoreWorkflowParameters(workflow *Workflow) error {
 			return errors.New("invalid large workflow parameter file id")
 		}
 
-		data, err := os.ReadFile(fmt.Sprintf("%s/large_workflows/%s", basepath, reference.ID))
+		data, err := ReadStorageData(fmt.Sprintf("large_workflows/%s", reference.ID))
 		if err != nil {
 			return fmt.Errorf("read large workflow parameter: %w", err)
 		}
