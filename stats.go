@@ -674,7 +674,10 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 }
 
 func mergeMultiRegionResults(crossRegionResults []MultiRegionStatsEntry, info *ExecutionInfo, parentDailyMap map[string]int) {
+
+	if debug {
 	log.Printf("[INFO] HandleGetStatistics: received cross-region stats for %d child orgs from multi-region-stats endpoint", len(crossRegionResults))
+	}
 
 	for _, entry := range crossRegionResults {
 		for _, childDay := range entry.DailyStatistics {
@@ -816,7 +819,10 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(gcsStats) > 0 {
+
+			if debug {
 			log.Printf("[DEBUG] HandleGetStatistics: merging %d GCS overflow entries for org %s", len(gcsStats), orgId)
+			}
 			// Deduplicate by date; Datastore entries win on conflict.
 			dateMapCap := len(gcsStats)
 			if len(info.DailyStatistics) > dateMapCap {
@@ -1428,222 +1434,157 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 			}
 		}
 
-		item, err := mc.Get(key)
-		if err == gomemcache.ErrCacheMiss {
-			incrementItem := IncrementInCache{
-				Amount:    uint64(incrementAmount),
-				CreatedAt: time.Now().Unix(),
-			}
+		tsKey := key + "_ts"
 
-			data, err := json.Marshal(incrementItem)
-			if err != nil {
-				log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
-				return
-			}
-
-			item := &gomemcache.Item{
+		newValue, incErr := mc.Increment(key, uint64(incrementAmount))
+		if incErr == gomemcache.ErrCacheMiss {
+			// Key doesn't exist yet. Create it atomically; if another instance wins this race,
+			// Add returns ErrNotStored and we just fall through to a normal Increment.
+			addErr := mc.Add(&gomemcache.Item{
 				Key:        key,
-				Value:      data,
+				Value:      []byte(strconv.FormatUint(uint64(incrementAmount), 10)),
 				Expiration: 86400 * 30,
-			}
+			})
 
-			if err := mc.Set(item); err != nil {
-				log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
-			}
-
-		} else if err != nil {
-			log.Printf("[ERROR] Failed increment memcache err: %s", err)
+			if addErr == nil {
+				newValue = uint64(incrementAmount)
+			} else if addErr == gomemcache.ErrNotStored {
+				newValue, incErr = mc.Increment(key, uint64(incrementAmount))
+				if incErr != nil {
+					log.Printf("[ERROR] Failed incrementing freshly-created cache key %s: %s", key, incErr)
+					return
+				}
 		} else {
-			if item == nil || item.Value == nil {
-				incrementItem := IncrementInCache{
-					Amount:    uint64(incrementAmount),
-					CreatedAt: time.Now().Unix(),
-				}
-
-				data, err := json.Marshal(incrementItem)
-				if err != nil {
-					log.Printf("[DEBUG] Failed marshalling increment item for cache: %s", err)
+				log.Printf("[ERROR] Failed creating increment cache for key %s: %s", key, addErr)
 					return
 				}
 
-				item = &gomemcache.Item{
-					Key:        key,
-					Value:      data,
+			// Best-effort: stamp the start of this accumulation window. If another instance
+			// already created it, leave their window alone.
+			_ = mc.Add(&gomemcache.Item{
+				Key:        tsKey,
+				Value:      []byte(strconv.FormatInt(time.Now().Unix(), 10)),
 					Expiration: 86400 * 30,
+			})
+		} else if incErr != nil {
+			// The key exists but Increment couldn't parse it as a plain number - almost
+			// certainly a leftover value from before this format change (the old JSON
+			// IncrementInCache struct). Migrate it in place instead of dropping the increment:
+			// read whatever's there, fold our increment into it, and CAS it into the new format.
+			migrated := false
+			for attempt := 0; attempt < 3 && !migrated; attempt++ {
+				item, getErr := mc.Get(key)
+				if getErr == gomemcache.ErrCacheMiss {
+					// Someone else cleared/migrated it between our Increment and this Get.
+					newValue, incErr = mc.Increment(key, uint64(incrementAmount))
+					migrated = incErr == nil
+					break
+				} else if getErr != nil {
+					log.Printf("[ERROR] Failed reading non-numeric cache key %s during migration: %s", key, getErr)
+					return
 				}
 
-				// log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
+				existing := uint64(0)
+				if parsed, parseErr := strconv.ParseUint(string(item.Value), 10, 64); parseErr == nil {
+					existing = parsed
+				} else {
+					var legacy IncrementInCache
+					if jsonErr := json.Unmarshal(item.Value, &legacy); jsonErr == nil {
+						existing = legacy.Amount
+					} else {
+						log.Printf("[WARNING] Cache key %s holds an unrecognized value %q - resetting to just this increment", key, string(item.Value))
+					}
+				}
+
+				candidate := existing + uint64(incrementAmount)
+				casErr := mc.CompareAndSwap(&gomemcache.Item{
+					Key:        key,
+					Value:      []byte(strconv.FormatUint(candidate, 10)),
+					Expiration: 86400 * 30,
+					CasID:      item.CasID,
+				})
+
+				if casErr == nil {
+					newValue = candidate
+					migrated = true
+				}
+				// CAS conflict: someone else wrote in between - loop and retry with a fresh read.
 			}
 
-			if len(item.Value) == 1 {
-				// case to use if the cache that was present before
-				// the new changes that introduced the struct to the increment system.
-				// log.Printf("[DEBUG] This is from the older system. num: %+v", item.Value)
-
-				// num := uint64(item.Value[0])
-				// num += uint64(incrementAmount)
-
-				// log.Printf("[DEBUG] new num: %d", num)
-
-				// there is some bug here. i would much rather lose the data here.
-				num := uint64(incrementAmount)
-
-				incrementItem := IncrementInCache{
-					Amount:    num,
-					CreatedAt: time.Now().Unix(),
-				}
-
-				data, err := json.Marshal(incrementItem)
-				if err != nil {
-					log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
+			if !migrated {
+				log.Printf("[ERROR] Failed migrating legacy cache value for key %s after retries - dropping this increment", key)
 					return
 				}
 
-				item := &gomemcache.Item{
-					Key:        key,
-					Value:      data,
-					Expiration: 86400 * 30,
-				}
+			_ = mc.Add(&gomemcache.Item{
+				Key:        tsKey,
+				Value:      []byte(strconv.FormatInt(time.Now().Unix(), 10)),
+				Expiration: 86400 * 30,
+			})
+		}
 
-				if err := mc.Set(item); err != nil {
-					log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
-					return
-				}
-			} else if len(item.Value) > 0 {
-				var incrementedItemInCache IncrementInCache
-
-				err := json.Unmarshal(item.Value, &incrementedItemInCache)
-				if err != nil {
-					log.Printf("[ERROR] Failed unmarshalling item in cache: %s", err)
-					return
-				}
-
-				num := incrementedItemInCache.Amount
-				// num += byte(incrementAmount)
-				num += uint64(incrementAmount)
-				//num += []byte{2}
-
-				incrementedItemInCache.Amount = num
-
-				// log.Printf("[DEBUG] time.Now().Unix() (%d) - incrementedItemInCache.CreatedAt (%d) = %d", time.Now().Unix(), incrementedItemInCache.CreatedAt, time.Now().Unix()-incrementedItemInCache.CreatedAt)
-
-				// if num >= dbDumpInterval {
-				// if the cache was created more than a day ago
-
-				// make it a random number between
-				// (10-60 seconds)
-				randomSeconds := (rand.Intn(50) + 10) * 5 // to make the number longer
-
-				if time.Now().Unix()-incrementedItemInCache.CreatedAt > int64(randomSeconds) && incrementedItemInCache.Amount > uint64(dbInterval) {
-					// Memcache dump first to keep the counter going for other executions
-					oldNum := num
-					num = 0
-
-					incrementedItemInCache.Amount = num
-					incrementedItemInCache.CreatedAt = time.Now().Unix()
-
-					// log.Printf("[DEBUG] Dumping cache item with key %s which was created at %s is was %d", key, incrementedItemInCache.CreatedAt, oldNum)
-
-					data, err := json.Marshal(incrementedItemInCache)
+		// Decide whether it's time to dump this key's accumulated amount to Datastore. Same
+		// pacing window as before (50-295s), just read from the sibling timestamp key instead of
+		// a field embedded in the value.
+		createdAt, tsErr := func() (int64, error) {
+			tsItem, err := mc.Get(tsKey)
 					if err != nil {
-						log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
-						return
-					}
+				return 0, err
+			}
+			return strconv.ParseInt(string(tsItem.Value), 10, 64)
+		}()
 
-					// an issue here is that it isn't necessary that num is dbDumpInterval
-					err = IncrementCacheDump(ctx, orgId, dataType, int(oldNum))
-					if err != nil {
-						log.Printf("[ERROR] Failed dumping cache for key (1) %s: %s", key, err)
-						if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") || strings.Contains(fmt.Sprintf("%s", err), "cannot load field") || strings.Contains(fmt.Sprintf("%s", err), "entity is too big") || strings.Contains(fmt.Sprintf("%s", err), "is longer than") {
-							// log.Printf("[ERROR] Concurrent transaction in cache dump: %s. Storing in cache (%s) instead with new amount: %d", err, key, oldNum)
-							incrementedItemInCache.Amount = oldNum
-
-							data, err := json.Marshal(incrementedItemInCache)
-							if err != nil {
-								log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
-							}
-
-							item := &gomemcache.Item{
-								Key:        key,
-								Value:      data,
+		if tsErr != nil {
+			// Missing/unreadable timestamp - restart the pacing window rather than treating it
+			// as "infinitely old" and dumping on every single call.
+			createdAt = time.Now().Unix()
+			_ = mc.Set(&gomemcache.Item{
+				Key:        tsKey,
+				Value:      []byte(strconv.FormatInt(createdAt, 10)),
 								Expiration: 86400 * 30,
-							}
+			})
+		}
 
-							if err := mc.Set(item); err != nil {
-								log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
-							}
-						} else {
-							log.Printf("[ERROR] Failed dumping cache for key %s: %s", key, err)
-						}
-					} else {
-						item := &gomemcache.Item{
+		randomSeconds := (rand.Intn(50) + 10) * 5 // to make the number longer
+		if newValue > uint64(dbInterval) && time.Now().Unix()-createdAt > int64(randomSeconds) {
+			// Try to atomically claim the current amount for dumping: read it fresh, then CAS it
+			// to zero. If the CAS succeeds, nobody incremented between our read and our reset, so
+			// the value we read is exactly correct to dump. If it fails, someone raced us - just
+			// skip this cycle; the next call that crosses the threshold will dump the (now
+			// larger) amount instead. Either way nothing is ever lost or double-counted.
+			if item, getErr := mc.Get(key); getErr == nil {
+				claimed, parseErr := strconv.ParseUint(string(item.Value), 10, 64)
+				if parseErr == nil && claimed > 0 {
+					casErr := mc.CompareAndSwap(&gomemcache.Item{
 							Key:        key,
-							Value:      data,
+						Value:      []byte("0"),
 							Expiration: 86400 * 30,
-						}
-						if err := mc.Set(item); err != nil {
-							log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
-						}
-					}
+						CasID:      item.CasID,
+					})
 
-				} else {
-					//log.Printf("NOT Dumping!")
-					// this case got apparently overwritten unnecessarily 3 times out of 20.
-					// data gets more lost here due to cache overwrites.
+					if casErr == nil {
+						_ = mc.Set(&gomemcache.Item{
+							Key:        tsKey,
+							Value:      []byte(strconv.FormatInt(time.Now().Unix(), 10)),
+							Expiration: 86400 * 30,
+						})
 
-					// add a random sleep of a few miliseconds here
-					randomSleep := rand.Intn(50) + 10
-					time.Sleep(time.Duration(randomSleep) * time.Millisecond)
-
-					// read again and check if it's already not dumped
-					item, err := mc.Get(key)
-					if err != nil {
-						log.Printf("[ERROR] Failed getting cache item for key %s: %s", key, err)
-						return
-					}
-
-					incrementedItemInCache = IncrementInCache{}
-					err = json.Unmarshal(item.Value, &incrementedItemInCache)
-					if err != nil {
-						log.Printf("[ERROR] Failed unmarshalling item in cache: %s", err)
-						incrementedItemInCache.Amount = num
-						incrementedItemInCache.CreatedAt = time.Now().Unix()
-					}
-
-					// this means there will be an overwrite!
-					if incrementedItemInCache.Amount == num {
-						// better to update the cache again instead of losing the data
-						incrementedItemInCache.Amount += uint64(incrementAmount)
-					} else if num > incrementedItemInCache.Amount {
-						// we bow to the higher number we have
-						incrementedItemInCache.Amount = num
-					} else if incrementedItemInCache.Amount > num {
-						// this means, a bunch of stats were added in the meantime
-						// bow to the higher number and just increment again
-						incrementedItemInCache.Amount += uint64(incrementAmount)
-					}
-
-					// log.Printf("[DEBUG] Cache item with key %s which was created at %d is now %d", key, incrementedItemInCache.CreatedAt, incrementedItemInCache.Amount)
-					// log.Printf("[DEBUG] Cache item with key %s which was created at %d is now %d. While num we updated was %d", key, incrementedItemInCache.CreatedAt, incrementedItemInCache.Amount, num)
-
-					data, err := json.Marshal(incrementedItemInCache)
-					if err != nil {
-						log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
-					}
-
-					item = &gomemcache.Item{
+						if dumpErr := IncrementCacheDump(ctx, orgId, dataType, int(claimed)); dumpErr != nil {
+							log.Printf("[ERROR] Failed dumping cache for key %s: %s", key, dumpErr)
+							// Don't lose the claimed amount - add it back atomically.
+							if _, reAddErr := mc.Increment(key, claimed); reAddErr == gomemcache.ErrCacheMiss {
+								if addErr := mc.Add(&gomemcache.Item{
 						Key:        key,
-						Value:      data,
+									Value:      []byte(strconv.FormatUint(claimed, 10)),
 						Expiration: 86400 * 30,
-					}
-
-					if err := mc.Set(item); err != nil {
-						log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
+								}); addErr == gomemcache.ErrNotStored {
+									_, _ = mc.Increment(key, claimed)
 					}
 				}
-			} else {
-				// let's keep this here for now
-				// log.Printf("[ERROR] Length of value in cache key %s is less than 1: %d", key, len(item.Value))
+						}
+					}
+					// CAS conflict: someone incremented since our Get - skip this cycle.
+				}
 			}
 		}
 
