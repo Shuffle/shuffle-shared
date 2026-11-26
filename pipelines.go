@@ -181,10 +181,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	//parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), user.ActiveOrg.Id)
-	parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), user.ActiveOrg.Id)
-	if project.Environment != "cloud" {
-		parsedEnv = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-"))
-	}
+	parsedEnv := getWorkflowQueueEnvironment(pipeline.Environment, user.ActiveOrg.Id)
 
 	formattedType := fmt.Sprintf("PIPELINE_%s", startCommand)
 	existingQueue, _ := GetWorkflowQueue(ctx, parsedEnv, 10)

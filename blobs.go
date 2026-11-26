@@ -1980,10 +1980,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 						Priority:          11,
 					}
 
-					parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), orgId)
-					if project.Environment != "cloud" {
-						parsedEnv = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-"))
-					}
+					parsedEnv := getWorkflowQueueEnvironment(pipeline.Environment, orgId)
 
 					log.Printf("[INFO] Starting pipeline '%s' in env '%s'", command, parsedEnv)
 					err = SetWorkflowQueue(ctx, execRequest, parsedEnv)
