@@ -1121,9 +1121,26 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 
+				var pendingChildAppExecs int64
+				childKey := fmt.Sprintf("cache_%s_app_executions", childOrgFull.Id)
+				if childCacheItem, childCacheErr := GetCache(ctx, childKey); childCacheErr == nil {
+					parsedChildItem := []byte(childCacheItem.([]uint8))
+					if childIncrement, convErr := strconv.Atoi(string(parsedChildItem)); convErr == nil {
+						pendingChildAppExecs = int64(childIncrement)
+					}
+				}
+
 				mu.Lock()
 				info.Tenants = append(info.Tenants, newTenant)
 				info.Locations = append(info.Locations, newLocs...)
+				if pendingChildAppExecs > 0 {
+					info.TotalChildAppExecutions += pendingChildAppExecs
+					info.MonthlyChildAppExecutions += pendingChildAppExecs
+					info.WeeklyChildAppExecutions += pendingChildAppExecs
+					info.DailyChildAppExecutions += pendingChildAppExecs
+					info.HourlyChildAppExecutions += pendingChildAppExecs
+					todayStat.ChildAppExecutions += pendingChildAppExecs
+				}
 				mu.Unlock()
 			}(childOrgMini)
 		}
