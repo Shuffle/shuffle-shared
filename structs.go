@@ -6391,9 +6391,11 @@ type WorkflowSetOpsResponse struct {
 }
 
 type rawField struct {
-	Name  string      `json:"name"`
-	Key   string      `json:"key,omitempty"`
-	Value interface{} `json:"value"`
+	Name     string      `json:"name"`
+	Key      string      `json:"key,omitempty"`
+	Value    interface{} `json:"value"`
+	Answer   string      `json:"answer,omitempty"`
+	Question string      `json:"question,omitempty"`
 }
 
 type agentResponse struct {

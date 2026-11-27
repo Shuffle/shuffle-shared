@@ -2340,6 +2340,11 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		resolvedApp     WorkflowApp
 	)
 
+	if strings.HasPrefix(strings.ToLower(decision.Tool), "app:") {
+		parts := strings.Split(decision.Tool, ":")
+		decision.Tool = strings.TrimSpace(parts[len(parts)-1])
+	}
+
 	//startTime := time.Now()
 	cacheKey := fmt.Sprintf("agent_app_slug_%s_%s", execution.ExecutionOrg, strings.ToLower(decision.Tool))
 
@@ -2481,13 +2486,12 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		action.SourceExecution = execution.ExecutionId
 	}
 
-	decisionActionLower := strings.ToLower(decision.Action)
+	normalizedDecisionAction := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(decision.Action)), " ", "_")
 	for _, appAction := range resolvedApp.Actions {
-		nameLower := strings.ToLower(appAction.Name)
-		labelLower := strings.ToLower(appAction.Label)
-		labelAsSnake := strings.ReplaceAll(labelLower, " ", "_")
+		normalizedActionName := strings.ReplaceAll(strings.ToLower(appAction.Name), " ", "_")
+		normalizedActionLabel := strings.ReplaceAll(strings.ToLower(appAction.Label), " ", "_")
 
-		if nameLower == decisionActionLower || labelLower == decisionActionLower || labelAsSnake == decisionActionLower {
+		if normalizedActionName == normalizedDecisionAction || normalizedActionLabel == normalizedDecisionAction {
 			//if debug { 
 			//	log.Printf("[DEBUG][%s] DirectAppCall: Matched action '%s' -> schema name '%s'", execution.ExecutionId, decision.Action, appAction.Name)
 			//}
